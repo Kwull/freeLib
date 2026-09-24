@@ -78,7 +78,11 @@ fn wrap(text: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
 /// bottom, wrapped over a few lines.
 pub fn svg(title: &str, authors: &[AuthorRef], width: u32, height: u32) -> Vec<u8> {
     let bg = bg_color(title);
-    let title = if title.trim().is_empty() { "—" } else { title.trim() };
+    let title = if title.trim().is_empty() {
+        "—"
+    } else {
+        title.trim()
+    };
     let author_line = authors
         .first()
         .map(|a| a.name.to_uppercase())
@@ -135,7 +139,10 @@ mod tests {
     fn wraps_and_escapes() {
         let bytes = svg(
             "A very long title that should wrap over several lines <script>",
-            &[AuthorRef { id: 1, name: "Стругацкий Аркадий".into() }],
+            &[AuthorRef {
+                id: 1,
+                name: "Стругацкий Аркадий".into(),
+            }],
             160,
             240,
         );

@@ -65,6 +65,7 @@ fn unauthorized() -> Response {
     r
 }
 
+#[allow(clippy::result_large_err)] // `Response` is the error type throughout the OPDS handlers
 async fn basic_user(
     st: &AppState,
     headers: &HeaderMap,

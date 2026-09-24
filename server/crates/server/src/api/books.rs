@@ -96,7 +96,7 @@ pub async fn cover(
 pub async fn cover_response(
     st: &AppState,
     lib: i64,
-    dir: &PathBuf,
+    dir: &std::path::Path,
     d: &BookDetail,
     thumb: bool,
     headers: Option<&HeaderMap>,
