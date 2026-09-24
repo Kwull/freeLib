@@ -326,9 +326,18 @@ async fn open_mode_browse_and_download() {
         .unwrap();
     assert_eq!(app.send(req).await.status, StatusCode::NOT_MODIFIED);
     let no_cover = find_book(&app, lib, |b| b["ext"] != "fb2" && b["ext"] != "epub").await;
+    // Without a cover, the thumbnail is a generated placeholder; full size is 404.
+    let placeholder = app
+        .get(&format!(
+            "/api/v1/libraries/{lib}/books/{}/cover",
+            no_cover["id"]
+        ))
+        .await;
+    assert_eq!(placeholder.status, StatusCode::OK);
+    assert_eq!(placeholder.header("x-cover"), "generated");
     assert_eq!(
         app.get(&format!(
-            "/api/v1/libraries/{lib}/books/{}/cover",
+            "/api/v1/libraries/{lib}/books/{}/cover?size=full",
             no_cover["id"]
         ))
         .await
