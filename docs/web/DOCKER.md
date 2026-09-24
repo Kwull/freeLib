@@ -105,17 +105,20 @@ EOF
 
 The server exposes OPDS 1.2 feeds for e-readers:
 
-- **OPDS catalog**: `http://<host>:8080/opds/`
-- **Library catalog**: `http://<host>:8080/opds/catalog/<library_id>`
-- **Authors list**: `http://<host>:8080/opds/authors/<library_id>`
-- **Series list**: `http://<host>:8080/opds/series/<library_id>`
+- **Root** (libraries, or the default library directly when there's only one): `http://<host>:8080/opds`
+- **Library catalog** (New, Authors, Series, Genres, Search): `http://<host>:8080/opds/<library_id>`
+- **Authors list**: `http://<host>:8080/opds/<library_id>/authors`
+- **Series list**: `http://<host>:8080/opds/<library_id>/series`
 
-Add these URLs to your e-reader's OPDS client (e.g., Kindle email, Kobo, FBReader).
+Add these URLs to your e-reader's OPDS client (e.g., Kindle email, Kobo, FBReader). See
+[API.md](./API.md#opds-not-under-api) for the full path list.
 
 ## Reverse Proxy Setup
 
 Running behind a reverse proxy (Caddy, nginx, Apache)? Ensure the proxy does not buffer
-responses to `/api/v1/events` (Server-Sent Events for real-time updates).
+responses to `/api/v1/events` (Server-Sent Events for real-time updates), and set
+`FREELIB_TRUST_PROXY=1` so login rate limiting uses the real client address from
+`X-Forwarded-For` / `X-Real-IP` instead of the proxy's own address.
 
 ### Caddy
 
@@ -187,13 +190,19 @@ All environment variables from [ARCHITECTURE.md](./ARCHITECTURE.md#runtime-confi
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `FREELIB_PORT` | `8080` | HTTP port (inside container; use port mapping in compose) |
-| `FREELIB_DATA_DIR` | `/data` | Database directory |
+| `FREELIB_BIND` | `0.0.0.0` | Listen address |
+| `FREELIB_DATA_DIR` | `/data` | Database directory (`app.db`, `lib_<id>.db`) |
 | `FREELIB_BOOKS_DIR` | `/books` | Library root directory |
 | `FREELIB_CACHE_DIR` | `/cache` | Cache directory |
 | `FREELIB_EXPORT_DIR` | `/export` | Export/send target directory |
-| `FREELIB_ADMIN_PASSWORD` | unset | Admin password (set this!) |
+| `FREELIB_ADMIN_USER` | `admin` | Admin username created/reset on every start when `FREELIB_ADMIN_PASSWORD` is set |
+| `FREELIB_ADMIN_PASSWORD` | unset | Admin password (set this!). Without it and without any users, the server runs in **open mode**: no login, every request acts as admin |
 | `FREELIB_AUTOIMPORT` | unset | Comma-separated INPX paths to import on startup |
-| `FREELIB_CALIBRE` | `ebook-convert` | Path to Calibre's ebook-convert (full image only) |
+| `FREELIB_CALIBRE` | `ebook-convert` if on `PATH` | Path to Calibre's `ebook-convert` (full image only); `none` disables Calibre |
+| `FREELIB_CALIBRE_TIMEOUT` | `300` | Seconds before a Calibre conversion is killed |
+| `FREELIB_TRUST_PROXY` | unset | `1`: take the client address for login rate limiting from `X-Forwarded-For` / `X-Real-IP` (set this behind the reverse proxy setups below) |
+| `FREELIB_WORKERS` | CPU core count | Conversion worker count |
+| `FREELIB_WEB_DIR` | unset | Serve the SPA from this folder instead of the embedded copy (development) |
 | `RUST_LOG` | `info` | Log level (debug, info, warn, error) |
 
 ## Troubleshooting
@@ -211,8 +220,12 @@ Common issues:
 
 ### Import is slow
 
-The first import of a large INPX takes time. Monitor progress in the Logs section of the web UI.
-Subsequent imports are faster (incremental updates).
+The first import of a large INPX takes time (typically seconds to a few minutes; a
+Flibusta-size library imports in well under 3 minutes). Monitor progress in the Logs section of
+the web UI. A re-import (`{mode: "new"}` or a full re-import) always rebuilds the whole catalog
+in the background — there is no incremental/partial mode — but the library keeps serving the old
+catalog until the rebuild finishes, so it stays usable throughout. User data (ratings, shelves)
+is keyed by a stable book key and survives re-imports.
 
 ### Calibre conversion fails
 

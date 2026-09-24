@@ -3,6 +3,7 @@
   import { navigate } from '../router.svelte';
   import { t } from '../i18n';
   import Icon from '../components/Icon.svelte';
+  import { ApiError } from '../api/types';
 
   let username = $state('');
   let password = $state('');
@@ -16,8 +17,8 @@
     try {
       await login(username, password);
       navigate('/', { replace: true });
-    } catch {
-      error = t('login.error');
+    } catch (err) {
+      error = err instanceof ApiError && err.code === 'rate_limited' ? err.message : t('login.error');
     } finally {
       busy = false;
     }

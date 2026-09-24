@@ -200,11 +200,9 @@ pub async fn check_credentials(
     password: &str,
 ) -> ApiResult<User> {
     if let Some(wait) = st.login_limiter.check(ip) {
-        return Err(ApiError::new(
-            axum::http::StatusCode::TOO_MANY_REQUESTS,
-            "unauthorized",
-            format!("too many failed logins, retry in {wait} s"),
-        ));
+        return Err(ApiError::rate_limited(format!(
+            "too many failed logins, retry in {wait} s"
+        )));
     }
     let fast = st.cfg.fast_password_hash;
     let (u, p) = (username.to_string(), password.to_string());

@@ -40,6 +40,9 @@ impl ApiError {
     pub fn unsupported(m: impl Into<String>) -> ApiError {
         Self::new(StatusCode::NOT_IMPLEMENTED, "unsupported_format", m)
     }
+    pub fn rate_limited(m: impl Into<String>) -> ApiError {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", m)
+    }
     pub fn internal(m: impl Into<String>) -> ApiError {
         let m = m.into();
         tracing::error!("internal error: {m}");

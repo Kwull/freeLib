@@ -2,7 +2,7 @@
 
 Source of truth for `server/crates/server` and `web/`. JSON, UTF-8, camelCase keys.
 All endpoints are under `/api/v1`. Errors: HTTP status + `{"error": "<code>", "message": "<human text>"}`
-(`unauthorized`, `forbidden`, `not_found`, `bad_request`, `conflict`, `unsupported_format`, `internal`).
+(`unauthorized`, `forbidden`, `not_found`, `bad_request`, `conflict`, `unsupported_format`, `rate_limited`, `internal`).
 
 Auth: cookie `freelib_session` (HttpOnly, SameSite=Lax). In open mode every request acts as an admin
 named `admin`. `admin`-only endpoints are marked **(admin)**; others need any logged-in user.

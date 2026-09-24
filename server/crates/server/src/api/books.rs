@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path as StdPath, PathBuf};
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -96,7 +96,7 @@ pub async fn cover(
 pub async fn cover_response(
     st: &AppState,
     lib: i64,
-    dir: &PathBuf,
+    dir: &StdPath,
     d: &BookDetail,
     thumb: bool,
     headers: Option<&HeaderMap>,

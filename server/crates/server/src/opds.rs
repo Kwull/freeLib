@@ -65,6 +65,7 @@ fn unauthorized() -> Response {
     r
 }
 
+#[allow(clippy::result_large_err)]
 async fn basic_user(
     st: &AppState,
     headers: &HeaderMap,

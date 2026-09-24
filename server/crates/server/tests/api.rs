@@ -325,16 +325,28 @@ async fn open_mode_browse_and_download() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(app.send(req).await.status, StatusCode::NOT_MODIFIED);
+    // No real cover: `size=full` still 404s, but the default (`thumb`) gets a generated SVG
+    // placeholder instead, with `X-Cover: generated`, so the client never has to 404-guess.
     let no_cover = find_book(&app, lib, |b| b["ext"] != "fb2" && b["ext"] != "epub").await;
     assert_eq!(
         app.get(&format!(
-            "/api/v1/libraries/{lib}/books/{}/cover",
+            "/api/v1/libraries/{lib}/books/{}/cover?size=full",
             no_cover["id"]
         ))
         .await
         .status,
         StatusCode::NOT_FOUND
     );
+    let placeholder = app
+        .get(&format!(
+            "/api/v1/libraries/{lib}/books/{}/cover",
+            no_cover["id"]
+        ))
+        .await;
+    assert_eq!(placeholder.status, StatusCode::OK);
+    assert_eq!(placeholder.header("content-type"), "image/svg+xml");
+    assert_eq!(placeholder.header("x-cover"), "generated");
+    assert!(placeholder.body.starts_with(b"<svg"));
 
     // search, languages
     let name = rows[0][1]
@@ -1139,6 +1151,7 @@ async fn login_mode_and_permissions() {
     }
     let r = app.login("admin", "secret-pw").await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(r.json()["error"], "rate_limited");
 }
 
 #[tokio::test]

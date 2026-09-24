@@ -201,7 +201,7 @@ fn main() {
     let page = Page::default();
     // Authors: the 100 biggest plus 300 random.
     let mut by_count: Vec<&(i64, String, i64)> = authors.rows.iter().collect();
-    by_count.sort_by(|a, b| b.2.cmp(&a.2));
+    by_count.sort_by_key(|r| std::cmp::Reverse(r.2));
     let mut ids: Vec<i64> = by_count.iter().take(100).map(|r| r.0).collect();
     ids.extend((0..300).map(|_| authors.rows[rng.below(authors.rows.len())].0));
     let mut s = Series::new(&format!("books by author (top: {} books)", by_count[0].2));

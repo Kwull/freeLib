@@ -114,7 +114,8 @@ export type Settings = {
 };
 
 export type ApiErrorCode =
-  | 'unauthorized' | 'forbidden' | 'not_found' | 'bad_request' | 'conflict' | 'unsupported_format' | 'internal';
+  | 'unauthorized' | 'forbidden' | 'not_found' | 'bad_request' | 'conflict' | 'unsupported_format'
+  | 'rate_limited' | 'internal';
 
 export class ApiError extends Error {
   code: ApiErrorCode;

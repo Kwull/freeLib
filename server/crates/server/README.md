@@ -108,7 +108,7 @@ Subcommands:
   only on title/author, not on user permissions).
 * **Login rate limiting.** After 5 failures from one IP, each further failure doubles the
   lock-out: 1 s, 2 s, … up to 5 min. A locked-out attempt returns 429 with error code
-  `unauthorized` and a message that says when to retry. OPDS Basic auth shares the same limiter.
+  `rate_limited` and a message that says when to retry. OPDS Basic auth shares the same limiter.
   A successful Basic auth is cached for 10 minutes.
 * **CSRF.** These rules apply to state-changing `/api` requests:
   * `Sec-Fetch-Site: cross-site` → 403.

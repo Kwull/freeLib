@@ -29,7 +29,12 @@
 
   $effect(() => {
     const dev = devicesState.items.find((d) => d.id === deviceId);
-    if (dev) { target = dev.target ?? ''; fileName = dev.fileName; }
+    if (dev) {
+      target = dev.target ?? '';
+      fileName = dev.fileName;
+      generateCover = dev.options.createCover !== 'never';
+      joinSeries = dev.options.joinSeries;
+    }
   });
 
   const device = $derived(devicesState.items.find((d) => d.id === deviceId) ?? null);
@@ -57,7 +62,17 @@
     if (!device) return;
     sending = true;
     try {
-      await api.send({ library: lib, books: bookIds, device: device.id, target: target || undefined, fileName });
+      await api.send({
+        library: lib,
+        books: bookIds,
+        device: device.id,
+        target: target || undefined,
+        fileName,
+        options: {
+          createCover: generateCover ? 'missing' : 'never',
+          joinSeries,
+        },
+      });
       showToast(t('send.background'));
       clearSelection(lib);
       onClose();
