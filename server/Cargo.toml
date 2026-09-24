@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/catalog", "crates/import", "crates/fb2conv", "crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.85"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+quick-xml = "0.42"
+encoding_rs = "0.8"
+tracing = "0.1"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>freeLib — Phone, author books</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1D1C19;background:#FFFFFF}
+a{color:#1F5F5B;text-decoration:none}
+button{font-family:inherit}
+.tab{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;width:78px;height:56px;font-size:11px;color:#5C584F}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; display: flex; flex-direction: column; background: #FFFFFF; overflow: hidden">
+<header style="padding: 14px 8px 10px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #E2DDD2">
+<a href="#" aria-label="Back to authors" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #1D1C19">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></a>
+<div style="flex-grow: 1; min-width: 0">
+<div style="font-family: Literata, Georgia, serif; font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Стругацкий Аркадий</div>
+<div style="font-size: 12px; color: #5C584F">12 books · 2 series</div>
+</div>
+<button type="button" aria-label="Filter" style="width: 44px; height: 44px; border: none; background: transparent; display: flex; align-items: center; justify-content: center; color: #1D1C19">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button>
+</header>
+
+<div style="flex-grow: 1; overflow: hidden">
+<sc-for list="{{groups}}" as="g" hint-placeholder-count="2">
+<div style="padding: 14px 16px 6px; font-size: 12px; font-weight: 600; color: #5C584F; letter-spacing: 0.04em">{{g.name}}</div>
+<sc-for list="{{g.books}}" as="b" hint-placeholder-count="4">
+<div style="display: flex; align-items: center; gap: 12px; padding: 8px 16px; min-height: 64px; box-sizing: border-box; background: {{b.bg}}">
+<div style="width: 36px; height: 52px; flex-shrink: 0; border-radius: 3px; background: {{g.cover}}"></div>
+<div style="flex-grow: 1; min-width: 0">
+<div style="font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{b.title}}</div>
+<div style="font-size: 12px; color: #5C584F">{{b.meta}}</div>
+</div>
+<input type="checkbox" aria-label="Select {{b.title}}" checked="{{b.checked}}" onChange="{{b.toggle}}" style="width: 22px; height: 22px; accent-color: #1F5F5B">
+</div>
+</sc-for>
+</sc-for>
+</div>
+
+<sc-if value="{{has}}" hint-placeholder-val="{{ true }}">
+<div style="margin: 0 12px 10px; padding: 8px 8px 8px 16px; border-radius: 12px; background: #1D1C19; color: #FFFFFF; display: flex; align-items: center; gap: 8px">
+<span style="flex-grow: 1; font-size: 14px"><b>{{count}}</b> selected</span>
+<a href="Send.dc.html" style="display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 16px; border-radius: 9px; background: #2E7F79; color: #FFFFFF; font-size: 14px; font-weight: 500">Send to Kindle</a>
+<button type="button" aria-label="More actions" style="width: 44px; height: 44px; border: none; border-radius: 9px; background: transparent; color: #FFFFFF; display: flex; align-items: center; justify-content: center">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+</div>
+</sc-if>
+
+<nav aria-label="Main" style="display: flex; justify-content: space-around; border-top: 1px solid #E2DDD2; padding-bottom: 12px">
+<a class="tab" href="#"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5"/><path d="M5 5h14l2 8v6H3v-6z"/></svg>New</a>
+<a class="tab" href="#" aria-current="page" style="color: #1F5F5B; font-weight: 600"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2 5h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2z"/><path d="M22 5h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/></svg>Browse</a>
+<a class="tab" href="Search.dc.html"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>Search</a>
+<a class="tab" href="#"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V4h8l10 10-8 8z"/></svg>Shelves</a>
+<a class="tab" href="Libraries.dc.html"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Activity</a>
+</nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+var G = [
+  { name: 'ПОЛДЕНЬ, XXII ВЕК', cover: '#2F4A5A', books: [
+    { id: 1, title: 'Полдень, XXII век', meta: '#1 · FB2 · 612 KB' },
+    { id: 2, title: 'Попытка к бегству', meta: '#2 · FB2 · 298 KB' },
+    { id: 3, title: 'Трудно быть богом', meta: '#3 · FB2 · 405 KB' },
+    { id: 4, title: 'Обитаемый остров', meta: '#5 · FB2 · 871 KB' },
+    { id: 5, title: 'Жук в муравейнике', meta: '#6 · FB2 · 466 KB' },
+    { id: 6, title: 'Волны гасят ветер', meta: '#7 · FB2 · 352 KB' }
+  ]},
+  { name: 'ВНЕ СЕРИЙ', cover: '#3E5A3A', books: [
+    { id: 9, title: 'Пикник на обочине', meta: 'FB2 · 331 KB · new' },
+    { id: 10, title: 'Улитка на склоне', meta: 'FB2 · 489 KB' },
+    { id: 11, title: 'Град обреченный', meta: 'FB2 · 925 KB' }
+  ]}
+];
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { checked: [3, 9] }; }
+  renderVals() {
+    var self = this, ch = this.state.checked;
+    return {
+      groups: G.map(function (g) {
+        return { name: g.name, cover: g.cover, books: g.books.map(function (b) {
+          var on = ch.indexOf(b.id) >= 0;
+          return Object.assign({}, b, { checked: on, bg: on ? '#EAF2F0' : '#FFFFFF', toggle: function () {
+            self.setState({ checked: on ? ch.filter(function (x) { return x !== b.id; }) : ch.concat([b.id]) });
+          } });
+        }) };
+      }),
+      has: ch.length > 0, count: ch.length
+    };
+  }
+}
+</script>
+</body>
+</html>

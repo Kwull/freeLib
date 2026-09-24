@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>freeLib — Libraries and activity</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono&amp;display=swap">
+<style>
+body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1D1C19;background:#F5F3EE}
+a{color:#1F5F5B;text-decoration:none}a:hover{color:#16433F;text-decoration:underline}
+button{font-family:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:8px;border:1px solid #D9D4C8;background:#FFFFFF;color:#1D1C19;font-size:14px}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);row-gap:8px;margin:0;font-size:13px}
+.kv dt{color:#5C584F}.kv dd{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fh{margin:0;font-size:12px;font-weight:600;color:#5C584F;letter-spacing:.04em}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; flex-direction: column; background: #F5F3EE; overflow: hidden">
+<header style="height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 20px; background: #FFFFFF; border-bottom: 1px solid #E2DDD2">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; color: #1D1C19; text-decoration: none">
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1F5F5B" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M2 5h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2z"/><path d="M22 5h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/></svg>
+<span style="font-family: Literata, Georgia, serif; font-size: 20px; font-weight: 600">freeLib</span></a>
+<span style="color: #B5AFA2">/</span><span style="font-size: 15px">Libraries</span>
+</header>
+
+<div style="flex-grow: 1; display: flex; min-height: 0">
+<main style="flex-grow: 1; min-width: 0; padding: 28px 32px; display: flex; flex-direction: column; gap: 20px; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 12px">
+<h1 style="margin: 0; font-family: Literata, Georgia, serif; font-size: 28px; font-weight: 600; flex-grow: 1">Libraries</h1>
+<button type="button" class="btn" style="background: #1F5F5B; border-color: #1F5F5B; color: #FFFFFF; font-weight: 500">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add library</button>
+</div>
+
+<article style="background: #FFFFFF; border: 1px solid #E2DDD2; border-radius: 12px; padding: 20px 22px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; align-items: flex-start; gap: 12px">
+<div style="flex-grow: 1">
+<div style="display: flex; align-items: center; gap: 10px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Flibusta</h2>
+<span style="display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 12px; background: #E1F0E6; color: #1F5E37; font-size: 12px; font-weight: 500"><span style="width: 7px; height: 7px; border-radius: 4px; background: #2E7D4F"></span>Up to date</span>
+<span style="font-size: 12px; color: #5C584F">default</span>
+</div>
+<p style="margin: 4px 0 0; font-size: 13px; color: #5C584F">Imported 21.09.2026 · took [time] · INPX checked every night at 04:00</p>
+</div>
+<button type="button" class="btn">Re-import</button>
+<button type="button" class="btn">Edit</button>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 28px">
+<dl class="kv">
+<dt>INPX</dt><dd>/books/flibusta/flibusta_fb2_local.inpx</dd>
+<dt>Books folder</dt><dd>/books/flibusta</dd>
+<dt>Import rule</dt><dd>Add new, remove deleted · first author only: off</dd>
+<dt>OPDS feed</dt><dd><a href="#">https://books.example.home/opds/1</a></dd>
+</dl>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+<div style="padding: 12px; border-radius: 8px; background: #F5F3EE"><div style="font-size: 12px; color: #5C584F">Books</div><div style="font-size: 20px; font-weight: 600">[N]</div></div>
+<div style="padding: 12px; border-radius: 8px; background: #F5F3EE"><div style="font-size: 12px; color: #5C584F">Authors</div><div style="font-size: 20px; font-weight: 600">[N]</div></div>
+<div style="padding: 12px; border-radius: 8px; background: #F5F3EE"><div style="font-size: 12px; color: #5C584F">New since last</div><div style="font-size: 20px; font-weight: 600">214</div></div>
+</div>
+</div>
+</article>
+
+<article style="background: #FFFFFF; border: 1px solid #E2DDD2; border-radius: 12px; padding: 20px 22px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: center; gap: 10px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600; flex-grow: 1">Lib.rus.ec</h2>
+<span style="display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 12px; background: #F6E9D3; color: #7A4A0E; font-size: 12px; font-weight: 500">Importing — library stays usable</span>
+<button type="button" class="btn">Cancel import</button>
+</div>
+<div>
+<div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px"><span>Reading <b>librusec_local_fb2.inpx</b> · part 212 of 318</span><span style="color: #5C584F">about [time] left</span></div>
+<div role="progressbar" aria-valuenow="67" aria-valuemin="0" aria-valuemax="100" aria-label="Import progress" style="height: 8px; border-radius: 4px; background: #EDEAE3; overflow: hidden"><div style="width: 67%; height: 8px; background: #B8741A"></div></div>
+</div>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.7; color: #3F3C35; background: #F5F3EE; border-radius: 8px; padding: 10px 12px">
+19:14:02  building new catalog in lib_2.new.db<br>
+19:14:03  parsed 211 parts · 4 threads<br>
+19:14:31  fb2-417011-420999.inp … ok<br>
+19:14:32  fb2-421000-424999.inp … ok
+</div>
+</article>
+</main>
+
+<aside aria-label="Activity" style="width: 400px; flex-shrink: 0; background: #FFFFFF; border-left: 1px solid #E2DDD2; padding: 24px 22px; display: flex; flex-direction: column; gap: 18px; overflow: hidden">
+<div style="display: flex; align-items: center; justify-content: space-between">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Activity</h2>
+<a href="#" style="font-size: 13px">Clear finished</a>
+</div>
+<h3 class="fh">RUNNING</h3>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; font-size: 14px"><span>Import · Lib.rus.ec</span><span style="color: #5C584F">67%</span></div>
+<div style="height: 6px; border-radius: 3px; background: #EDEAE3; overflow: hidden"><div style="width: 67%; height: 6px; background: #B8741A"></div></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; font-size: 14px"><span>Send to Kindle · 3 books</span><span style="color: #5C584F">2 of 3</span></div>
+<div style="height: 6px; border-radius: 3px; background: #EDEAE3; overflow: hidden"><div style="width: 66%; height: 6px; background: #1F5F5B"></div></div>
+<span style="font-size: 12px; color: #5C584F">Converting «Град обреченный» → EPUB</span>
+</div>
+<h3 class="fh" style="margin-top: 6px">FINISHED</h3>
+<div style="display: flex; align-items: center; gap: 10px; font-size: 14px">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7D4F" stroke-width="2.5" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>
+<span style="flex-grow: 1">Apple Books · Трудно быть богом</span><a href="#" style="font-size: 13px">Download</a></div>
+<div style="display: flex; align-items: center; gap: 10px; font-size: 14px">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7D4F" stroke-width="2.5" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>
+<span style="flex-grow: 1">Kindle (USB) · 5 books, AZW3</span><a href="#" style="font-size: 13px">Download .zip</a></div>
+<div style="display: flex; align-items: center; gap: 10px; font-size: 14px">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#A33A2B" stroke-width="2.5" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+<span style="flex-grow: 1">Send to Kindle · SMTP login failed</span><a href="#" style="font-size: 13px">Retry</a></div>
+
+<div style="margin-top: auto; padding: 16px; border-radius: 10px; background: #F5F3EE; display: flex; gap: 14px; align-items: center">
+<div aria-label="QR code for the OPDS feed" role="img" style="width: 76px; height: 76px; flex-shrink: 0; background: #FFFFFF; border: 1px solid #D9D4C8; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #5C584F">[QR]</div>
+<div style="font-size: 13px; line-height: 1.5"><b>Read on your phone</b><br>Add the OPDS feed to KyBook, KOReader or Moon+ Reader by scanning this code.</div>
+</div>
+</aside>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

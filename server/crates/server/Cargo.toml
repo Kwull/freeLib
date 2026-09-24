@@ -1,0 +1,10 @@
+[package]
+name = "freelib-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+freelib-catalog = { path = "../catalog" }
+freelib-import = { path = "../import" }
+freelib-fb2conv = { path = "../fb2conv" }
