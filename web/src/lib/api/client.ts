@@ -1,0 +1,122 @@
+import { ApiError } from './types';
+import type {
+  Library, Book, BookDetail, Genre, Shelf, Device, Job, Session, NameListResponse,
+  BooksResponse, SearchResponse, Settings, User,
+} from './types';
+
+const BASE = '/api/v1';
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(BASE + path, {
+    credentials: 'include',
+    headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
+    ...init,
+  });
+  if (res.status === 204) return undefined as T;
+  const isJson = res.headers.get('content-type')?.includes('application/json');
+  if (!res.ok) {
+    let code = 'internal', message = res.statusText;
+    if (isJson) {
+      try {
+        const body = await res.json();
+        code = body.error ?? code;
+        message = body.message ?? message;
+      } catch { /* ignore */ }
+    }
+    throw new ApiError(res.status, code as any, message);
+  }
+  if (isJson) return (await res.json()) as T;
+  return undefined as T;
+}
+
+function qs(params: Record<string, string | number | boolean | undefined | null>): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') p.set(k, String(v));
+  }
+  const s = p.toString();
+  return s ? `?${s}` : '';
+}
+
+export const api = {
+  // Session
+  session: () => request<Session>('/session'),
+  login: (username: string, password: string) =>
+    request<{ user: User }>('/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  logout: () => request<void>('/logout', { method: 'POST' }),
+
+  // Libraries
+  libraries: () => request<Library[]>('/libraries'),
+  createLibrary: (body: Partial<Library> & { name: string; path: string }) =>
+    request<Library>('/libraries', { method: 'POST', body: JSON.stringify(body) }),
+  updateLibrary: (id: number, body: Partial<Library>) =>
+    request<Library>(`/libraries/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteLibrary: (id: number) => request<void>(`/libraries/${id}`, { method: 'DELETE' }),
+  importLibrary: (id: number, mode: 'full' | 'new') =>
+    request<Job>(`/libraries/${id}/import`, { method: 'POST', body: JSON.stringify({ mode }) }),
+  fs: (path?: string) => request<{ path: string; parent: string | null; entries: { name: string; dir: boolean; size: number }[] }>(
+    `/fs${qs({ path })}`,
+  ),
+
+  // Browsing
+  authors: (lib: number, v?: number) => request<NameListResponse>(`/libraries/${lib}/authors${qs({ v })}`),
+  series: (lib: number, v?: number) => request<NameListResponse>(`/libraries/${lib}/series${qs({ v })}`),
+  genres: (lib: number) => request<Genre[]>(`/libraries/${lib}/genres`),
+  books: (lib: number, params: {
+    author?: number; series?: number; genre?: number; shelf?: number; since?: string;
+    lang?: string; ext?: string; deleted?: boolean; cursor?: string; limit?: number;
+  }) => request<BooksResponse>(`/libraries/${lib}/books${qs({ ...params, deleted: params.deleted ? 1 : undefined })}`),
+  book: (lib: number, id: number) => request<BookDetail>(`/libraries/${lib}/books/${id}`),
+  coverUrl: (lib: number, id: number, size: 'thumb' | 'full' = 'thumb') =>
+    `${BASE}/libraries/${lib}/books/${id}/cover?size=${size}`,
+  fileUrl: (lib: number, id: number, format = 'original', opts?: { device?: number; inline?: boolean }) =>
+    `${BASE}/libraries/${lib}/books/${id}/file${qs({ format, device: opts?.device, inline: opts?.inline ? 1 : undefined })}`,
+  search: (lib: number, params: {
+    q: string; kind?: 'all' | 'books' | 'authors' | 'series'; genre?: string; lang?: string;
+    ext?: string; from?: string; to?: string; limit?: number;
+  }) => request<SearchResponse>(`/libraries/${lib}/search${qs(params)}`),
+  languages: (lib: number) => request<[string, number][]>(`/languages${qs({ lib })}`),
+  setRating: (lib: number, id: number, rating: number) =>
+    request<void>(`/libraries/${lib}/books/${id}/rating`, { method: 'PUT', body: JSON.stringify({ rating }) }),
+
+  // Shelves
+  shelves: () => request<Shelf[]>('/shelves'),
+  createShelf: (name: string, color: string) =>
+    request<Shelf>('/shelves', { method: 'POST', body: JSON.stringify({ name, color }) }),
+  updateShelf: (id: number, body: { name?: string; color?: string }) =>
+    request<Shelf>(`/shelves/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteShelf: (id: number) => request<void>(`/shelves/${id}`, { method: 'DELETE' }),
+  shelfBooks: (id: number, library: number, books: number[], add: boolean) =>
+    request<Shelf>(`/shelves/${id}/books`, { method: 'POST', body: JSON.stringify({ library, books, add }) }),
+
+  // Devices / sending
+  devices: () => request<Device[]>('/devices'),
+  createDevice: (d: Omit<Device, 'id'>) => request<Device>('/devices', { method: 'POST', body: JSON.stringify(d) }),
+  updateDevice: (id: number, d: Device) => request<Device>(`/devices/${id}`, { method: 'PUT', body: JSON.stringify(d) }),
+  deleteDevice: (id: number) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
+  send: (body: { library: number; books: number[]; device: number; target?: string; fileName?: string }) =>
+    request<Job>('/send', { method: 'POST', body: JSON.stringify(body) }),
+  fonts: () => request<string[]>('/fonts'),
+
+  // Jobs
+  jobs: () => request<Job[]>('/jobs'),
+  cancelJob: (id: string) => request<Job>(`/jobs/${id}/cancel`, { method: 'POST' }),
+  clearFinishedJobs: () => request<void>('/jobs?finished=1', { method: 'DELETE' }),
+  jobDownloadUrl: (id: string) => `${BASE}/jobs/${id}/download`,
+
+  // Settings / users
+  settings: () => request<Settings>('/settings'),
+  updateSettings: (s: Settings) => request<Settings>('/settings', { method: 'PUT', body: JSON.stringify(s) }),
+  testSmtp: (to: string) => request<void>('/settings/smtp/test', { method: 'POST', body: JSON.stringify({ to }) }),
+  users: () => request<User[]>('/users'),
+  createUser: (u: { username: string; password: string; role: string }) =>
+    request<User>('/users', { method: 'POST', body: JSON.stringify(u) }),
+  updateUser: (id: number, u: { password?: string; role?: string }) =>
+    request<User>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(u) }),
+  deleteUser: (id: number) => request<void>(`/users/${id}`, { method: 'DELETE' }),
+
+  prefs: () => request<Record<string, unknown>>('/me/prefs'),
+  setPrefs: (p: Record<string, unknown>) => request<Record<string, unknown>>('/me/prefs', { method: 'PUT', body: JSON.stringify(p) }),
+};
+
+export { ApiError };
