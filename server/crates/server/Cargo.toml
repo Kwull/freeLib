@@ -27,6 +27,7 @@ futures-util = "0.3"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "trace", "set-header", "limit"] }
 http-body-util = "0.1"
+bytes = "1"
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 mime_guess = "2"
 argon2 = "0.5"
