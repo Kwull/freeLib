@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 FROM node:22-bookworm-slim AS web
-RUN corepack enable pnpm
+RUN npm install -g pnpm@10
 WORKDIR /build
 COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
