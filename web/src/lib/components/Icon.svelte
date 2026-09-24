@@ -1,0 +1,55 @@
+<script lang="ts">
+  // A small curated set of inline stroke icons matching the prototype's style
+  // (stroke-width 1.8–2, round caps). Keeping them as one component avoids
+  // repeating raw <svg> markup across every route.
+  const paths: Record<string, string> = {
+    search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Zm9 2-3.5-3.5',
+    close: 'M6 6l12 12M18 6 6 18',
+    chevronDown: 'm6 9 6 6 6-6',
+    chevronRight: 'm9 6 6 6-6 6',
+    send: 'M22 2 11 13M22 2 15 22l-4-9-9-4Z',
+    download: 'M12 3v12m0 0-5-5m5 5 5-5M4 21h16',
+    read: 'M2 5h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2ZM22 5h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8Z',
+    library: 'M4 21h16M6 21V9l6-4 6 4v12M10 21v-6h4v6',
+    opds: 'M4 5h14l2 8v6H3v-6ZM3 13h5l2 3h4l2-3h5',
+    newArrivals: 'M3 13h5l2 3h4l2-3h5M5 5h14l2 8v6H3v-6Z',
+    authors: 'M12 8a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21c0-4 4-6 8-6s8 2 8 6',
+    series: 'm12 3 9 5-9 5-9-5ZM3 13l9 5 9-5',
+    genres: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
+    shelves: 'M3 12V4h8l10 10-8 8ZM7.5 7.5h.01',
+    settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1',
+    activity: 'M3 12h4l3 8 4-16 3 8h4',
+    plus: 'M12 5v14M5 12h14',
+    table: 'M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1',
+    grid: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
+    check: 'm5 12 5 5 9-10',
+    star: 'm12 3 2.8 5.8 6.2.9-4.5 4.4 1 6.3L12 17.5 6.5 20.4l1-6.3L3 9.7l6.2-.9Z',
+    logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
+    folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z',
+    file: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6',
+    trash: 'M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6',
+    refresh: 'M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16m0 5v-5h5',
+    filter: 'M12 5v14M5 12h14',
+    external: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3',
+    menu: 'M3 6h18M3 12h18M3 18h18',
+    sun: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
+    moon: 'M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z',
+  };
+
+  let { name, size = 18, strokeWidth = 1.8, ...rest }: { name: string; size?: number; strokeWidth?: number; class?: string } = $props();
+</script>
+
+<svg
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width={strokeWidth}
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+  {...rest}
+>
+  <path d={paths[name] ?? ''} />
+</svg>

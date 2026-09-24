@@ -1,47 +1,105 @@
-# Svelte + TS + Vite
+# freeLib web
 
-This template should help get you started developing with Svelte and TypeScript in Vite.
+Svelte 5 + TypeScript + Vite single-page app for the freeLib web edition. Builds to
+`web/dist`, which the Rust server (`server/`) embeds and serves.
 
-## Recommended IDE Setup
+## Running
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
-
-## Need an official Svelte framework?
-
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
-
-## Technical considerations
-
-**Why use this over SvelteKit?**
-
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
-
-This template contains as little as possible to get started with Vite + TypeScript + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
-
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
-
-**Why `global.d.ts` instead of `compilerOptions.types` inside `jsconfig.json` or `tsconfig.json`?**
-
-Setting `compilerOptions.types` shuts out all other types not explicitly listed in the configuration. Using triple-slash references keeps the default TypeScript setting of accepting type information from the entire workspace, while also adding `svelte` and `vite/client` type information.
-
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
-
-**Why enable `allowJs` in the TS template?**
-
-While `allowJs: false` would indeed prevent the use of `.js` files in the project, it does not prevent the use of JavaScript syntax in `.svelte` files. In addition, it would force `checkJs: false`, bringing the worst of both worlds: not being able to guarantee the entire codebase is TypeScript, and also having worse typechecking for the existing JavaScript. In addition, there are valid use cases in which a mixed codebase may be relevant.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/rixo/svelte-hmr#svelte-hmr).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```ts
-// store.ts
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
+```sh
+pnpm install
+pnpm dev        # http://localhost:5173, backed by the built-in mock API (web/mock/)
 ```
+
+Against a real server instead of the mock:
+
+```sh
+VITE_API=http://localhost:8080 pnpm dev
+```
+
+With `VITE_API` set, Vite proxies `/api` and `/opds` to that server and the mock
+middleware is not installed. Without it, `web/mock/server.ts` serves the full
+`/api/v1` contract from `docs/web/API.md` using deterministic in-memory data
+(50,000 authors, 4,000 series, ~3,000 books, jobs that progress over a few
+seconds and stream through `/api/v1/events`), so the whole app — including the
+50k-row authors list — can be exercised without the Rust server.
+
+Other scripts:
+
+```sh
+pnpm build      # production build -> dist/
+pnpm check      # svelte-check + tsc, no emit
+pnpm test       # Playwright, against the mock (see tests/)
+```
+
+Playwright uses the Chromium already installed at `$PLAYWRIGHT_BROWSERS_PATH`;
+don't run `playwright install`. `pnpm test` starts its own dev server on port
+5183 (see `playwright.config.ts`).
+
+## Structure
+
+```
+web/
+  src/
+    main.ts, App.svelte        entry point + route dispatch
+    app.css                    design tokens (light/dark), global resets
+    lib/
+      api/                     typed client (client.ts), SSE (events.ts), types.ts
+      i18n/                    en.json, ru.json, index.ts (t(), setLang)
+      stores/                  *.svelte.ts — session, libraries, jobs, devices,
+                                shelves, selection (per-library, in-memory),
+                                theme, toast
+      cache/nameCache.ts       IndexedDB cache for the authors/series lists,
+                                keyed by catalogVersion
+      router.svelte.ts         small history-based router (no SvelteKit)
+      components/              Shell, NameBrowser, BooksPane, DetailsPane,
+                                SendDialog, ShelfDialog, LibrariesPage's bits,
+                                VirtualList (fixed-row-height virtualizer),
+                                Icon (inline stroke-icon set), etc.
+      routes/                  one component per SPA route
+      utils/                   normalize() (mirrors the server's sort_key
+                                normalization), formatting, file-name template
+  mock/                        dev-only Vite middleware implementing docs/web/API.md
+  tests/                       Playwright specs + tests/screenshots.spec.ts
+  test-results/screenshots/    1440x900 and 390x844 screenshots for visual review
+```
+
+## Design
+
+Colors, type (Literata + IBM Plex Sans, self-hosted via `@fontsource/*`), spacing
+and icons follow `docs/web/prototype/*.dc.html`. Tokens live in `src/app.css` as
+CSS variables on `:root`, redefined under `@media (prefers-color-scheme: dark)`
+and `:root[data-theme="dark"]` for the manual toggle (Settings → General, or the
+account menu).
+
+Layout is responsive: below 900px width the shell switches to the phone pattern
+from `Phone.dc.html` — a bottom tab bar, a stacked list → books → detail flow
+(`/l/:lib/book/:id` is a dedicated route on phone), and a simplified one-line
+book list instead of the desktop table (whose fixed columns don't fit a phone
+screen).
+
+## Performance
+
+- The authors/series compact list is fetched once per `catalogVersion` (`?v=`)
+  and cached in IndexedDB (`src/lib/cache/nameCache.ts`).
+- Filtering the list as you type normalizes all rows once (on load, via an
+  `$effect`, not per keystroke) and then does a single `includes()` pass; this
+  keeps a 50,000-row filter around 5–15ms in practice (measured and logged to
+  the console in dev when a filter pass exceeds 30ms). This was fast enough on
+  the main thread that a Web Worker wasn't needed, per the budget in
+  `docs/web/ARCHITECTURE.md`.
+- Long lists (authors/series, book tables, cover grids) use a small
+  fixed-row-height virtualizer (`VirtualList.svelte`) rather than a third-party
+  dependency, since `@tanstack/svelte-virtual`'s Svelte 5 support was not
+  something I wanted to gamble the perf budget on within this pass.
+- Initial JS is ~62 KB gzipped; Settings and the reader are lazy-loaded
+  (dynamic `import()` from `App.svelte`).
+
+## Known gaps / deviations
+
+See the handback report for the full list. The short version: the in-browser
+reader (`ReaderPage.svelte`) is a shell that points an `<iframe>` at
+`/file?format=epub&inline=1` rather than a full foliate-js integration; the
+mock's SMTP/OPDS/import behavior is simulated, not real; and a handful of
+`docs/web/API.md` details were assumed where the doc doesn't spell them out
+(also listed in the handback report) — the mock implements those assumptions
+explicitly in `web/mock/server.ts` so the server team can compare.

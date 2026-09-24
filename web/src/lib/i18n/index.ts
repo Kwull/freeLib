@@ -1,19 +1,11 @@
 import en from './en.json';
 import ru from './ru.json';
+import { createI18nState } from './state.svelte';
 
 type Dict = Record<string, string>;
 const dicts: Record<string, Dict> = { en, ru };
 
-function readStored(): string {
-  try {
-    const v = localStorage.getItem('freelib.lang');
-    if (v && dicts[v]) return v;
-  } catch { /* ignore */ }
-  const nav = navigator.language.slice(0, 2);
-  return dicts[nav] ? nav : 'en';
-}
-
-export const i18nState = $state<{ lang: string }>({ lang: readStored() });
+export const i18nState = createI18nState((lang) => !!dicts[lang]);
 
 export function setLang(lang: string) {
   if (!dicts[lang]) return;
