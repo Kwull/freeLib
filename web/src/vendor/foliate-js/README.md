@@ -18,6 +18,13 @@ Vite's dev transform doesn't reliably skip resolving a dynamic `import()`
 just because it's marked `/* @vite-ignore */`, so the dead branches were
 removed instead of ignored.
 
+Security patch (freeLib): `epub.js` removes `<script>`, `<object>`, `<embed>`, `<base>`,
+`<meta http-equiv>`, `on*` / `srcdoc` attributes and `javascript:` URLs from every (X)HTML/SVG
+section before it becomes a blob (`sanitizeDoc`, marked "freeLib patch"). The paginator keeps
+`allow-scripts` in the iframe sandbox because WebKit does not deliver events otherwise; the
+server's `Content-Security-Policy` (`script-src 'self'`, inherited by blob documents) blocks
+book scripts regardless. Re-apply both when refreshing.
+
 To refresh: re-copy the same files from the upstream repo at a pinned commit,
 re-apply the same trims to `view.js` (diff against upstream's `open()`,
 `makeBook()`, `search()`, `initTTS()`), and re-check its dynamic `import()`

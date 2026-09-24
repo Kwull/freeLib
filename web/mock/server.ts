@@ -424,6 +424,13 @@ export function installMockApi(server: Connect.Server) {
         const body = await readBody(req);
         const device = store.devices.find((d) => d.id === body.device);
         if (!device) return fail(res, 404, 'not_found', 'Device not found');
+        if (device.kind === 'email') {
+          // same rule as the server: smtp.allowedRecipients, `*` = any characters
+          const to = String(body.target || device.target || '').trim().toLowerCase();
+          const ok = store.settings.smtp.allowedRecipients.some((p) =>
+            new RegExp('^' + p.toLowerCase().split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$').test(to));
+          if (!ok) return fail(res, 403, 'forbidden', `${to} is not an allowed recipient`);
+        }
         const kind = device.kind === 'email' ? 'send' : device.kind === 'folder' ? 'export' : 'download';
         const job = createJob(kind, `${kind === 'send' ? 'Send to' : kind === 'export' ? 'Export to' : 'Download for'} ${device.name} · ${body.books.length} books`);
         runJobProgress(job);

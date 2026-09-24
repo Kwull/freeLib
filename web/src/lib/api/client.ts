@@ -29,6 +29,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return undefined as T;
 }
 
+/** Human-readable text of a failed request (the server's message for API errors). */
+export function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function qs(params: Record<string, string | number | boolean | undefined | null>): string {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {

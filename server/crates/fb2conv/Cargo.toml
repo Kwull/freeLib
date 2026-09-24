@@ -15,5 +15,6 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 ab_glyph = "0.2"
 
 [dev-dependencies]
+freelib-import = { path = "../import" }
 serde_json.workspace = true
 tempfile.workspace = true

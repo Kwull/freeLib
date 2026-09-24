@@ -568,6 +568,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "encoding_rs",
+ "freelib-import",
  "image",
  "quick-xml",
  "serde",
@@ -581,6 +582,7 @@ dependencies = [
 name = "freelib-import"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "freelib-catalog",
  "rayon",
  "rusqlite",
@@ -610,6 +612,7 @@ dependencies = [
  "http-body-util",
  "image",
  "lettre",
+ "libc",
  "mime_guess",
  "num_cpus",
  "percent-encoding",

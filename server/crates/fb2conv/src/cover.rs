@@ -282,7 +282,7 @@ pub fn generate_cover(assets: &Assets, author: &str, title: &str, bottom: &str) 
 /// Draws `label` in the top-right corner of an existing cover on a translucent white box.
 /// Returns `None` if the image cannot be decoded.
 pub fn label_cover(assets: &Assets, cover: &[u8], label: &str) -> Option<Vec<u8>> {
-    let img: DynamicImage = image::load_from_memory(cover).ok()?;
+    let img: DynamicImage = crate::limit::decode_image(cover)?;
     let mut img = img.to_rgb8();
     let (w, h) = (img.width() as i32, img.height() as i32);
     let pad = (h / 60).max(2);

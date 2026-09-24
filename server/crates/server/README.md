@@ -25,12 +25,15 @@ cargo run --release -p freelib-server             # http://localhost:8080
   `VITE_API=http://localhost:8080 pnpm dev` in `web/`. The CSRF check accepts the Vite proxy
   because the browser sends `Sec-Fetch-Site: same-origin`.
 * **Environment.** The environment variables are listed in `docs/web/ARCHITECTURE.md` under
-  "Runtime configuration". Server-specific ones are `FREELIB_BIND`, `FREELIB_TRUST_PROXY` and
-  `FREELIB_CALIBRE_TIMEOUT`. `FREELIB_CALIBRE=none` disables Calibre.
+  "Runtime configuration". Server-specific ones are `FREELIB_BIND`, `FREELIB_TRUST_PROXY`,
+  `FREELIB_ALLOWED_HOSTS`, `FREELIB_CACHE_MAX_MB` and `FREELIB_CALIBRE_TIMEOUT`.
+  `FREELIB_CALIBRE=none` disables Calibre.
 * **Open mode.** Without users and without `FREELIB_ADMIN_PASSWORD`, the server runs in open
   mode: nobody logs in and every request acts as the admin (user id 0). Creating the first
   administrator through `POST /users` ends open mode. That first real user takes over the
-  shelves, ratings, devices and prefs made in open mode.
+  shelves, ratings, devices and prefs made in open mode. Open mode answers only requests for
+  `localhost`, IP literals and `FREELIB_ALLOWED_HOSTS` (421 otherwise): a web page cannot use DNS
+  rebinding to reach it as "admin".
 * **Admin bootstrap.** With `FREELIB_ADMIN_PASSWORD` set, the user `FREELIB_ADMIN_USER`
   (default `admin`) is created, or its password and admin role are reset, on every start.
 
@@ -49,10 +52,11 @@ Subcommands:
 | `main.rs` | CLI, tracing, listener, graceful shutdown (5 s, then exit, because SSE connections never end) |
 | `app.rs` | startup: directories, `app.db`, admin bootstrap/open mode, default devices, libraries, `FREELIB_AUTOIMPORT`, cleanup task; router assembly (compression, security headers, trace) |
 | `config.rs` | `Config` from the environment; `Config::for_dir` for tests |
-| `state.rs` | `AppState`: config, db, per-library `LibRuntime` (catalog handle, import status, cached authors/series JSON and its br/gzip variants), jobs, worker semaphore, caches, login rate limiter, `LibraryDto` |
+| `state.rs` | `AppState`: config, db, per-library `LibRuntime` (catalog handle, import status, `deleted` flag, cached authors/series JSON and its br/gzip variants, `newSinceLastVisit` counts), jobs, worker / preview / password-verification semaphores, caches, login rate limiter (per address and per user name), `LibraryDto`, `catalog_call` (retries once on a catalog replaced mid-request) |
 | `db.rs` | `app.db` access: users, sessions (SHA-256 of the token stored), libraries, devices (+ seeding), shelves, ratings, settings, prefs |
 | `auth.rs` | argon2id hashing, cookies, `Auth` / `Admin` extractors (session cache 60 s), credential check with rate limiting |
-| `security.rs` | CSRF middleware for `/api` and the security headers |
+| `security.rs` | CSRF middleware for `/api`, the `Host` check (DNS rebinding), security headers and the Content-Security-Policy |
+| `cache.rs` | LRU eviction of `cache/{out,covers,info}` (`FREELIB_CACHE_MAX_MB`), temp-file cleanup at startup |
 | `error.rs` | `ApiError` → `{"error", "message"}` |
 | `api/*.rs` | `/api/v1` handlers: `session`, `libraries` (+ `/fs`), `browse` (lists, genres, books, search, languages), `books` (detail, cover, file), `shelves` (+ rating), `devices` (+ `/send`, `/fonts`), `jobs` (+ SSE `/events`), `settings` (+ SMTP test, users, prefs) |
 | `importer.rs` | import jobs: `freelib_import::import_inpx` in a blocking thread, progress → job/library events, catalog reload and warm-up |
@@ -60,8 +64,8 @@ Subcommands:
 | `sender.rs` | `/send` jobs: e-mail (one message per book, `pauseSeconds` between), folder export under `FREELIB_EXPORT_DIR/<target>`, download (single file or zip), `joinSeries` |
 | `output.rs` | formats per book, conversion pipeline and cache `cache/out/<lib>/<bookhash>-<profilehash>.<ext>`, download file names |
 | `conv.rs` | `Converter` trait: the only place that calls `freelib-fb2conv` |
-| `calibre.rs` | `ebook-convert` detection (`--version`) and subprocess with timeout |
-| `bookio.rs` | original bytes: seek to `arch_offset` (raw deflate/stored), zip fallback, plain files; rejects `..` in stored paths |
+| `calibre.rs` | `ebook-convert` detection (`--version`, ≥ 6.19 required) and subprocess in a private temp dir with timeout and cancellation |
+| `bookio.rs` | original books as bounded streams: seek to `arch_offset` (validated against the file; raw deflate/stored), zip fallback with the importer's name rules, plain files; 256 MiB limit; rejects `..` in stored paths |
 | `preview.rs` | annotation/cover cache (`cache/info`, `cache/covers`), WebP thumbnails (240 px high, libwebp lossy q80) |
 | `mail.rs` | SMTP via lettre (rustls; `none` / `starttls` / `tls`) |
 | `opds.rs` | OPDS 1.2 feeds, OpenSearch, Basic auth gate, legacy `/opds_<lib>/…` 301 redirects |
@@ -90,8 +94,11 @@ Subcommands:
 * **Formats.**
   * FB2 and EPUB books offer `original, epub, kepub`, plus `azw3, mobi, pdf` when Calibre is
     available. For an EPUB book, `epub` returns the original file.
-  * `txt`, `rtf`, `html`, `doc(x)`, `odt`, `mobi`, `azw(3)` and `prc` books can be converted
-    with Calibre. Other formats offer only `original`.
+  * Other formats offer only `original`: Calibre only ever gets EPUB input (its HTML/TXT/DOCX
+    input plugins are a large attack surface, see CVE-2023-46303).
+  * `original` (and `epub` of an EPUB) are streamed from the archive, never loaded whole.
+  * `inline=1` only applies to EPUB; HTML/XHTML/XML/FB2/SVG are sent as
+    `application/octet-stream`; files and covers carry `Content-Security-Policy: sandbox`.
   * A format that needs Calibre when Calibre is missing returns 501 `unsupported_format`. An
     unknown format name returns 400.
 * **Download names.**
@@ -106,10 +113,13 @@ Subcommands:
   look as the SPA's own placeholder (background colour hashed from the title, author line,
   title text) — with `X-Cover: generated` and a public, cacheable `Cache-Control` (it depends
   only on title/author, not on user permissions).
-* **Login rate limiting.** After 5 failures from one IP, each further failure doubles the
-  lock-out: 1 s, 2 s, … up to 5 min. A locked-out attempt returns 429 with error code
-  `rate_limited` and a message that says when to retry. OPDS Basic auth shares the same limiter.
-  A successful Basic auth is cached for 10 minutes.
+* **Login rate limiting.** Two independent keys: the client address (IPv6 per /64; behind
+  `FREELIB_TRUST_PROXY` `X-Real-IP` or the rightmost `X-Forwarded-For` entry) and the lower-cased
+  user name. After 5 failures of a key, each further failure doubles its lock-out: 1 s, 2 s, … up
+  to 5 min. Attempts in flight count as failures until they finish, and at most two per key run
+  at once. A locked-out attempt returns 429 with error code `rate_limited` and a message that says
+  when to retry. At most two Argon2 verifications run at a time server-wide. OPDS Basic auth
+  shares all of this. A successful Basic auth is cached for 10 minutes.
 * **CSRF.** These rules apply to state-changing `/api` requests:
   * `Sec-Fetch-Site: cross-site` → 403.
   * An `Origin` that does not match `Host` or `X-Forwarded-Host` → 403. This check is skipped
@@ -122,7 +132,11 @@ Subcommands:
   change logs out all sessions of that user. The last administrator cannot be deleted or
   demoted (409).
 * **`newSinceLastVisit`.** A visit starts with the first `GET /session` after 30 minutes of
-  inactivity. The count covers books dated after the previous visit.
+  inactivity; the previous visit is stored in `user_state.prev_visit`. INPX dates have no time,
+  so the count covers books dated on or after the server-local (`TZ`) day of the previous visit.
+* **Users.** Names are unique case-insensitively (409). Ids are never reused (high-water mark in
+  `setting.last_user_id`); deleting a user cancels and removes its jobs and files and closes its
+  event streams.
 * **OPDS.**
   * `requireAuth` defaults to `true`, and open mode needs no auth.
   * Authors and series drill down by prefix: letters first, then prefixes of up to 4
@@ -135,13 +149,19 @@ Subcommands:
   * Jobs live in memory, so a restart forgets them.
   * Finished jobs and their files are removed after 24 h by a task that runs every 10 minutes.
     That task also removes leftovers in `cache/tmp` and `cache/jobs`.
+  * At most 5 queued + running send/export/download jobs per user (429). Only finished jobs are
+    trimmed when more than 1000 are kept. Cancelling kills a running Calibre process.
   * An e-mail device needs `target` (from the device or the request) and configured SMTP,
-    otherwise 400.
-  * Folder targets are relative sub-folders; `..` gets 400.
+    otherwise 400. The target must match `smtp.allowedRecipients` (403) and the user's mails
+    of the day may not exceed `smtp.dailyLimitPerUser` (429); both apply to admins too.
+  * Folder targets are relative sub-folders; `..` gets 400. Only admins create or change folder
+    devices; readers use shared ones as configured. Exports never overwrite (` (2)` suffix).
 * **SSE.**
   * `event: job` goes to the job owner, and import jobs go to all admins.
-  * `event: library` goes to everybody, with `newSinceLastVisit` computed for the receiving
-    user.
+  * `event: library` goes to everybody: the DTO is built once per event, `newSinceLastVisit`
+    is filled in per receiving user (cached per catalog version and day).
+  * Before each event the user is re-checked: the stream ends when the session is gone, the user
+    was deleted or an admin was demoted.
   * A `:ping` comment is sent every 25 s. The stream sends `X-Accel-Buffering: no`.
 * **SMTP password.** It is stored in `app.db` in plain text, because it must be usable, and it
   is never returned or logged. `PUT /settings` without `smtp.password` keeps it, and `""` clears
@@ -149,7 +169,10 @@ Subcommands:
 
 ## Tests
 
-`cargo test -p freelib-server` runs unit tests plus `tests/api.rs`. Each test starts the router over
+`cargo test -p freelib-server` runs unit tests plus `tests/api.rs` and `tests/security.rs`
+(regression tests of the security review: CSP and file headers, `inline`, DNS rebinding, login
+throttling, mail recipients and limits, job caps, user deletion, folder exports, Calibre inputs;
+zip bombs and forged zip sizes are generated at runtime with `freelib_import::testutil`). Each test starts the router over
 a temp dir with a generated library (`freelib_import::synth`, real zip archives with FB2 files) and
 calls it through `tower::ServiceExt::oneshot`. The tests cover:
 

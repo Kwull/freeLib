@@ -25,6 +25,7 @@ pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
     for d in [&cfg.data_dir, &cfg.cache_dir] {
         std::fs::create_dir_all(d)?;
     }
+    crate::cache::clean_on_start(&cfg.cache_dir);
     let db = AppDb::open(&cfg.data_dir.join("app.db"))?;
     let calibre = match &cfg.calibre {
         Some(p) => Calibre::detect(p).await,
@@ -183,7 +184,7 @@ fn inpx_name(inpx: &Path) -> String {
         })
 }
 
-/// Every 10 minutes: expire jobs and their files, remove stale temp files.
+/// Every 10 minutes: expire jobs and their files, remove stale temp files, bound the cache.
 fn spawn_cleanup(st: &AppState) {
     let st = st.clone();
     tokio::spawn(async move {
@@ -198,9 +199,11 @@ fn spawn_cleanup(st: &AppState) {
                 let _ = tokio::fs::remove_dir_all(d).await;
             }
             let cache = st.cfg.cache_dir.clone();
+            let max = st.cfg.cache_max_bytes;
             let _ = tokio::task::spawn_blocking(move || {
                 remove_older(&cache.join("tmp"), Duration::from_secs(3600));
                 remove_older(&cache.join("jobs"), ttl + Duration::from_secs(3600));
+                crate::cache::evict(&cache, max);
             })
             .await;
         }
@@ -271,6 +274,10 @@ pub fn router(st: AppState) -> Router {
                 .quality(tower_http::CompressionLevel::Precise(4))
                 .compress_when(compress),
         )
+        .layer(middleware::from_fn_with_state(
+            st.clone(),
+            security::host_guard,
+        ))
         .layer(middleware::from_fn(security::security_headers))
         .layer(TraceLayer::new_for_http())
         .with_state(st)

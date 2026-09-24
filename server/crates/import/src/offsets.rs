@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::ImportError;
 use crate::builder::Progress;
-use crate::zipdir::read_central_directory;
+use crate::zipdir::{EntryIndex, read_central_directory};
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,7 +72,7 @@ pub fn resolve_offsets(
             }
             let books = &by_archive[arch];
             stats.books += books.len() as u64;
-            match read_central_directory(&library_dir.join(arch)) {
+            match read_central_directory(&library_dir.join(arch)).map(EntryIndex::new) {
                 Ok(cd) => {
                     for (id, entry) in books {
                         match cd.get(entry) {

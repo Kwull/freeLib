@@ -11,7 +11,7 @@ use crate::auth::{self, COOKIE};
 use crate::db::{self, User};
 use crate::error::ApiResult;
 use crate::state::AppState;
-use crate::util::{now_rfc3339, random_token, rfc3339_at, set_header, unix_now};
+use crate::util::{random_token, set_header, unix_now};
 
 /// A new visit starts after this long without `GET /session`.
 const VISIT_GAP_SECS: i64 = 30 * 60;
@@ -26,35 +26,13 @@ pub async fn get_session(State(st): State<AppState>, headers: HeaderMap) -> ApiR
     Ok(r)
 }
 
-/// Remembers the previous visit (for `newSinceLastVisit`) and stamps the current one.
+/// Remembers the previous visit (for `newSinceLastVisit`, persisted in `user_state`) and
+/// stamps the current one.
 async fn track_visit(st: &AppState, user_id: i64) -> ApiResult<()> {
-    let st2 = st.clone();
     st.db
-        .run(move |c| {
-            let last = db::last_visit(c, user_id)?;
-            let now = unix_now();
-            let threshold = rfc3339_at(now - VISIT_GAP_SECS);
-            let mut prev = st2.prev_visit.lock().unwrap_or_else(|e| e.into_inner());
-            match &last {
-                Some(l) if *l >= threshold => {
-                    prev.entry(user_id).or_insert_with(|| l.clone());
-                    // refresh at most every 5 minutes
-                    if *l < rfc3339_at(now - 300) {
-                        db::set_last_visit(c, user_id, &now_rfc3339())?;
-                    }
-                }
-                Some(l) => {
-                    prev.insert(user_id, l.clone());
-                    db::set_last_visit(c, user_id, &now_rfc3339())?;
-                }
-                None => {
-                    prev.insert(user_id, now_rfc3339());
-                    db::set_last_visit(c, user_id, &now_rfc3339())?;
-                }
-            }
-            Ok(())
-        })
-        .await
+        .run(move |c| db::track_visit(c, user_id, unix_now(), VISIT_GAP_SECS))
+        .await?;
+    Ok(())
 }
 
 #[derive(Deserialize)]

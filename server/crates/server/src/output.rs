@@ -2,6 +2,8 @@
 //! with a disk cache under `cache/out/<lib>/<bookhash>-<profilehash>.<ext>`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use freelib_catalog::BookDetail;
 use freelib_fb2conv::{ConvertOptions, NameFields};
@@ -13,26 +15,19 @@ use crate::util::short_hash;
 
 pub const ALL_FORMATS: [&str; 6] = ["original", "epub", "kepub", "azw3", "mobi", "pdf"];
 const CALIBRE_FORMATS: [&str; 3] = ["azw3", "mobi", "pdf"];
-/// Non-FB2/EPUB inputs Calibre converts reasonably.
-const CALIBRE_INPUTS: [&str; 11] = [
-    "txt", "rtf", "html", "htm", "doc", "docx", "odt", "mobi", "azw3", "azw", "prc",
-];
 
 /// Formats this server can produce for a book with extension `ext`.
+///
+/// Calibre only ever gets EPUB input (our own FB2 → EPUB conversion or an original `.epub`):
+/// its other input plugins (HTML, TXT, DOCX, …) parse untrusted documents with a much larger
+/// attack surface, so other formats are only served as originals.
 pub fn formats_for(ext: &str, calibre: bool) -> Vec<String> {
     let mut v = vec!["original"];
-    match ext {
-        "fb2" | "epub" => {
-            v.extend(["epub", "kepub"]);
-            if calibre {
-                v.extend(CALIBRE_FORMATS);
-            }
+    if matches!(ext, "fb2" | "epub") {
+        v.extend(["epub", "kepub"]);
+        if calibre {
+            v.extend(CALIBRE_FORMATS);
         }
-        e if calibre && CALIBRE_INPUTS.contains(&e) => {
-            v.extend(["epub", "kepub"]);
-            v.extend(CALIBRE_FORMATS.iter().filter(|f| **f != e));
-        }
-        _ => {}
     }
     v.into_iter().map(String::from).collect()
 }
@@ -49,6 +44,8 @@ pub fn file_ext(format: &str, orig_ext: &str) -> String {
 pub enum Produced {
     Bytes(Vec<u8>),
     File(PathBuf),
+    /// The original file, streamed (never held in memory as a whole).
+    Stream(bookio::Original),
 }
 
 impl Produced {
@@ -56,7 +53,47 @@ impl Produced {
         match self {
             Produced::Bytes(b) => Ok(b),
             Produced::File(p) => Ok(tokio::fs::read(&p).await?),
+            Produced::Stream(o) => {
+                tokio::task::spawn_blocking(move || {
+                    let hint = o.len.unwrap_or(0);
+                    freelib_fb2conv::limit::read_limited(o.reader, bookio::MAX_BOOK, hint)
+                        .map_err(bookio::read_error)
+                })
+                .await?
+            }
         }
+    }
+
+    /// Writes the result to `path` (copy / stream, without loading files into memory).
+    pub async fn write_to(self, path: &Path) -> ApiResult<()> {
+        match self {
+            Produced::Bytes(b) => Ok(tokio::fs::write(path, b).await?),
+            Produced::File(p) => {
+                tokio::fs::copy(&p, path).await?;
+                Ok(())
+            }
+            Produced::Stream(o) => {
+                let path = path.to_path_buf();
+                tokio::task::spawn_blocking(move || -> ApiResult<()> {
+                    let mut out = std::fs::File::create(&path)?;
+                    let mut r = o.reader;
+                    std::io::copy(&mut r, &mut out).map_err(bookio::read_error)?;
+                    Ok(())
+                })
+                .await?
+            }
+        }
+    }
+}
+
+async fn open_original(lib_dir: PathBuf, d: BookDetail) -> ApiResult<bookio::Original> {
+    tokio::task::spawn_blocking(move || bookio::open_original(&lib_dir, &d)).await?
+}
+
+/// Marks a cached file as recently used (the cache is evicted by modification time).
+fn touch(p: &Path) {
+    if let Ok(f) = std::fs::File::options().append(true).open(p) {
+        let _ = f.set_modified(std::time::SystemTime::now());
     }
 }
 
@@ -100,17 +137,22 @@ async fn read_original(lib_dir: PathBuf, d: BookDetail) -> ApiResult<Vec<u8>> {
     tokio::task::spawn_blocking(move || bookio::read_original(&lib_dir, &d)).await?
 }
 
-async fn write_atomic(path: &Path, data: &[u8]) -> ApiResult<()> {
+/// Suffix of the temporary files of [`write_atomic`] (`<name>.tmp<16 hex>`), removed at startup.
+pub const TMP_EXT_PREFIX: &str = "tmp";
+
+async fn write_atomic(st: &AppState, path: &Path, data: &[u8]) -> ApiResult<()> {
     if let Some(p) = path.parent() {
         tokio::fs::create_dir_all(p).await?;
     }
-    let tmp = path.with_extension(format!("tmp{}", crate::util::random_id()));
+    let tmp = path.with_extension(format!("{TMP_EXT_PREFIX}{}", crate::util::random_id()));
     tokio::fs::write(&tmp, data).await?;
     tokio::fs::rename(&tmp, path).await?;
+    crate::cache::written(st, data.len() as u64);
     Ok(())
 }
 
-/// Produces `format` of book `d` (library folder `lib_dir`) with `opts`.
+/// Produces `format` of book `d` (library folder `lib_dir`) with `opts`. `cancel` (a job's
+/// cancellation flag) stops a running Calibre conversion.
 pub async fn produce(
     st: &AppState,
     lib_id: i64,
@@ -118,12 +160,13 @@ pub async fn produce(
     d: &BookDetail,
     format: &str,
     opts: &ConvertOptions,
+    cancel: Option<&Arc<AtomicBool>>,
 ) -> ApiResult<Produced> {
     let ext = d.book.ext.as_str();
     check_format(st, ext, format)?;
     if format == "original" || (format == "epub" && ext == "epub") {
-        return Ok(Produced::Bytes(
-            read_original(lib_dir.to_path_buf(), d.clone()).await?,
+        return Ok(Produced::Stream(
+            open_original(lib_dir.to_path_buf(), d.clone()).await?,
         ));
     }
     let out_dir = st.cache_dir("out", lib_id);
@@ -134,6 +177,7 @@ pub async fn produce(
         file_ext(format, ext)
     ));
     if target.is_file() {
+        touch(&target);
         return Ok(Produced::File(target));
     }
     let _permit = st
@@ -142,21 +186,19 @@ pub async fn produce(
         .await
         .map_err(|_| ApiError::internal("worker pool closed"))?;
     if target.is_file() {
+        touch(&target);
         return Ok(Produced::File(target));
     }
     match format {
         "epub" => {
-            let data = if ext == "fb2" {
-                let bytes = read_original(lib_dir.to_path_buf(), d.clone()).await?;
-                let conv = st.conv.clone();
-                let o = opts.clone();
-                tokio::task::spawn_blocking(move || conv.fb2_to_epub(&bytes, &o))
-                    .await?
-                    .map_err(|e| ApiError::internal(format!("conversion failed: {e:#}")))?
-            } else {
-                calibre_convert(st, lib_dir, d, "epub").await?
-            };
-            write_atomic(&target, &data).await?;
+            // only FB2 gets here (EPUB originals are served as they are)
+            let bytes = read_original(lib_dir.to_path_buf(), d.clone()).await?;
+            let conv = st.conv.clone();
+            let o = opts.clone();
+            let data = tokio::task::spawn_blocking(move || conv.fb2_to_epub(&bytes, &o))
+                .await?
+                .map_err(|e| ApiError::internal(format!("conversion failed: {e:#}")))?;
+            write_atomic(st, &target, &data).await?;
         }
         "kepub" => {
             let epub = epub_bytes(st, lib_id, lib_dir, d, opts).await?;
@@ -164,16 +206,12 @@ pub async fn produce(
             let data = tokio::task::spawn_blocking(move || conv.to_kepub(&epub))
                 .await?
                 .map_err(|e| ApiError::internal(format!("KEPUB conversion failed: {e:#}")))?;
-            write_atomic(&target, &data).await?;
+            write_atomic(st, &target, &data).await?;
         }
         f => {
-            let data = if ext == "fb2" {
-                let epub = epub_bytes(st, lib_id, lib_dir, d, opts).await?;
-                calibre_run(st, &epub, "epub", f).await?
-            } else {
-                calibre_convert(st, lib_dir, d, f).await?
-            };
-            write_atomic(&target, &data).await?;
+            let epub = epub_bytes(st, lib_id, lib_dir, d, opts).await?;
+            let data = calibre_run(st, &epub, "epub", f, cancel).await?;
+            write_atomic(st, &target, &data).await?;
         }
     }
     Ok(Produced::File(target))
@@ -192,7 +230,9 @@ async fn epub_bytes(
         return read_original(lib_dir.to_path_buf(), d.clone()).await;
     }
     if ext != "fb2" {
-        return calibre_convert(st, lib_dir, d, "epub").await;
+        return Err(ApiError::unsupported(format!(
+            "cannot convert {ext} to EPUB"
+        )));
     }
     let cached = st.cache_dir("out", lib_id).join(format!(
         "{}-{}.epub",
@@ -200,6 +240,7 @@ async fn epub_bytes(
         profile_hash(st, "epub", opts)
     ));
     if let Ok(b) = tokio::fs::read(&cached).await {
+        touch(&cached);
         return Ok(b);
     }
     let bytes = read_original(lib_dir.to_path_buf(), d.clone()).await?;
@@ -208,38 +249,42 @@ async fn epub_bytes(
     let epub = tokio::task::spawn_blocking(move || conv.fb2_to_epub(&bytes, &o))
         .await?
         .map_err(|e| ApiError::internal(format!("conversion failed: {e:#}")))?;
-    write_atomic(&cached, &epub).await?;
+    write_atomic(st, &cached, &epub).await?;
     Ok(epub)
 }
 
-async fn calibre_convert(
+/// Runs Calibre on `input` and returns the output bytes. Only EPUB input is accepted (see
+/// [`formats_for`]); Calibre runs in a fresh temporary directory (its cwd and `HOME`) with
+/// absolute paths we create ourselves.
+pub async fn calibre_run(
     st: &AppState,
-    lib_dir: &Path,
-    d: &BookDetail,
+    input: &[u8],
+    from: &str,
     to: &str,
+    cancel: Option<&Arc<AtomicBool>>,
 ) -> ApiResult<Vec<u8>> {
-    let input = read_original(lib_dir.to_path_buf(), d.clone()).await?;
-    calibre_run(st, &input, &d.book.ext, to).await
-}
-
-/// Runs Calibre on `input` (with extension `from`) and returns the output bytes.
-pub async fn calibre_run(st: &AppState, input: &[u8], from: &str, to: &str) -> ApiResult<Vec<u8>> {
     let calibre = st
         .calibre
         .as_ref()
         .ok_or_else(|| ApiError::unsupported(format!("{to} needs Calibre")))?;
-    let tmp = st.cfg.cache_dir.join("tmp").join(crate::util::random_id());
+    if from != "epub" || !CALIBRE_FORMATS.contains(&to) {
+        return Err(ApiError::unsupported(format!(
+            "Calibre converts EPUB only, not {from} to {to}"
+        )));
+    }
+    let tmp_root = st.cfg.cache_dir.join("tmp");
+    tokio::fs::create_dir_all(&tmp_root).await?;
+    let tmp = tokio::fs::canonicalize(&tmp_root)
+        .await?
+        .join(crate::util::random_id());
     tokio::fs::create_dir_all(&tmp).await?;
-    let from = if from.chars().all(|c| c.is_ascii_alphanumeric()) && !from.is_empty() {
-        from
-    } else {
-        "bin"
-    };
-    let inp = tmp.join(format!("in.{from}"));
+    let inp = tmp.join("in.epub");
     let out = tmp.join(format!("out.{to}"));
     let r = async {
         tokio::fs::write(&inp, input).await?;
-        calibre.convert(&inp, &out, st.cfg.calibre_timeout).await?;
+        calibre
+            .convert(&inp, &out, &tmp, st.cfg.calibre_timeout, cancel)
+            .await?;
         Ok::<_, ApiError>(tokio::fs::read(&out).await?)
     }
     .await;

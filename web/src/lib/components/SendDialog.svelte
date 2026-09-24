@@ -1,7 +1,7 @@
 <script lang="ts">
   import Dialog from './Dialog.svelte';
   import Icon from './Icon.svelte';
-  import { api } from '../api/client';
+  import { api, errorText } from '../api/client';
   import type { Book, Device } from '../api/types';
   import { devicesState } from '../stores/devices.svelte';
   import { fillFileNameTemplate } from '../utils/fileNameTemplate';
@@ -77,7 +77,7 @@
       clearSelection(lib);
       onClose();
     } catch (err) {
-      showToast(String(err), 'error');
+      showToast(errorText(err), 'error');
     } finally {
       sending = false;
     }

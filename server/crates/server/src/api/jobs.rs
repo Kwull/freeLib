@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
@@ -10,7 +10,7 @@ use serde::Deserialize;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::api::books::file_response;
-use crate::auth::Auth;
+use crate::auth::{self, Auth};
 use crate::error::{ApiError, ApiResult};
 use crate::jobs::{Event, Job};
 use crate::output::Produced;
@@ -67,30 +67,72 @@ pub async fn download(
 }
 
 /// SSE stream; `X-Accel-Buffering: no` asks nginx-style proxies not to buffer it.
-pub async fn events(State(st): State<AppState>, Auth(u): Auth) -> impl IntoResponse {
-    let rx = st.events().subscribe();
-    let st2 = st.clone();
-    let stream = BroadcastStream::new(rx)
-        .filter_map(move |ev| {
-            let u = u.clone();
-            let st = st2.clone();
-            async move {
-                let ev = ev.ok()?; // lagged receivers skip missed events
+///
+/// The user is re-checked (through the session cache, which user changes clear) before every
+/// event: the stream ends when the session is gone, the user was deleted or an admin was
+/// demoted; a role change re-evaluates which jobs are visible. The library DTO of a `library`
+/// event is built once and shared by all subscribers.
+pub async fn events(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let rx = BroadcastStream::new(st.events().subscribe());
+    let stream = futures_util::stream::unfold(
+        (rx, st.clone(), headers, u),
+        |(mut rx, st, headers, mut u)| async move {
+            loop {
+                let Ok(ev) = rx.next().await? else {
+                    continue; // lagged receivers skip missed events
+                };
+                match auth::current_user(&st, &headers).await {
+                    Ok(Some(cur)) if cur.id == u.id => {
+                        if u.is_admin() && !cur.is_admin() {
+                            return None;
+                        }
+                        u = cur;
+                    }
+                    _ => return None,
+                }
                 if !ev.visible_to(&u) {
-                    return None;
+                    continue;
                 }
-                match ev {
-                    Event::Job { job, .. } => {
-                        Some(SseEvent::default().event("job").json_data(&job).ok()?)
+                let sse = match ev {
+                    Event::Job { job, .. } => SseEvent::default().event("job").json_data(&job),
+                    Event::Library { id, dto } => {
+                        let st2 = st.clone();
+                        let base = dto
+                            .get_or_init(|| async move {
+                                tokio::task::spawn_blocking(move || {
+                                    st2.library_base_dto_by_id(id).ok()
+                                })
+                                .await
+                                .ok()
+                                .flatten()
+                            })
+                            .await
+                            .clone();
+                        let Some(mut lib) = base else { continue };
+                        lib.new_since_last_visit = match st.new_since_cached(id, u.id) {
+                            Some(n) => n,
+                            None => {
+                                let (st3, uid) = (st.clone(), u.id);
+                                tokio::task::spawn_blocking(move || {
+                                    st3.new_since_last_visit(id, uid)
+                                })
+                                .await
+                                .unwrap_or(0)
+                            }
+                        };
+                        SseEvent::default().event("library").json_data(&lib)
                     }
-                    Event::Library { id } => {
-                        let lib = st.library_dto_async(id, u.id).await.ok()?;
-                        Some(SseEvent::default().event("library").json_data(&lib).ok()?)
-                    }
-                }
+                    Event::Users => continue,
+                };
+                let Ok(sse) = sse else { continue };
+                return Some((Ok::<SseEvent, Infallible>(sse), (rx, st, headers, u)));
             }
-        })
-        .map(Ok::<SseEvent, Infallible>);
+        },
+    );
     (
         [
             (header::CACHE_CONTROL, "no-cache"),

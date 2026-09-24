@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
@@ -41,12 +41,17 @@ pub struct Inner {
     pub calibre: Option<Calibre>,
     pub conv: Arc<dyn Converter>,
     pub login_limiter: RateLimiter,
+    /// Concurrent password verifications (Argon2 needs ~19 MiB each).
+    pub verify_sem: Semaphore,
+    /// Concurrent whole-book reads for previews (annotation / cover extraction).
+    pub preview_sem: Semaphore,
+    /// Bytes written to the cache since the last eviction pass, and whether one is running.
+    pub cache_written: AtomicU64,
+    pub cache_evicting: AtomicBool,
     /// token hash → (user, cached at)
     pub session_cache: Mutex<HashMap<String, (User, Instant)>>,
     /// Basic-auth credentials hash → (user, cached at) for OPDS.
     pub basic_cache: Mutex<HashMap<String, (User, Instant)>>,
-    /// Previous visit per user (for `newSinceLastVisit`).
-    pub prev_visit: Mutex<HashMap<i64, String>>,
     /// Background tasks stop when this is set.
     pub shutdown: AtomicBool,
 }
@@ -55,6 +60,7 @@ impl AppState {
     pub fn new(cfg: Config, db: AppDb, calibre: Option<Calibre>) -> AppState {
         let (tx, _) = broadcast::channel(1024);
         let workers = Arc::new(Semaphore::new(cfg.workers.max(1)));
+        let preview_permits = cfg.workers.max(1) * 2;
         AppState(Arc::new(Inner {
             cfg,
             db,
@@ -65,9 +71,12 @@ impl AppState {
             calibre,
             conv: Arc::new(Fb2Conv),
             login_limiter: RateLimiter::default(),
+            verify_sem: Semaphore::new(2),
+            preview_sem: Semaphore::new(preview_permits),
+            cache_written: AtomicU64::new(0),
+            cache_evicting: AtomicBool::new(false),
             session_cache: Mutex::new(HashMap::new()),
             basic_cache: Mutex::new(HashMap::new()),
-            prev_visit: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
         }))
     }
@@ -81,7 +90,35 @@ impl AppState {
     }
 
     pub fn emit_library(&self, id: i64) {
-        let _ = self.events().send(Event::Library { id });
+        let _ = self.events().send(Event::library(id));
+    }
+
+    /// Runs `f` on the current catalog of `lib` in a blocking thread. When the catalog was
+    /// replaced by a re-import while `f` needed a new connection (`stale`), retries once with
+    /// the fresh catalog.
+    pub async fn catalog_call<R, F>(&self, lib: i64, f: F) -> ApiResult<R>
+    where
+        R: Send + 'static,
+        F: Fn(&Arc<Catalog>) -> ApiResult<R> + Send + 'static,
+    {
+        let rt = self.lib(lib)?;
+        tokio::task::spawn_blocking(move || {
+            let cat = rt
+                .handle
+                .get()
+                .ok_or_else(|| ApiError::not_found("library is not imported yet"))?;
+            match f(&cat) {
+                Err(e) if e.code == crate::error::STALE => {
+                    let fresh = match rt.handle.get() {
+                        Some(c) if !Arc::ptr_eq(&c, &cat) => c,
+                        _ => rt.handle.reload()?,
+                    };
+                    f(&fresh)
+                }
+                r => r,
+            }
+        })
+        .await?
     }
 
     pub fn lib(&self, id: i64) -> ApiResult<Arc<LibRuntime>> {
@@ -139,14 +176,41 @@ impl AppState {
 
     /// Builds the API `Library` for `user` (blocking: may compute catalog attributes).
     pub fn library_dto(&self, row: &LibraryRow, user_id: i64) -> LibraryDto {
+        let mut d = self.library_base_dto(row);
+        d.new_since_last_visit = self.new_since_last_visit(row.id, user_id);
+        d
+    }
+
+    /// Books added since the previous visit of `user_id` (blocking on a cache miss).
+    pub fn new_since_last_visit(&self, lib: i64, user_id: i64) -> i64 {
+        let Some(rt) = self.lib(lib).ok() else {
+            return 0;
+        };
+        let Some(cat) = rt.handle.get() else {
+            return 0;
+        };
+        let Some(after) = self.visit_baseline(user_id) else {
+            return 0;
+        };
+        rt.count_newer(&cat, &after)
+    }
+
+    /// `newSinceLastVisit` from the cache only (`None` on a miss).
+    pub fn new_since_cached(&self, lib: i64, user_id: i64) -> Option<i64> {
+        let rt = self.lib(lib).ok()?;
+        let cat = rt.handle.get()?;
+        let Some(after) = self.visit_baseline(user_id) else {
+            return Some(0);
+        };
+        rt.cached_newer(cat.catalog_version(), &after)
+    }
+
+    /// The API `Library` without the per-user `newSinceLastVisit` (0).
+    pub fn library_base_dto(&self, row: &LibraryRow) -> LibraryDto {
         let rt = self.lib(row.id).ok();
         let cat = rt.as_ref().and_then(|r| r.handle.get());
         let status = rt.as_ref().map(|r| r.status()).unwrap_or_default();
-        let since = self.visit_baseline(user_id);
-        let new_since = match (&cat, since) {
-            (Some(c), Some(s)) => c.count_newer_than(&s).unwrap_or(0),
-            _ => 0,
-        };
+        let new_since = 0;
         let st = cat.as_ref().map(|c| c.stats().clone()).unwrap_or_default();
         LibraryDto {
             id: row.id,
@@ -167,18 +231,25 @@ impl AppState {
         }
     }
 
-    /// Date (`YYYY-MM-DD`) of the user's previous visit.
+    /// `newSinceLastVisit` counts books whose date (a day, no time) is on or after the server's
+    /// local date of the previous visit, i.e. `date > <that day - 1>`. Returns that bound.
     fn visit_baseline(&self, user_id: i64) -> Option<String> {
-        if let Some(v) = self
-            .prev_visit
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&user_id)
-        {
-            return Some(v.clone());
-        }
-        let c = self.db.lock();
-        db::last_visit(&c, user_id).ok().flatten()
+        let prev = {
+            let c = self.db.lock();
+            db::prev_visit(&c, user_id).ok().flatten()?
+        };
+        let secs = crate::util::parse_rfc3339(&prev)?;
+        Some(crate::util::local_date_at(secs - 86_400))
+    }
+
+    /// The base DTO of library `id` (blocking).
+    pub fn library_base_dto_by_id(&self, id: i64) -> ApiResult<LibraryDto> {
+        let row = {
+            let c = self.db.lock();
+            db::get_library(&c, id)?
+        };
+        let row = row.ok_or_else(|| ApiError::not_found("library not found"))?;
+        Ok(self.library_base_dto(&row))
     }
 
     pub async fn library_dto_async(&self, id: i64, user_id: i64) -> ApiResult<LibraryDto> {
@@ -285,6 +356,11 @@ pub struct LibRuntime {
     names: Mutex<HashMap<&'static str, (i64, Arc<NameList>)>>,
     /// Serialises building of the lists (a request and the warm-up must not both build them).
     pub build_lock: Mutex<()>,
+    /// Set (under the `import` lock) when the library is deleted: no new import starts and an
+    /// import that is still finishing discards its result.
+    pub deleted: AtomicBool,
+    /// (catalog version, date bound) → `count_newer_than` result.
+    newer: Mutex<HashMap<(i64, String), i64>>,
 }
 
 impl LibRuntime {
@@ -297,7 +373,37 @@ impl LibRuntime {
             lists: Mutex::new(HashMap::new()),
             names: Mutex::new(HashMap::new()),
             build_lock: Mutex::new(()),
+            deleted: AtomicBool::new(false),
+            newer: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.deleted.load(Ordering::SeqCst)
+    }
+
+    fn cached_newer(&self, version: i64, after: &str) -> Option<i64> {
+        self.newer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(version, after.to_string()))
+            .copied()
+    }
+
+    /// Books of `cat` dated after `after`, cached per catalog version (blocking on a miss).
+    pub fn count_newer(&self, cat: &Catalog, after: &str) -> i64 {
+        let v = cat.catalog_version();
+        if let Some(n) = self.cached_newer(v, after) {
+            return n;
+        }
+        let n = cat.count_newer_than(after).unwrap_or(0);
+        let mut g = self.newer.lock().unwrap_or_else(|e| e.into_inner());
+        g.retain(|(ver, _), _| *ver == v);
+        if g.len() > 1000 {
+            g.clear();
+        }
+        g.insert((v, after.to_string()), n);
+        n
     }
 
     pub fn status(&self) -> LibraryStatus {
@@ -361,39 +467,167 @@ impl LibRuntime {
     }
 }
 
-/// Per-IP login backoff: after 5 failures each further failure doubles the wait (max 5 min).
+/// What a login attempt is throttled by: the client address (IPv6 per /64) and the user name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LimitKey {
+    Ip(IpAddr),
+    User(String),
+}
+
+impl LimitKey {
+    /// IPv4 as is (also when IPv4-mapped), IPv6 truncated to its /64 prefix: one host usually
+    /// owns a whole /64, so rotating addresses inside it must not reset the backoff.
+    pub fn ip(ip: IpAddr) -> LimitKey {
+        LimitKey::Ip(match ip {
+            IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+                Some(v4) => IpAddr::V4(v4),
+                None => {
+                    let s = v6.segments();
+                    IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+                }
+            },
+            v4 => v4,
+        })
+    }
+
+    /// Case-insensitive, like user names.
+    pub fn user(name: &str) -> LimitKey {
+        LimitKey::User(name.trim().to_lowercase())
+    }
+}
+
+#[derive(Debug)]
+struct Slot {
+    failures: u32,
+    inflight: u32,
+    until: Instant,
+}
+
+/// Login backoff, per client address and per user name independently: after
+/// [`RateLimiter::FREE_FAILURES`] failures each further failure doubles the wait (max 5 min).
+/// Attempts in flight count as failures until they finish, so parallel guesses cannot race
+/// past the limit, and at most [`RateLimiter::MAX_INFLIGHT`] attempts per key run at once.
 #[derive(Default)]
 pub struct RateLimiter {
-    map: Mutex<HashMap<IpAddr, (u32, Instant)>>,
+    map: Mutex<HashMap<LimitKey, Slot>>,
 }
 
 impl RateLimiter {
-    /// Seconds to wait before the next attempt is allowed.
-    pub fn check(&self, ip: IpAddr) -> Option<u64> {
-        let g = self.map.lock().unwrap_or_else(|e| e.into_inner());
-        let (_, until) = g.get(&ip)?;
-        let now = Instant::now();
-        (*until > now).then(|| (*until - now).as_secs().max(1))
-    }
+    pub const FREE_FAILURES: u32 = 5;
+    pub const MAX_INFLIGHT: u32 = 2;
+    const MAX_WAIT: u64 = 300;
 
-    pub fn failure(&self, ip: IpAddr) {
+    /// Registers an attempt for all `keys`; `Err(seconds to wait)` when any of them is blocked.
+    /// Every `Ok` must be followed by [`finish`](Self::finish) with the same keys.
+    pub fn begin(&self, keys: &[LimitKey]) -> Result<(), u64> {
         let mut g = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        for k in keys {
+            if let Some(s) = g.get(k) {
+                if s.until > now {
+                    return Err((s.until - now).as_secs().max(1));
+                }
+                if s.inflight >= Self::MAX_INFLIGHT
+                    || (s.inflight > 0 && s.failures + s.inflight >= Self::FREE_FAILURES)
+                {
+                    return Err(1);
+                }
+            }
+        }
         if g.len() > 10_000 {
-            let now = Instant::now();
-            g.retain(|_, (_, until)| *until + Duration::from_secs(3600) > now);
+            g.retain(|_, s| s.inflight > 0 || s.until + Duration::from_secs(3600) > now);
         }
-        let e = g.entry(ip).or_insert((0, Instant::now()));
-        e.0 += 1;
-        if e.0 >= 5 {
-            let secs = 1u64 << (e.0 - 5).min(9);
-            e.1 = Instant::now() + Duration::from_secs(secs.min(300));
+        for k in keys {
+            g.entry(k.clone())
+                .or_insert(Slot {
+                    failures: 0,
+                    inflight: 0,
+                    until: now,
+                })
+                .inflight += 1;
         }
+        Ok(())
     }
 
-    pub fn success(&self, ip: IpAddr) {
-        self.map
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&ip);
+    /// Ends an attempt started with [`begin`](Self::begin).
+    pub fn finish(&self, keys: &[LimitKey], success: bool) {
+        let mut g = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        for k in keys {
+            let Some(s) = g.get_mut(k) else { continue };
+            s.inflight = s.inflight.saturating_sub(1);
+            if success {
+                s.failures = 0;
+                s.until = now;
+            } else {
+                s.failures += 1;
+                if s.failures >= Self::FREE_FAILURES {
+                    let secs = 1u64 << (s.failures - Self::FREE_FAILURES).min(9);
+                    s.until = now + Duration::from_secs(secs.min(Self::MAX_WAIT));
+                }
+            }
+            if s.inflight == 0 && s.failures == 0 {
+                g.remove(k);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn limiter_per_key() {
+        let l = RateLimiter::default();
+        let a = [
+            LimitKey::ip("10.0.0.1".parse().unwrap()),
+            LimitKey::user("Bob"),
+        ];
+        for _ in 0..RateLimiter::FREE_FAILURES {
+            l.begin(&a).unwrap();
+            l.finish(&a, false);
+        }
+        assert!(l.begin(&a).is_err(), "blocked after 5 failures");
+        // same user from another address: blocked by the user key
+        let b = [
+            LimitKey::ip("10.0.0.2".parse().unwrap()),
+            LimitKey::user("BOB"),
+        ];
+        assert!(l.begin(&b).is_err());
+        // other user from another address: fine
+        let c = [
+            LimitKey::ip("10.0.0.2".parse().unwrap()),
+            LimitKey::user("alice"),
+        ];
+        l.begin(&c).unwrap();
+        l.finish(&c, true);
+    }
+
+    #[test]
+    fn inflight_counts() {
+        let l = RateLimiter::default();
+        let k = [LimitKey::user("x")];
+        l.begin(&k).unwrap();
+        l.begin(&k).unwrap();
+        assert!(l.begin(&k).is_err(), "at most two attempts in flight");
+        l.finish(&k, false);
+        l.finish(&k, false);
+        l.begin(&k).unwrap();
+        l.finish(&k, true);
+        assert!(l.map.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ipv6_buckets() {
+        let a = LimitKey::ip("2001:db8:1:2:aaaa::1".parse().unwrap());
+        let b = LimitKey::ip("2001:db8:1:2:bbbb::7".parse().unwrap());
+        let c = LimitKey::ip("2001:db8:1:3::1".parse().unwrap());
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(
+            LimitKey::ip("::ffff:10.1.2.3".parse().unwrap()),
+            LimitKey::ip("10.1.2.3".parse().unwrap())
+        );
     }
 }

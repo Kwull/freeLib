@@ -6,6 +6,7 @@ pub mod inpx;
 pub mod migrate;
 pub mod offsets;
 pub mod synth;
+pub mod testutil;
 pub mod zipdir;
 
 pub use builder::{ImportOptions, ImportStats, Progress, import_inpx, new_db_path};

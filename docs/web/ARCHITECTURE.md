@@ -38,11 +38,13 @@ Browser (Svelte 5 SPA) ──HTTP/JSON + SSE──▶ freelib-server (Rust, axum
 | `FREELIB_EXPORT_DIR` | `/export` | Target of the "Server folder" device |
 | `FREELIB_ADMIN_USER` / `FREELIB_ADMIN_PASSWORD` | `admin` / unset | Creates/updates the admin on start. If no users exist and no password is set, the server runs in **open mode** (no login, everyone is admin) and logs a warning |
 | `FREELIB_AUTOIMPORT` | unset | Comma-separated INPX paths; on start, a library is created for each one not yet known and imported |
-| `FREELIB_CALIBRE` | `ebook-convert` if on PATH | Calibre converter used for AZW3 / MOBI / PDF / other formats |
+| `FREELIB_CALIBRE` | `ebook-convert` if on PATH | Calibre converter used for AZW3 / MOBI / PDF (EPUB input only; versions before 6.19 are refused, CVE-2023-46303) |
 | `FREELIB_WEB_DIR` | unset | Serve the SPA from this folder instead of the embedded copy (development) |
 | `FREELIB_WORKERS` | CPU cores | Conversion worker count |
 | `FREELIB_BIND` | `0.0.0.0` | Listen address |
-| `FREELIB_TRUST_PROXY` | unset | `1`: take the client address for login rate limiting from `X-Forwarded-For` / `X-Real-IP` (behind a reverse proxy) |
+| `FREELIB_TRUST_PROXY` | unset | `1`: the server is only reachable through one reverse proxy; the client address for login rate limiting is `X-Real-IP`, else the rightmost `X-Forwarded-For` entry |
+| `FREELIB_ALLOWED_HOSTS` | unset | Comma-separated host names (`books.example.org`, `*.lan`) accepted in the `Host` header besides `localhost` and IP literals. Checked in open mode always (DNS rebinding protection: other names get 421) and in every mode once set |
+| `FREELIB_CACHE_MAX_MB` | `2048` | Size bound of `cache/{out,covers,info}`; least recently used files are evicted (`0` = unbounded) |
 | `FREELIB_CALIBRE_TIMEOUT` | `300` | Seconds before a Calibre conversion is killed (`FREELIB_CALIBRE=none` disables Calibre) |
 | `RUST_LOG` | `info` | Logging |
 
@@ -152,6 +154,12 @@ CREATE TABLE setting (key TEXT PRIMARY KEY, value TEXT NOT NULL); -- JSON values
 ```
 
 Indexes added: `session(user_id)`, `shelf(user_id)`, `device(user_id)`.
+
+Migration v2: unique index `user(username COLLATE NOCASE)` (older case-only duplicates get ` (<id>)` appended),
+`setting.last_user_id` (user ids are never reused, so a deleted user's jobs or files can never match a new user),
+`user_state.prev_visit` (start of the previous visit, the `newSinceLastVisit` baseline; books dated on or after
+its server-local day count as new), and
+`mail_count(user_id, day, count)` for `smtp.dailyLimitPerUser`.
 Migrations: `freelib_catalog::schema::APP_MIGRATIONS` is an append-only list of SQL batches; `PRAGMA user_version`
 holds how many were applied; `open_app_db()` applies the missing ones, each in a transaction, and refuses a newer database.
 
@@ -216,8 +224,18 @@ paths are copied verbatim, the server should validate them against `FREELIB_BOOK
   `cache/info/<lib>/<book_key-hash>.json` and `cache/covers/<lib>/<hash>-thumb.webp` (240 px high, lossy WebP) +
   `<hash>-full.{jpg,png,webp}` (JPEG/PNG covers kept as they are, other formats re-encoded to WebP).
 - Book bytes: seek to `arch_offset` if known, else open the zip (LRU of open archives).
-- Converted outputs cached at `cache/out/<lib>/<hash>-<profilehash>.<ext>`.
-- EPUB 3 from `fb2conv`. AZW3/MOBI/PDF via Calibre (`FREELIB_CALIBRE`) from that EPUB; 501 when Calibre is absent.
+- Converted outputs cached at `cache/out/<lib>/<hash>-<profilehash>.<ext>`. The cache is bounded by
+  `FREELIB_CACHE_MAX_MB`: after writes and every 10 minutes the least recently used files (by modification
+  time, refreshed on cache hits) are deleted down to 90 % of the limit; interrupted atomic writes
+  (`*.tmp<hex>`) are removed at startup.
+- EPUB 3 from `fb2conv`. AZW3/MOBI/PDF via Calibre (`FREELIB_CALIBRE`) from that EPUB (or an original
+  `.epub`); 501 when Calibre is absent. Calibre never sees other inputs (HTML, TXT, DOCX, …: those books are
+  offered as originals only), runs in a private temporary directory (cwd, `HOME`, config and temp dirs), and is
+  killed when its job is cancelled. Calibre older than 6.19 is treated as missing.
+- Resource limits: books are read through bounded readers (256 MiB uncompressed, `.inp` parts 512 MiB, zip
+  entries never trusted for their declared size), images are decoded with dimension (8000 px) and allocation
+  (128 MiB) limits, whole-book previews and conversions run under semaphores, Argon2 verifications are limited
+  to two at a time.
   KEPUB = `fb2conv` EPUB with Kobo spans (`fb2conv::to_kepub`).
 
 ## Performance targets (full Flibusta-size INPX, ~600k books, 4 cores)

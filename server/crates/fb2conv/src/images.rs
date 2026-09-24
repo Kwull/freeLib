@@ -108,7 +108,7 @@ pub fn prepare(data: Vec<u8>) -> Option<Prepared> {
             height: 800,
         }),
         _ => {
-            let img = image::load_from_memory(&data).ok()?;
+            let img = crate::limit::decode_image(&data)?;
             let (width, height) = (img.width(), img.height());
             if width == 0 || height == 0 {
                 return None;

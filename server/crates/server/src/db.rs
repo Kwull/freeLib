@@ -140,11 +140,22 @@ pub fn user_with_hash(c: &Connection, username: &str) -> ApiResult<Option<(User,
     .optional()?)
 }
 
+/// Inserts a user. Names are unique case-insensitively (409 otherwise); ids are never reused
+/// (a high-water mark in `setting.last_user_id`), so a deleted user's in-memory jobs, cached
+/// sessions or files can never be mistaken for a new user's.
 pub fn insert_user(c: &Connection, username: &str, hash: &str, role: &str) -> ApiResult<User> {
     let first = count_users(c)? == 0;
+    if user_with_hash(c, username)?.is_some() {
+        return Err(ApiError::conflict("user name already exists"));
+    }
+    let max_id: i64 = c.query_row("SELECT coalesce(max(id), 0) FROM user", [], |r| r.get(0))?;
+    let hwm = get_setting_raw(c, "last_user_id")?
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    let id = max_id.max(hwm) + 1;
     c.execute(
-        "INSERT INTO user(username, password_hash, role, created_at) VALUES (?1,?2,?3,?4)",
-        params![username, hash, role, now_rfc3339()],
+        "INSERT INTO user(id, username, password_hash, role, created_at) VALUES (?1,?2,?3,?4,?5)",
+        params![id, username, hash, role, now_rfc3339()],
     )
     .map_err(|e| match e {
         rusqlite::Error::SqliteFailure(f, _)
@@ -154,7 +165,7 @@ pub fn insert_user(c: &Connection, username: &str, hash: &str, role: &str) -> Ap
         }
         e => e.into(),
     })?;
-    let id = c.last_insert_rowid();
+    put_setting_raw(c, "last_user_id", &id.to_string())?;
     if first {
         adopt_open_mode_data(c, id)?;
     }
@@ -206,6 +217,7 @@ pub fn delete_user(c: &Connection, id: i64) -> ApiResult<bool> {
     c.execute("DELETE FROM rating WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM device WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM user_state WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM mail_count WHERE user_id=?1", [id])?;
     Ok(c.execute("DELETE FROM user WHERE id=?1", [id])? > 0)
 }
 
@@ -270,6 +282,73 @@ pub fn set_last_visit(c: &Connection, user_id: i64, when: &str) -> ApiResult<()>
     c.execute(
         "INSERT INTO user_state(user_id, last_visit) VALUES (?1,?2) ON CONFLICT(user_id) DO UPDATE SET last_visit=excluded.last_visit",
         params![user_id, when],
+    )?;
+    Ok(())
+}
+
+/// Start of the previous visit (baseline of `newSinceLastVisit`).
+pub fn prev_visit(c: &Connection, user_id: i64) -> ApiResult<Option<String>> {
+    Ok(c.query_row(
+        "SELECT prev_visit FROM user_state WHERE user_id=?1",
+        [user_id],
+        |r| r.get(0),
+    )
+    .optional()?
+    .flatten())
+}
+
+/// Records activity at `now` (RFC 3339): a gap of more than `gap_secs` since the last
+/// activity starts a new visit, and the previous one becomes the `newSinceLastVisit` baseline.
+/// The first visit ever is its own baseline. Returns whether anything was written.
+pub fn track_visit(c: &Connection, user_id: i64, now: i64, gap_secs: i64) -> ApiResult<bool> {
+    let now_s = rfc3339_at(now);
+    let row: Option<(Option<String>, Option<String>)> = c
+        .query_row(
+            "SELECT last_visit, prev_visit FROM user_state WHERE user_id=?1",
+            [user_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let (last, prev) = row.unwrap_or((None, None));
+    let last_t = last.as_deref().and_then(crate::util::parse_rfc3339);
+    let (new_last, new_prev) = match last_t {
+        None => (now_s.clone(), prev.unwrap_or_else(|| now_s.clone())),
+        Some(t) if now - t > gap_secs => (now_s.clone(), last.clone().unwrap_or_default()),
+        // same visit: refresh at most every 5 minutes
+        Some(t) if now - t > 300 => (now_s.clone(), prev.unwrap_or_else(|| now_s.clone())),
+        // upgraded database: last activity known, no baseline yet
+        Some(_) if prev.is_none() => {
+            let l = last.clone().unwrap_or_default();
+            (l.clone(), l)
+        }
+        Some(_) => return Ok(false),
+    };
+    c.execute(
+        "INSERT INTO user_state(user_id, last_visit, prev_visit) VALUES (?1,?2,?3) \
+         ON CONFLICT(user_id) DO UPDATE SET last_visit=excluded.last_visit, prev_visit=excluded.prev_visit",
+        params![user_id, new_last, new_prev],
+    )?;
+    Ok(true)
+}
+
+/// Mails sent by `user_id` on `day`.
+pub fn mail_count(c: &Connection, user_id: i64, day: &str) -> ApiResult<i64> {
+    Ok(c.query_row(
+        "SELECT count FROM mail_count WHERE user_id=?1 AND day=?2",
+        params![user_id, day],
+        |r| r.get(0),
+    )
+    .optional()?
+    .unwrap_or(0))
+}
+
+/// Counts one mail of `user_id` on `day` (older days are dropped).
+pub fn add_mail(c: &Connection, user_id: i64, day: &str) -> ApiResult<()> {
+    c.execute("DELETE FROM mail_count WHERE day < ?1", [day])?;
+    c.execute(
+        "INSERT INTO mail_count(user_id, day, count) VALUES (?1,?2,1) \
+         ON CONFLICT(user_id, day) DO UPDATE SET count = count + 1",
+        params![user_id, day],
     )?;
     Ok(())
 }
@@ -689,6 +768,15 @@ pub struct SmtpConfig {
     pub from: String,
     pub password: Option<String>,
     pub pause_seconds: u64,
+    /// Recipient patterns (`*` = any characters, case-insensitive) that `/send` and e-mail
+    /// devices may use; a lone `*` allows every address.
+    pub allowed_recipients: Vec<String>,
+    /// Mails per user and day (server local date).
+    pub daily_limit_per_user: u32,
+}
+
+pub fn default_allowed_recipients() -> Vec<String> {
+    vec!["*@kindle.com".into(), "*@free.kindle.com".into()]
 }
 
 impl Default for SmtpConfig {
@@ -701,7 +789,77 @@ impl Default for SmtpConfig {
             from: String::new(),
             password: None,
             pause_seconds: 2,
+            allowed_recipients: default_allowed_recipients(),
+            daily_limit_per_user: 100,
         }
+    }
+}
+
+impl SmtpConfig {
+    /// Whether `addr` matches one of [`allowed_recipients`](Self::allowed_recipients).
+    pub fn recipient_allowed(&self, addr: &str) -> bool {
+        let a = addr.trim().to_lowercase();
+        self.allowed_recipients
+            .iter()
+            .any(|p| glob_match(&p.trim().to_lowercase(), &a))
+    }
+}
+
+/// `*` matches any run of characters (including none); everything else literally.
+pub fn glob_match(pattern: &str, s: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = s.chars().collect();
+    let (mut pi, mut ti) = (0, 0);
+    let (mut star, mut mark) = (None, 0);
+    while ti < t.len() {
+        if pi < p.len() && p[pi] != '*' && p[pi] == t[ti] {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(sp) = star {
+            pi = sp + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|c| *c == '*')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recipients() {
+        let s = SmtpConfig::default();
+        assert!(s.recipient_allowed("Me@Kindle.com"));
+        assert!(s.recipient_allowed("x_1@free.kindle.com"));
+        assert!(!s.recipient_allowed("me@kindle.com.evil.org"));
+        assert!(!s.recipient_allowed("victim@example.com"));
+        assert!(!s.recipient_allowed("me@evilkindle.com"));
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("a*b*c", "aXbYc"));
+        assert!(!glob_match("a*b", "aXbYc"));
+    }
+
+    #[test]
+    fn visits() {
+        let c = freelib_catalog::open_app_db(std::path::Path::new(":memory:")).unwrap();
+        let t0 = 1_700_000_000;
+        assert!(track_visit(&c, 1, t0, 1800).unwrap());
+        assert_eq!(prev_visit(&c, 1).unwrap(), Some(rfc3339_at(t0)));
+        // same visit: no new baseline
+        track_visit(&c, 1, t0 + 600, 1800).unwrap();
+        assert_eq!(prev_visit(&c, 1).unwrap(), Some(rfc3339_at(t0)));
+        // a day later: the previous visit's last activity becomes the baseline
+        track_visit(&c, 1, t0 + 86_400, 1800).unwrap();
+        assert_eq!(prev_visit(&c, 1).unwrap(), Some(rfc3339_at(t0 + 600)));
+        assert_eq!(last_visit(&c, 1).unwrap(), Some(rfc3339_at(t0 + 86_400)));
     }
 }
 

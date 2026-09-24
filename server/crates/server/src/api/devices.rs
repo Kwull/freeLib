@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::auth::Auth;
-use crate::db::{self, Device, User};
+use crate::db::{self, Device, SmtpConfig, User};
 use crate::error::{ApiError, ApiResult};
 use crate::jobs::Job;
 use crate::output::ALL_FORMATS;
@@ -16,7 +16,23 @@ pub async fn list(State(st): State<AppState>, Auth(u): Auth) -> ApiResult<Json<V
     Ok(Json(st.db.run(move |c| db::list_devices(c, u.id)).await?))
 }
 
-fn validate(d: &mut Device, u: &User) -> ApiResult<()> {
+/// 403 unless `addr` matches `smtp.allowedRecipients`.
+pub fn check_recipient(smtp: &SmtpConfig, addr: &str) -> ApiResult<()> {
+    if smtp.recipient_allowed(addr) {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden(format!(
+            "{addr} is not an allowed recipient (allowed: {}; an administrator can change this in Settings → Mail)",
+            if smtp.allowed_recipients.is_empty() {
+                "none".to_string()
+            } else {
+                smtp.allowed_recipients.join(", ")
+            }
+        )))
+    }
+}
+
+fn validate(d: &mut Device, u: &User, smtp: &SmtpConfig) -> ApiResult<()> {
     d.name = d.name.trim().to_string();
     if d.name.is_empty() || d.name.chars().count() > 100 {
         return Err(ApiError::bad_request(
@@ -44,13 +60,19 @@ fn validate(d: &mut Device, u: &User) -> ApiResult<()> {
         .filter(|t| !t.is_empty());
     match d.kind.as_str() {
         "email" => {
-            if let Some(t) = &d.target
-                && !t.contains('@')
-            {
-                return Err(ApiError::bad_request("target must be an e-mail address"));
+            if let Some(t) = &d.target {
+                if !t.contains('@') {
+                    return Err(ApiError::bad_request("target must be an e-mail address"));
+                }
+                check_recipient(smtp, t)?;
             }
         }
         "folder" => {
+            if !u.is_admin() {
+                return Err(ApiError::forbidden(
+                    "only administrators can create server folder devices",
+                ));
+            }
             if safe_subdir(d.target.as_deref().unwrap_or("")).is_none() {
                 return Err(ApiError::bad_request(
                     "target must be a sub-folder of the export folder",
@@ -73,13 +95,17 @@ fn validate(d: &mut Device, u: &User) -> ApiResult<()> {
     Ok(())
 }
 
+async fn smtp_config(st: &AppState) -> ApiResult<SmtpConfig> {
+    st.db.run(|c| db::get_setting(c, "smtp")).await
+}
+
 pub async fn create(
     State(st): State<AppState>,
     Auth(u): Auth,
     Json(mut d): Json<Device>,
 ) -> ApiResult<Json<Device>> {
     d.id = 0;
-    validate(&mut d, &u)?;
+    validate(&mut d, &u, &smtp_config(&st).await?)?;
     let uid = u.id;
     let dev = st
         .db
@@ -99,13 +125,13 @@ pub async fn update(
 ) -> ApiResult<Json<Device>> {
     let uid = u.id;
     let existing = st.db.run(move |c| db::get_device(c, uid, id)).await?;
-    if existing.shared && !u.is_admin() {
+    if (existing.shared || existing.kind == "folder") && !u.is_admin() {
         return Err(ApiError::forbidden(
-            "shared devices can only be changed by administrators",
+            "shared and server folder devices can only be changed by administrators",
         ));
     }
     d.id = id;
-    validate(&mut d, &u)?;
+    validate(&mut d, &u, &smtp_config(&st).await?)?;
     let dev = st
         .db
         .run(move |c| {

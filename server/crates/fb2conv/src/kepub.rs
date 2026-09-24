@@ -3,7 +3,7 @@
 //! `<div id="book-columns"><div id="book-inner">`. Kobo firmware uses these spans for
 //! reading position, highlights and page statistics.
 
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Write};
 
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -229,11 +229,16 @@ pub fn kepubify_xhtml(src: &str) -> Option<String> {
 
 /// Converts an EPUB into a Kobo KEPUB (rewrites every XHTML content document; other entries are
 /// copied unchanged). The result should be saved as `*.kepub.epub`.
+/// Total uncompressed size of the content documents rewritten by [`to_kepub`]; a larger
+/// (or zip-bomb) EPUB fails the conversion instead of exhausting memory.
+const MAX_XHTML_TOTAL: u64 = 256 * 1024 * 1024;
+
 pub fn to_kepub(epub: &[u8]) -> Result<Vec<u8>> {
     let mut zin = zip::ZipArchive::new(Cursor::new(epub)).map_err(zip_err)?;
     let mut zw = zip::ZipWriter::new(Cursor::new(Vec::with_capacity(epub.len() + epub.len() / 4)));
     zw.start_file("mimetype", stored()).map_err(zip_err)?;
     zw.write_all(b"application/epub+zip")?;
+    let mut budget = MAX_XHTML_TOTAL;
     for i in 0..zin.len() {
         let mut f = zin.by_index(i).map_err(zip_err)?;
         let name = f.name().to_string();
@@ -242,8 +247,10 @@ pub fn to_kepub(epub: &[u8]) -> Result<Vec<u8>> {
         }
         let lower = name.to_ascii_lowercase();
         if lower.ends_with(".xhtml") || lower.ends_with(".html") || lower.ends_with(".htm") {
-            let mut data = Vec::with_capacity(f.size() as usize);
-            f.read_to_end(&mut data)?;
+            let hint = f.size();
+            let data = crate::limit::read_limited(&mut f, budget, hint)
+                .map_err(|_| Error::Format("EPUB content too large".into()))?;
+            budget -= data.len() as u64;
             drop(f);
             let text = String::from_utf8_lossy(&data);
             let is_nav = text.contains("epub:type=\"toc\"") && text.contains("<nav");

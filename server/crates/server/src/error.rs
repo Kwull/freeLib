@@ -14,6 +14,10 @@ pub struct ApiError {
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
+/// Error code of a catalog that was replaced by a re-import mid-request (retried once by
+/// [`crate::state::AppState::catalog_call`], 503 if it still happens).
+pub const STALE: &str = "stale";
+
 impl ApiError {
     pub fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> ApiError {
         ApiError {
@@ -77,6 +81,11 @@ impl From<CatalogError> for ApiError {
                 StatusCode::CONFLICT,
                 "conflict",
                 "catalog must be re-imported (schema version)",
+            ),
+            CatalogError::Stale => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                STALE,
+                "the library was just re-imported, please retry",
             ),
             e => ApiError::internal(e.to_string()),
         }

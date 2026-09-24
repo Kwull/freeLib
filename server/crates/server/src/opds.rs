@@ -2,7 +2,6 @@
 //! downloads; Basic auth when `opds.requireAuth`; legacy Qt `/opds_<lib>/…` redirects.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Extension;
@@ -14,9 +13,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use base64::Engine;
-use freelib_catalog::{
-    Book, BookFilter, BookSelector, Catalog, Page, SearchKind, SearchQuery, normalize,
-};
+use freelib_catalog::{Book, BookFilter, BookSelector, Page, SearchKind, SearchQuery, normalize};
 use freelib_fb2conv::ConvertOptions;
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
@@ -193,8 +190,8 @@ impl Feed {
 
     fn open(&mut self, name: &str, attrs: &[(&str, &str)]) {
         let mut s = BytesStart::new(name);
-        for a in attrs {
-            s.push_attribute(*a);
+        for (k, v) in attrs {
+            s.push_attribute((*k, xml_clean(v).as_ref()));
         }
         let _ = self.w.write_event(Event::Start(s));
     }
@@ -205,19 +202,17 @@ impl Feed {
 
     fn empty(&mut self, name: &str, attrs: &[(&str, &str)]) {
         let mut s = BytesStart::new(name);
-        for a in attrs {
-            s.push_attribute(*a);
+        for (k, v) in attrs {
+            s.push_attribute((*k, xml_clean(v).as_ref()));
         }
         let _ = self.w.write_event(Event::Empty(s));
     }
 
     fn text_attrs(&mut self, name: &str, attrs: &[(&str, &str)], text: &str) {
         self.open(name, attrs);
-        let clean: String = text
-            .chars()
-            .filter(|c| matches!(c, '\t' | '\n' | '\r') || *c >= ' ')
-            .collect();
-        let _ = self.w.write_event(Event::Text(BytesText::new(&clean)));
+        let _ = self
+            .w
+            .write_event(Event::Text(BytesText::new(&xml_clean(text))));
         self.close(name);
     }
 
@@ -257,6 +252,22 @@ impl Feed {
             header::HeaderValue::from_static("private, no-cache"),
         );
         r
+    }
+}
+
+/// Drops characters XML 1.0 does not allow (control characters, U+FFFE, U+FFFF) from text and
+/// attribute values: catalog data comes from INPX files and may contain anything.
+fn xml_clean(s: &str) -> std::borrow::Cow<'_, str> {
+    let bad = |c: char| {
+        !(matches!(c, '\t' | '\n' | '\r')
+            || ('\u{20}'..='\u{D7FF}').contains(&c)
+            || ('\u{E000}'..='\u{FFFD}').contains(&c)
+            || c >= '\u{10000}')
+    };
+    if s.chars().any(bad) {
+        std::borrow::Cow::Owned(s.chars().filter(|c| !bad(*c)).collect())
+    } else {
+        std::borrow::Cow::Borrowed(s)
     }
 }
 
@@ -371,12 +382,6 @@ async fn lib_name(st: &AppState, lib: i64) -> ApiResult<String> {
         .name)
 }
 
-async fn blocking<R: Send + 'static>(
-    f: impl FnOnce() -> ApiResult<R> + Send + 'static,
-) -> ApiResult<R> {
-    tokio::task::spawn_blocking(f).await?
-}
-
 #[derive(Deserialize, Default)]
 pub struct PageQuery {
     cursor: Option<String>,
@@ -386,7 +391,6 @@ pub struct PageQuery {
 async fn books_feed(
     st: &AppState,
     lib: i64,
-    cat: Arc<Catalog>,
     sel: BookSelector,
     title: &str,
     self_base: &str,
@@ -396,7 +400,11 @@ async fn books_feed(
         cursor: cursor.clone(),
         limit: PAGE,
     };
-    let p = blocking(move || Ok(cat.books(&sel, &BookFilter::default(), &page)?)).await?;
+    let p = st
+        .catalog_call(lib, move |cat| {
+            Ok(cat.books(&sel, &BookFilter::default(), &page)?)
+        })
+        .await?;
     let self_href = match &cursor {
         Some(c) => format!("{self_base}?cursor={}", enc(c)),
         None => self_base.to_string(),
@@ -540,22 +548,22 @@ async fn search(
     Query(q): Query<SearchQ>,
 ) -> ApiResult<Response> {
     let text = q.q.or(q.search_string).unwrap_or_default();
-    let (_, cat) = st.catalog(lib)?;
     let page = q.page.unwrap_or(0).min(9);
     let qq = text.clone();
-    let r = blocking(move || {
-        if qq.trim().chars().count() < 2 {
-            return Ok(None);
-        }
-        let sq = SearchQuery {
-            q: qq,
-            kind: SearchKind::All,
-            limit: PAGE * (page + 1),
-            ..Default::default()
-        };
-        Ok(Some(cat.search(&sq)?))
-    })
-    .await?;
+    let r = st
+        .catalog_call(lib, move |cat| {
+            if qq.trim().chars().count() < 2 {
+                return Ok(None);
+            }
+            let sq = SearchQuery {
+                q: qq.clone(),
+                kind: SearchKind::All,
+                limit: PAGE * (page + 1),
+                ..Default::default()
+            };
+            Ok(Some(cat.search(&sq)?))
+        })
+        .await?;
     let self_href = format!("/opds/{lib}/search?q={}", enc(&text));
     let mut f = Feed::new(
         &format!("urn:freelib:lib:{lib}:search:{}", enc(&text)),
@@ -604,32 +612,30 @@ async fn new_books(
     Path(lib): Path<i64>,
     Query(q): Query<PageQuery>,
 ) -> ApiResult<Response> {
-    let (_, cat) = st.catalog(lib)?;
-    let c2 = cat.clone();
-    let since = blocking(move || {
-        let conn = c2.conn()?;
-        let max: Option<String> = conn
-            .query_row("SELECT max(date) FROM book WHERE deleted=0", [], |r| {
-                r.get(0)
-            })
-            .ok()
-            .flatten();
-        let max = max
-            .filter(|d| d.len() == 10)
-            .unwrap_or_else(|| crate::util::date_at(crate::util::unix_now()));
-        let (y, m, d) = (
-            max[..4].parse().unwrap_or(1970),
-            max[5..7].parse().unwrap_or(1),
-            max[8..10].parse().unwrap_or(1),
-        );
-        let days = freelib_catalog::util::days_from_civil(y, m, d) - 30;
-        Ok(crate::util::date_at(days * 86_400))
-    })
-    .await?;
+    let since = st
+        .catalog_call(lib, move |c2| {
+            let conn = c2.conn()?;
+            let max: Option<String> = conn
+                .query_row("SELECT max(date) FROM book WHERE deleted=0", [], |r| {
+                    r.get(0)
+                })
+                .ok()
+                .flatten();
+            let max = max
+                .filter(|d| d.len() == 10)
+                .unwrap_or_else(|| crate::util::date_at(crate::util::unix_now()));
+            let (y, m, d) = (
+                max[..4].parse().unwrap_or(1970),
+                max[5..7].parse().unwrap_or(1),
+                max[8..10].parse().unwrap_or(1),
+            );
+            let days = freelib_catalog::util::days_from_civil(y, m, d) - 30;
+            Ok(crate::util::date_at(days * 86_400))
+        })
+        .await?;
     books_feed(
         &st,
         lib,
-        cat,
         BookSelector::Since(since),
         "New books",
         &format!("/opds/{lib}/new"),
@@ -646,10 +652,10 @@ async fn names_with_prefix(
     kind: &'static str,
     prefix: Option<String>,
 ) -> ApiResult<(Vec<(i64, String, i64)>, Vec<(String, i64)>)> {
-    let (rt, cat) = st.catalog(lib)?;
-    blocking(move || {
-        let list = rt.name_list(&cat, kind)?;
-        let Some(prefix) = prefix else {
+    let rt = st.lib(lib)?;
+    st.catalog_call(lib, move |cat| {
+        let list = rt.name_list(cat, kind)?;
+        let Some(prefix) = prefix.clone() else {
             return Ok((
                 Vec::new(),
                 list.letters
@@ -849,15 +855,13 @@ async fn series_x(
     Query(q): Query<PageQuery>,
 ) -> ApiResult<Response> {
     if let Ok(id) = x.parse::<i64>() {
-        let (_, cat) = st.catalog(lib)?;
-        let c2 = cat.clone();
-        let s = blocking(move || Ok(c2.series(id)?))
+        let s = st
+            .catalog_call(lib, move |c2| Ok(c2.series(id)?))
             .await?
             .ok_or_else(|| ApiError::not_found("series not found"))?;
         return books_feed(
             &st,
             lib,
-            cat,
             BookSelector::Series(id),
             &s.name,
             &format!("/opds/{lib}/series/{id}"),
@@ -880,15 +884,13 @@ async fn author_books(
     Path((lib, id)): Path<(i64, i64)>,
     Query(q): Query<PageQuery>,
 ) -> ApiResult<Response> {
-    let (_, cat) = st.catalog(lib)?;
-    let c2 = cat.clone();
-    let a = blocking(move || Ok(c2.author(id)?))
+    let a = st
+        .catalog_call(lib, move |c2| Ok(c2.author(id)?))
         .await?
         .ok_or_else(|| ApiError::not_found("author not found"))?;
     books_feed(
         &st,
         lib,
-        cat,
         BookSelector::Author(id),
         &a.name,
         &format!("/opds/{lib}/author/{id}"),
@@ -902,8 +904,7 @@ async fn genres_root(State(st): State<AppState>, Path(lib): Path<i64>) -> ApiRes
 }
 
 async fn genre_nav(st: &AppState, lib: i64, parent: u16) -> ApiResult<Response> {
-    let (_, cat) = st.catalog(lib)?;
-    let counts = blocking(move || Ok(cat.genres()?)).await?;
+    let counts = st.catalog_call(lib, |cat| Ok(cat.genres()?)).await?;
     let g = freelib_catalog::genres();
     let title = if parent == 0 {
         "Genres".to_string()
@@ -964,11 +965,9 @@ async fn genre(
     if !g.children(id).is_empty() && q.all.is_none() {
         return genre_nav(&st, lib, id).await;
     }
-    let (_, cat) = st.catalog(lib)?;
     books_feed(
         &st,
         lib,
-        cat,
         BookSelector::Genre(id),
         &def.name,
         &format!("/opds/{lib}/genres/{id}"),
@@ -994,7 +993,7 @@ async fn book_file(
         return crate::api::books::cover_response(&st, lib, &dir, &d, thumb, None).await;
     }
     let opts = ConvertOptions::default();
-    let produced = output::produce(&st, lib, &dir, &d, &format, &opts).await?;
+    let produced = output::produce(&st, lib, &dir, &d, &format, &opts, None).await?;
     let name = output::download_name(&st, &db::default_file_name(), &d.book, &format, false, true);
     file_response(
         produced,
@@ -1040,4 +1039,20 @@ pub fn legacy_redirect(path: &str, query: Option<&str>) -> Option<Response> {
     let mut r = StatusCode::MOVED_PERMANENTLY.into_response();
     crate::util::set_header(&mut r, header::LOCATION, &target);
     Some(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xml_clean_strips_invalid() {
+        assert_eq!(xml_clean("a\u{1}b\u{FFFE}c\td"), "abc\td");
+        assert!(matches!(xml_clean("plain"), std::borrow::Cow::Borrowed(_)));
+        let mut f = Feed::new("id", "t\u{8}", "/opds", NAV, None);
+        f.link("self", "/x\u{1b}y", NAV, Some("ti\u{0}tle"));
+        let body = String::from_utf8(f.w.into_inner()).unwrap();
+        assert!(!body.chars().any(|c| (c as u32) < 0x20 && c != '\n'));
+        assert!(body.contains("href=\"/xy\""));
+    }
 }

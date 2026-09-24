@@ -29,7 +29,7 @@ The `docker-compose.yml` mounts four volumes:
 
 - **`./books:/books:ro`** (read-only): Library directory where INPX files and archives must be stored.
 - **`./data:/data`**: Database and catalog files (`app.db`, `lib_<id>.db`). This is what needs to be backed up.
-- **`./cache:/cache`**: Extracted book covers, annotations, and converted books. Safe to delete; will be rebuilt on demand.
+- **`./cache:/cache`**: Extracted book covers, annotations, and converted books. Safe to delete; will be rebuilt on demand. Bounded by `FREELIB_CACHE_MAX_MB` (default 2 GiB, least recently used files are evicted).
 - **`./export:/export`**: Target folder for the "Server folder" device (export/send operations).
 
 ## Adding Libraries
@@ -59,12 +59,14 @@ FREELIB_AUTOIMPORT=/books/lib1.inpx,/books/lib2.inpx
 
 ### `full` (default)
 
-Includes Calibre for format conversion. Supports:
+Includes Calibre (Debian trixie, Calibre 8.x) for format conversion. Supports:
 - EPUB 3 (all devices)
 - KEPUB (Kobo devices)
 - FB2 (embedded conversion via fb2conv)
-- AZW3, MOBI, PDF (via Calibre for Kindle USB)
-- Other formats (via Calibre)
+- AZW3, MOBI, PDF from FB2 and EPUB books (via Calibre, e.g. for Kindle USB)
+
+For safety Calibre only ever converts EPUB files (freeLib's own FB2 → EPUB output or an original
+`.epub`); books in other formats (PDF, DjVu, TXT, DOC, …) are offered as originals.
 
 Use this for full device support. Larger image (~1.5 GB).
 
@@ -117,8 +119,20 @@ Add these URLs to your e-reader's OPDS client (e.g., Kindle email, Kobo, FBReade
 
 Running behind a reverse proxy (Caddy, nginx, Apache)? Ensure the proxy does not buffer
 responses to `/api/v1/events` (Server-Sent Events for real-time updates), and set
-`FREELIB_TRUST_PROXY=1` so login rate limiting uses the real client address from
-`X-Forwarded-For` / `X-Real-IP` instead of the proxy's own address.
+`FREELIB_TRUST_PROXY=1` so login rate limiting uses the real client address instead of the
+proxy's own address. With it, freeLib takes `X-Real-IP` when present, otherwise the **rightmost**
+`X-Forwarded-For` entry (the one your proxy appended; anything to its left comes from the client
+and can be forged). Only set it when the container is reachable through that one proxy (don't
+publish port 8080 to the network), or clients could send the header themselves.
+
+Login attempts are also throttled per user name, so a shared proxy address does not lock
+everyone out and rotating addresses does not help an attacker.
+
+Open mode (no `FREELIB_ADMIN_PASSWORD`, no users) only answers requests for `localhost` and IP
+addresses, to protect against DNS rebinding. If you reach an open-mode server by name (e.g.
+`http://nas.lan:8080`), list the names in `FREELIB_ALLOWED_HOSTS=nas.lan` (comma-separated,
+`*.lan` matches sub-domains); requests for other names get `421 Misdirected Request`. Once set, the
+list is enforced in login mode too.
 
 ### Caddy
 
@@ -137,8 +151,10 @@ location / {
     proxy_buffering off;
     proxy_http_version 1.1;
     proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    # the client address as nginx sees it; never pass on client-supplied values
     proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
@@ -198,12 +214,21 @@ All environment variables from [ARCHITECTURE.md](./ARCHITECTURE.md#runtime-confi
 | `FREELIB_ADMIN_USER` | `admin` | Admin username created/reset on every start when `FREELIB_ADMIN_PASSWORD` is set |
 | `FREELIB_ADMIN_PASSWORD` | unset | Admin password (set this!). Without it and without any users, the server runs in **open mode**: no login, every request acts as admin |
 | `FREELIB_AUTOIMPORT` | unset | Comma-separated INPX paths to import on startup |
-| `FREELIB_CALIBRE` | `ebook-convert` if on `PATH` | Path to Calibre's `ebook-convert` (full image only); `none` disables Calibre |
+| `FREELIB_CALIBRE` | `ebook-convert` if on `PATH` | Path to Calibre's `ebook-convert` (full image only); `none` disables Calibre. Calibre older than 6.19 (CVE-2023-46303) is ignored with a warning |
 | `FREELIB_CALIBRE_TIMEOUT` | `300` | Seconds before a Calibre conversion is killed |
-| `FREELIB_TRUST_PROXY` | unset | `1`: take the client address for login rate limiting from `X-Forwarded-For` / `X-Real-IP` (set this behind the reverse proxy setups below) |
+| `FREELIB_TRUST_PROXY` | unset | `1`: behind exactly one reverse proxy; the client address for login rate limiting is `X-Real-IP`, else the rightmost `X-Forwarded-For` entry (see [Reverse Proxy Setup](#reverse-proxy-setup)) |
+| `FREELIB_ALLOWED_HOSTS` | unset | Comma-separated host names accepted besides `localhost` and IP addresses (`*.lan` for sub-domains). Required to reach an **open-mode** server by name (DNS rebinding protection); enforced in every mode once set |
+| `FREELIB_CACHE_MAX_MB` | `2048` | Size limit of the conversion / cover cache in `/cache`; least recently used files are evicted (`0` = no limit) |
 | `FREELIB_WORKERS` | CPU core count | Conversion worker count |
 | `FREELIB_WEB_DIR` | unset | Serve the SPA from this folder instead of the embedded copy (development) |
 | `RUST_LOG` | `info` | Log level (debug, info, warn, error) |
+
+## Sending by e-mail
+
+Settings → Mail limits where books can be mailed: **Allowed recipients** (default `*@kindle.com`,
+`*@free.kindle.com`; `*` matches any characters, a single `*` allows every address) and
+**Mails per user per day** (default 100). The rules apply to every user, administrators included,
+so the server's SMTP account cannot be used to mail arbitrary people.
 
 ## Troubleshooting
 
@@ -230,7 +255,9 @@ is keyed by a stable book key and survives re-imports.
 ### Calibre conversion fails
 
 Calibre (full image) requires display server. The container sets `QT_QPA_PLATFORM=offscreen`.
-If conversions fail, check server logs and ensure adequate disk space in `/cache`.
+If conversions fail, check server logs and ensure adequate disk space in `/cache`. A startup
+warning "older than 6.19" means the installed Calibre is vulnerable and was disabled: use the
+current image or install a newer Calibre.
 
 ### SSE events not reaching browser (stuck updates)
 

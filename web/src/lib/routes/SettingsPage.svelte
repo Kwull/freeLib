@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api } from '../api/client';
+  import { api, errorText } from '../api/client';
   import type { Device, Settings, User } from '../api/types';
   import { navigate } from '../router.svelte';
   import { t, i18nState, setLang } from '../i18n';
@@ -23,9 +23,18 @@
   let users = $state<User[]>([]);
   let editingDevice = $state<Device | null>(null);
   let testTo = $state('');
+  let recipientsText = $state('');
 
   $effect(() => { loadDevices(); api.fonts().then((f) => (fonts = f)); });
-  $effect(() => { if (isAdmin) { api.settings().then((s) => (settings = s)); api.users().then((u) => (users = u)); } });
+  $effect(() => {
+    if (isAdmin) {
+      api.settings().then((s) => {
+        settings = s;
+        recipientsText = (s.smtp.allowedRecipients ?? []).join('\n');
+      });
+      api.users().then((u) => (users = u));
+    }
+  });
 
   function newDevice(): Device {
     return {
@@ -40,16 +49,20 @@
 
   async function saveDevice() {
     if (!editingDevice) return;
-    if (editingDevice.id === 0) {
-      const { id, ...rest } = editingDevice;
-      const d = await api.createDevice(rest);
-      devicesState.items.push(d);
-    } else {
-      const d = await api.updateDevice(editingDevice.id, editingDevice);
-      const i = devicesState.items.findIndex((x) => x.id === d.id);
-      if (i >= 0) devicesState.items[i] = d;
+    try {
+      if (editingDevice.id === 0) {
+        const { id, ...rest } = editingDevice;
+        const d = await api.createDevice(rest);
+        devicesState.items.push(d);
+      } else {
+        const d = await api.updateDevice(editingDevice.id, editingDevice);
+        const i = devicesState.items.findIndex((x) => x.id === d.id);
+        if (i >= 0) devicesState.items[i] = d;
+      }
+      editingDevice = null;
+    } catch (e) {
+      showToast(errorText(e), 'error');
     }
-    editingDevice = null;
   }
   async function deleteDevice(id: number) {
     await api.deleteDevice(id);
@@ -58,11 +71,20 @@
 
   async function saveSettings() {
     if (!settings) return;
-    settings = await api.updateSettings(settings);
-    showToast(t('common.save'));
+    settings.smtp.allowedRecipients = recipientsText
+      .split(/[\n,]/)
+      .map((p) => p.trim())
+      .filter((p) => p !== '');
+    try {
+      settings = await api.updateSettings(settings);
+      recipientsText = settings.smtp.allowedRecipients.join('\n');
+      showToast(t('common.save'));
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    }
   }
   async function testSmtp() {
-    try { await api.testSmtp(testTo); showToast('OK'); } catch (e) { showToast(String(e), 'error'); }
+    try { await api.testSmtp(testTo); showToast('OK'); } catch (e) { showToast(errorText(e), 'error'); }
   }
 
   let newUsername = $state(''), newPassword = $state(''), newRole = $state('reader');
@@ -135,7 +157,12 @@
         <label class="field">{t('settings.mail.username')}<input type="text" bind:value={settings.smtp.username} /></label>
         <label class="field">{t('settings.mail.from')}<input type="text" bind:value={settings.smtp.from} /></label>
         <label class="field">{t('settings.mail.pause')}<input type="number" bind:value={settings.smtp.pauseSeconds} /></label>
+        <label class="field">{t('settings.mail.dailyLimit')}<input type="number" min="0" bind:value={settings.smtp.dailyLimitPerUser} /></label>
       </div>
+      <label class="field recipients">{t('settings.mail.allowedRecipients')}
+        <textarea rows="4" spellcheck="false" placeholder="*@kindle.com" bind:value={recipientsText}></textarea>
+        <span class="muted hint">{t('settings.mail.allowedRecipientsHint')}</span>
+      </label>
       <div class="row">
         <button type="button" class="primary" onclick={saveSettings}>{t('common.save')}</button>
       </div>
@@ -221,6 +248,9 @@
   h2 { margin: 0 0 8px; font-family: var(--font-display); font-size: 22px; }
   .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted-2); max-width: 320px; }
   .field.full { max-width: none; grid-column: span 2; }
+  .field.recipients { max-width: 520px; margin-top: 12px; }
+  .field.recipients textarea { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font: inherit; font-size: 14px; color: var(--ink); resize: vertical; }
+  .field .hint { font-size: 12px; }
   .fields-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px 16px; }
   select, input[type='text'], input[type='number'], input[type='password'] { height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font: inherit; font-size: 14px; color: var(--ink); }
   .seg { display: flex; gap: 6px; }

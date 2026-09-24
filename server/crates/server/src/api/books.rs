@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::{Path as StdPath, PathBuf};
 
 use axum::body::Body;
@@ -31,12 +32,28 @@ pub async fn lib_dir(st: &AppState, lib: i64) -> ApiResult<PathBuf> {
 }
 
 pub async fn load_book(st: &AppState, lib: i64, id: i64) -> ApiResult<(Arc<Catalog>, BookDetail)> {
-    let (_, cat) = st.catalog(lib)?;
-    let c2 = cat.clone();
-    let d = tokio::task::spawn_blocking(move || c2.book(id))
-        .await??
-        .ok_or_else(|| ApiError::not_found("book not found"))?;
-    Ok((cat, d))
+    st.catalog_call(lib, move |cat| {
+        let d = cat
+            .book(id)?
+            .ok_or_else(|| ApiError::not_found("book not found"))?;
+        Ok((cat.clone(), d))
+    })
+    .await
+}
+
+/// Headers of every book file and cover: no sniffing, and a `sandbox` CSP so that a document
+/// opened directly (HTML, SVG, XML) runs nothing on this origin.
+pub fn file_security_headers(r: &mut Response) {
+    set_header(
+        r,
+        header::CONTENT_SECURITY_POLICY,
+        crate::security::FILE_CSP,
+    );
+    set_header(
+        r,
+        header::HeaderName::from_static("x-content-type-options"),
+        "nosniff",
+    );
 }
 
 pub async fn detail(
@@ -119,6 +136,7 @@ pub async fn cover_response(
         set_header(&mut r, header::CONTENT_TYPE, &mime);
         set_header(&mut r, header::ETAG, &etag);
         set_header(&mut r, header::CACHE_CONTROL, cache);
+        file_security_headers(&mut r);
         return Ok(r);
     }
     if !thumb {
@@ -141,6 +159,7 @@ pub async fn cover_response(
         axum::http::HeaderName::from_static("x-cover"),
         "generated",
     );
+    file_security_headers(&mut r);
     Ok(r)
 }
 
@@ -151,14 +170,56 @@ pub struct FileQuery {
     inline: Option<String>,
 }
 
-/// Streams a produced file with `Content-Disposition`.
+/// Content type of a downloaded file: types a browser would render as a document (and could
+/// run scripts in) are served as `application/octet-stream`.
+pub fn download_mime(ext: &str) -> &'static str {
+    let e = ext.rsplit('.').next().unwrap_or(ext).to_ascii_lowercase();
+    match e.as_str() {
+        "html" | "htm" | "xhtml" | "xml" | "fb2" | "svg" | "svgz" => "application/octet-stream",
+        e => mime_for_ext(e),
+    }
+}
+
+/// Streams a blocking reader as a response body (64 KiB chunks).
+fn stream_body(reader: Box<dyn std::io::Read + Send>) -> Body {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(4);
+    tokio::task::spawn_blocking(move || {
+        let mut r = reader;
+        loop {
+            let mut buf = vec![0u8; 64 * 1024];
+            match r.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.truncate(n);
+                    if tx.blocking_send(Ok(bytes::Bytes::from(buf))).is_err() {
+                        break; // client went away
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e));
+                    break;
+                }
+            }
+        }
+    });
+    Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))
+}
+
+/// Sends a produced file with `Content-Disposition`. `inline` is honoured for EPUB only (the
+/// web reader); everything else is an attachment.
 pub async fn file_response(
     p: Produced,
     name: &str,
     ext: &str,
     inline: bool,
 ) -> ApiResult<Response> {
-    let mime = mime_for_ext(ext.rsplit('.').next().unwrap_or(ext));
+    let last = ext.rsplit('.').next().unwrap_or(ext).to_ascii_lowercase();
+    let inline = inline && last == "epub";
+    let mime = if inline {
+        mime_for_ext("epub")
+    } else {
+        download_mime(ext)
+    };
     let mut r = match p {
         Produced::Bytes(b) => {
             let len = b.len();
@@ -173,6 +234,14 @@ pub async fn file_response(
             set_header(&mut r, header::CONTENT_LENGTH, &len.to_string());
             r
         }
+        Produced::Stream(o) => {
+            let len = o.len;
+            let mut r = Response::new(stream_body(o.reader));
+            if let Some(len) = len {
+                set_header(&mut r, header::CONTENT_LENGTH, &len.to_string());
+            }
+            r
+        }
     };
     set_header(&mut r, header::CONTENT_TYPE, mime);
     set_header(
@@ -181,6 +250,7 @@ pub async fn file_response(
         &content_disposition(inline, name),
     );
     set_header(&mut r, header::CACHE_CONTROL, "private, max-age=3600");
+    file_security_headers(&mut r);
     Ok(r)
 }
 
@@ -208,7 +278,7 @@ pub async fn file(
     let inline = q.inline.as_deref().is_some_and(|v| v == "1" || v == "true");
     output::check_format(&st, &d.book.ext, &format)?;
     let dir = lib_dir(&st, lib).await?;
-    let produced = output::produce(&st, lib, &dir, &d, &format, &opts).await?;
+    let produced = output::produce(&st, lib, &dir, &d, &format, &opts, None).await?;
     let name = output::download_name(&st, &template, &d.book, &format, opts.transliterate, true);
     let ext = output::file_ext(&format, &d.book.ext);
     file_response(produced, &name, &ext, inline).await

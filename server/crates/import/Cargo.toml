@@ -10,6 +10,7 @@ description = "freeLib web: INPX import, Qt database migration, synthetic INPX g
 freelib-catalog = { path = "../catalog" }
 rusqlite.workspace = true
 zip.workspace = true
+flate2 = "1"
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true

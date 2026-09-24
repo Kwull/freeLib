@@ -95,10 +95,10 @@ pub async fn books(
     }
     let uid = u.id;
     st.db.run(move |c| db::get_shelf(c, uid, id)).await?;
-    let (_, cat) = st.catalog(b.library)?;
     let ids = b.books.clone();
-    let keys: Vec<String> = tokio::task::spawn_blocking(move || cat.keys_by_ids(&ids))
-        .await??
+    let keys: Vec<String> = st
+        .catalog_call(b.library, move |cat| Ok(cat.keys_by_ids(&ids)?))
+        .await?
         .into_iter()
         .map(|(_, k)| k)
         .collect();
@@ -128,9 +128,9 @@ pub async fn rating(
     if !(0..=5).contains(&b.rating) {
         return Err(ApiError::bad_request("rating must be 0..5"));
     }
-    let (_, cat) = st.catalog(lib)?;
-    let key = tokio::task::spawn_blocking(move || cat.keys_by_ids(&[id]))
-        .await??
+    let key = st
+        .catalog_call(lib, move |cat| Ok(cat.keys_by_ids(&[id])?))
+        .await?
         .pop()
         .map(|(_, k)| k)
         .ok_or_else(|| ApiError::not_found("book not found"))?;

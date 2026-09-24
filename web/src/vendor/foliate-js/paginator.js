@@ -243,6 +243,8 @@ class View {
         })
         // `allow-scripts` is needed for events because of WebKit bug
         // https://bugs.webkit.org/show_bug.cgi?id=218086
+        // freeLib: kept for Safari; book scripts still cannot run: epub.js strips them
+        // (sanitizeDoc) and the section blobs inherit the app's CSP (script-src 'self').
         this.#iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts')
         this.#iframe.setAttribute('scrolling', 'no')
     }

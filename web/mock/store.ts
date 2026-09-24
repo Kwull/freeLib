@@ -30,7 +30,7 @@ export const store = {
   ratings: new Map<string, number>(), // `${lib}:${bookId}` -> rating
   jobs: [] as Job[],
   settings: {
-    smtp: { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'freelib', from: 'freelib@example.com', passwordSet: true, pauseSeconds: 2 },
+    smtp: { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'freelib', from: 'freelib@example.com', passwordSet: true, pauseSeconds: 2, allowedRecipients: ['*@kindle.com', '*@free.kindle.com'], dailyLimitPerUser: 100 },
     opds: { enabled: true, requireAuth: true },
     calibre: { available: true, version: '7.4.0' },
   } as Settings,

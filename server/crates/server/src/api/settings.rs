@@ -18,6 +18,8 @@ fn settings_json(st: &AppState, smtp: &SmtpConfig, opds: &OpdsConfig) -> Value {
             "host": smtp.host, "port": smtp.port, "security": smtp.security, "username": smtp.username,
             "from": smtp.from, "passwordSet": smtp.password.as_deref().is_some_and(|p| !p.is_empty()),
             "pauseSeconds": smtp.pause_seconds,
+            "allowedRecipients": smtp.allowed_recipients,
+            "dailyLimitPerUser": smtp.daily_limit_per_user,
         },
         "opds": opds,
         "calibre": {
@@ -50,6 +52,34 @@ pub struct SmtpIn {
     from: Option<String>,
     password: Option<String>,
     pause_seconds: Option<u64>,
+    allowed_recipients: Option<Vec<String>>,
+    daily_limit_per_user: Option<u32>,
+}
+
+/// Recipient patterns: at most 100, each `*` or containing `@`, no spaces or control characters.
+fn clean_patterns(v: Vec<String>) -> ApiResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for p in v {
+        let p = p.trim().to_lowercase();
+        if p.is_empty() {
+            continue;
+        }
+        if p.len() > 254
+            || (p != "*" && !p.contains('@'))
+            || p.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(ApiError::bad_request(format!(
+                "invalid recipient pattern '{p}' (use e.g. *@kindle.com)"
+            )));
+        }
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    if out.len() > 100 {
+        return Err(ApiError::bad_request("at most 100 recipient patterns"));
+    }
+    Ok(out)
 }
 
 #[derive(Deserialize)]
@@ -78,10 +108,17 @@ pub async fn put(
             "security must be none, starttls or tls",
         ));
     }
+    let patterns = match b.smtp.as_ref().and_then(|s| s.allowed_recipients.clone()) {
+        Some(v) => Some(clean_patterns(v)?),
+        None => None,
+    };
     let (smtp, opds) = st
         .db
         .run(move |c| {
             let mut smtp: SmtpConfig = db::get_setting(c, "smtp")?;
+            if let Some(p) = patterns {
+                smtp.allowed_recipients = p;
+            }
             let mut opds: OpdsConfig = db::get_setting(c, "opds")?;
             if let Some(s) = b.smtp {
                 if let Some(v) = s.host {
@@ -105,6 +142,9 @@ pub async fn put(
                 }
                 if let Some(v) = s.pause_seconds {
                     smtp.pause_seconds = v.min(600);
+                }
+                if let Some(v) = s.daily_limit_per_user {
+                    smtp.daily_limit_per_user = v.min(100_000);
                 }
             }
             if let Some(o) = b.opds {
@@ -231,6 +271,7 @@ pub async fn update_user(
         })
         .await?;
     st.invalidate_sessions();
+    let _ = st.events().send(crate::jobs::Event::Users);
     let _ = me;
     Ok(Json(user))
 }
@@ -256,6 +297,11 @@ pub async fn delete_user(
         })
         .await?;
     st.invalidate_sessions();
+    // its jobs (and their files) go too; ids are never reused, see db::insert_user
+    for d in st.jobs.purge_user(id) {
+        let _ = tokio::fs::remove_dir_all(d).await;
+    }
+    let _ = st.events().send(crate::jobs::Event::Users);
     Ok(StatusCode::NO_CONTENT)
 }
 

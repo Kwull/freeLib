@@ -43,6 +43,7 @@ flate2 = "1"
 brotli = "8"
 percent-encoding = "2"
 num_cpus = "1"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true

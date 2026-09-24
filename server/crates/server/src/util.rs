@@ -31,6 +31,43 @@ pub fn rfc3339_at(secs: i64) -> String {
     )
 }
 
+/// Unix time of an RFC 3339 UTC timestamp as written by [`rfc3339_at`] (`…Z`), or of a bare
+/// `YYYY-MM-DD` (midnight UTC).
+pub fn parse_rfc3339(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let num = |a: usize, b: usize| s.get(a..b).and_then(|x| x.parse::<i64>().ok());
+    let (y, m, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let days = freelib_catalog::util::days_from_civil(y, m as u32, d as u32);
+    let secs = if s.len() >= 19 {
+        num(11, 13)? * 3600 + num(14, 16)? * 60 + num(17, 19)?
+    } else {
+        0
+    };
+    Some(days * 86_400 + secs)
+}
+
+/// `YYYY-MM-DD` of a Unix time in the server's local time zone (`TZ`; UTC when unknown).
+pub fn local_date_at(secs: i64) -> String {
+    #[cfg(unix)]
+    {
+        let t = secs as libc::time_t;
+        // SAFETY: `localtime_r` only writes into the zeroed `tm` we own.
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        if !unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+            return format!(
+                "{:04}-{:02}-{:02}",
+                tm.tm_year as i64 + 1900,
+                tm.tm_mon + 1,
+                tm.tm_mday
+            );
+        }
+    }
+    date_at(secs)
+}
+
 pub fn now_rfc3339() -> String {
     rfc3339_at(unix_now())
 }
@@ -295,6 +332,16 @@ mod tests {
             HeaderValue::from_static("gzip, br"),
         );
         assert_eq!(preferred_encoding(&h), "br");
+    }
+
+    #[test]
+    fn parse_time() {
+        for t in [0, 86_399, 1_700_000_000, 951_782_400] {
+            assert_eq!(parse_rfc3339(&rfc3339_at(t)), Some(t));
+        }
+        assert_eq!(parse_rfc3339("1970-01-02"), Some(86_400));
+        assert_eq!(parse_rfc3339("garbage"), None);
+        assert_eq!(local_date_at(1_700_000_000).len(), 10);
     }
 
     #[test]

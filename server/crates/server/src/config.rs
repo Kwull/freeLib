@@ -27,6 +27,24 @@ pub struct Config {
     pub fast_password_hash: bool,
     /// Keep files produced by jobs this long.
     pub job_file_ttl: Duration,
+    /// Size bound of the conversion/cover/annotation cache (`FREELIB_CACHE_MAX_MB`, 0 = none).
+    pub cache_max_bytes: u64,
+    /// Host names accepted in the `Host` header besides `localhost` and IP literals
+    /// (`FREELIB_ALLOWED_HOSTS`, lower-case; `*.example.org` matches sub-domains). Enforced in
+    /// open mode always (DNS rebinding) and in every mode when the list is not empty.
+    pub allowed_hosts: Vec<String>,
+    /// Queued + running send/export/download jobs per user.
+    pub max_jobs_per_user: usize,
+}
+
+/// Parses `FREELIB_ALLOWED_HOSTS` (`a.example.org, *.example.net:8080`): lower-case host names,
+/// ports dropped.
+pub fn parse_hosts(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| !h.is_empty())
+        .map(|h| crate::security::strip_port(&h).to_string())
+        .collect()
 }
 
 fn env(name: &str) -> Option<String> {
@@ -112,6 +130,14 @@ impl Config {
             sse_heartbeat: Duration::from_secs(25),
             fast_password_hash: false,
             job_file_ttl: Duration::from_secs(24 * 3600),
+            cache_max_bytes: env("FREELIB_CACHE_MAX_MB")
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(2048)
+                .saturating_mul(1024 * 1024),
+            allowed_hosts: env("FREELIB_ALLOWED_HOSTS")
+                .map(|s| parse_hosts(&s))
+                .unwrap_or_default(),
+            max_jobs_per_user: 5,
         }
     }
 
@@ -135,6 +161,9 @@ impl Config {
             sse_heartbeat: Duration::from_secs(25),
             fast_password_hash: true,
             job_file_ttl: Duration::from_secs(24 * 3600),
+            cache_max_bytes: 2048 * 1024 * 1024,
+            allowed_hosts: Vec::new(),
+            max_jobs_per_user: 5,
         }
     }
 }

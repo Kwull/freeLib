@@ -1,6 +1,6 @@
 //! Metadata of EPUB inputs (`read_info_epub`).
 
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use crate::decode::decode_xml;
 use crate::dom::{self, Element, collapse_ws};
@@ -22,9 +22,9 @@ pub(crate) fn read_entry(zip: &mut Zip, name: &str) -> Option<Vec<u8>> {
         })
     })?;
     let f = zip.by_index(idx).ok()?;
-    let mut out = Vec::with_capacity(f.size().min(MAX_ENTRY) as usize);
-    f.take(MAX_ENTRY).read_to_end(&mut out).ok()?;
-    Some(out)
+    let hint = f.size();
+    // entries past the limit (zip bombs) are treated as missing
+    crate::limit::read_limited(f, MAX_ENTRY, hint).ok()
 }
 
 fn parse_xml(bytes: &[u8]) -> Element {

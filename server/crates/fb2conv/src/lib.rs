@@ -20,6 +20,7 @@ mod hyph;
 mod images;
 mod info;
 mod kepub;
+pub mod limit;
 mod names;
 mod options;
 mod xml;

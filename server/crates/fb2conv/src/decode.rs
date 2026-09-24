@@ -1,7 +1,7 @@
 //! Input decoding: zipped FB2, BOMs, XML-declared encodings, base64.
 
 use std::borrow::Cow;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use encoding_rs::{Encoding, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1251};
 
@@ -42,8 +42,9 @@ pub fn unzip_fb2(bytes: &[u8]) -> Result<Cow<'_, [u8]>> {
     if f.size() > MAX_UNZIPPED {
         return Err(Error::Format("zipped file too large".into()));
     }
-    let mut out = Vec::with_capacity(f.size() as usize);
-    f.take(MAX_UNZIPPED).read_to_end(&mut out)?;
+    let hint = f.size();
+    let out = crate::limit::read_limited(f, MAX_UNZIPPED, hint)
+        .map_err(|_| Error::Format("zipped file too large".into()))?;
     Ok(Cow::Owned(out))
 }
 

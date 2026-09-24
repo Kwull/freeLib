@@ -5,6 +5,7 @@ pub mod api;
 pub mod app;
 pub mod auth;
 pub mod bookio;
+pub mod cache;
 pub mod calibre;
 pub mod compress;
 pub mod config;

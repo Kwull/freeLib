@@ -2,7 +2,14 @@
 
 Source of truth for `server/crates/server` and `web/`. JSON, UTF-8, camelCase keys.
 All endpoints are under `/api/v1`. Errors: HTTP status + `{"error": "<code>", "message": "<human text>"}`
-(`unauthorized`, `forbidden`, `not_found`, `bad_request`, `conflict`, `unsupported_format`, `rate_limited`, `internal`).
+(`unauthorized`, `forbidden`, `not_found`, `bad_request`, `conflict`, `unsupported_format`, `rate_limited`, `stale`, `internal`).
+`stale` (503) means the library was re-imported during the request; retry it.
+
+Security headers: every response carries `X-Content-Type-Options: nosniff` and, except book files and covers,
+`Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' blob:; font-src 'self' data: blob:; connect-src 'self'; frame-src 'self' blob:; worker-src 'self'; form-action 'self'`.
+Book files (`…/file`, job downloads, OPDS acquisitions) and covers get `Content-Security-Policy: sandbox`.
+In open mode (and whenever `FREELIB_ALLOWED_HOSTS` is set) requests whose `Host` is not `localhost`, an IP literal
+or an allowed name are answered with 421 (DNS rebinding protection).
 
 Auth: cookie `freelib_session` (HttpOnly, SameSite=Lax). In open mode every request acts as an admin
 named `admin`. `admin`-only endpoints are marked **(admin)**; others need any logged-in user.
@@ -19,7 +26,7 @@ type Library = {
   bookCount: number; authorCount: number; seriesCount: number;
   importedAt: string | null;       // RFC3339
   catalogVersion: number;          // 0 when never imported
-  newSinceLastVisit: number;       // books with date > user's last visit
+  newSinceLastVisit: number;       // books dated on/after the server-local day of the previous visit
   status: LibraryStatus;
   opdsUrl: string;                 // absolute path, e.g. "/opds/1"
 };
@@ -90,7 +97,7 @@ their separator. Result is sanitised for file systems; `transliterate` applies R
 | Method & path | Body | Response |
 |---|---|---|
 | `GET /session` | – | `{ user: {id, username, role} \| null, openMode: boolean }` (never 401) |
-| `POST /login` | `{username, password}` | `{user}` + cookie; 401 on bad credentials |
+| `POST /login` | `{username, password}` | `{user}` + cookie; 401 on bad credentials; 429 `rate_limited` after 5 failures per client address (IPv6: per /64) **or** per user name (the wait doubles with each further failure, max 5 min; attempts in flight count) |
 | `POST /logout` | – | 204 |
 
 ## Libraries
@@ -114,7 +121,7 @@ their separator. Result is sanitised for file systems; `transliterate` applies R
 | `GET /libraries/:lib/books` | exactly one of `author`, `series`, `genre`, `shelf`, `since` (YYYY-MM-DD) plus optional `lang`, `ext`, `deleted=1`, `cursor`, `limit` (default 2000, max 5000) | `{ books: Book[], nextCursor: string \| null, total: number }`. Order: author → series name, serno, title; series → serno, title; genre/shelf/since → date desc, title |
 | `GET /libraries/:lib/books/:id` | – | `BookDetail` (first call may take up to ~150 ms, then cached) |
 | `GET /libraries/:lib/books/:id/cover` | `size=thumb\|full` | image (`image/webp` or original jpeg/png); `full` is 404 when the book has no cover. `thumb` = 240 px high; when the book has no cover, a generated SVG placeholder tile (background colour from the title, author + title text, like the SPA's own placeholder) is returned instead of 404, with header `X-Cover: generated` |
-| `GET /libraries/:lib/books/:id/file` | `format` (default `original`), `device?` (device id → its options & file name) , `inline=1` for the web reader | the file with `Content-Disposition`; 501 `unsupported_format` if the format needs Calibre and it is missing |
+| `GET /libraries/:lib/books/:id/file` | `format` (default `original`), `device?` (device id → its options & file name) , `inline=1` for the web reader | the file with `Content-Disposition: attachment`; `inline=1` is honoured for EPUB only. HTML, XHTML, XML, FB2 and SVG files are sent as `application/octet-stream`. Originals are streamed (no `Content-Length` for deflated zip entries); books above 256 MiB → 413. 501 `unsupported_format` if the format needs Calibre and it is missing, or the book is neither FB2 nor EPUB (other formats are offered as `original` only) |
 | `GET /libraries/:lib/search` | `q` (≥ 2 chars), `kind=all\|books\|authors\|series`, `genre` (comma ids), `lang` (comma), `ext`, `from`, `to` (YYYY-MM-DD), `limit` (books, default 200, max 1000) | `{ tookMs, authors: [{id,name,count}] (≤ 20), series: [{id,name,count,authors: string}] (≤ 20), books: Book[], total: number, facets: { genre: [[id,count]], lang: [[code,count]], ext: [[ext,count]] } }`. `q` is prefix-matched per word (FTS5 `word*`); authors/series match on `sort_key` prefix of any word |
 | `GET /languages` | `lib` | `[[code, count]]` for that library |
 | `PUT /libraries/:lib/books/:id/rating` | `{rating: 0..5}` | 204 |
@@ -136,10 +143,10 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | Method & path | Body | Response |
 |---|---|---|
 | `GET /devices` | – | `Device[]` (shared + own). A fresh install has shared defaults: "Kindle" (email, epub), "Kindle (USB)" (download, azw3), "Apple Books" (download, epub), "Kobo" (download, kepub), "Server folder" (folder, epub), "Original" (download, original) |
-| `POST /devices` | `Device` without `id` | `Device` (`shared: true` needs admin) |
-| `PUT /devices/:id` | `Device` | `Device` |
+| `POST /devices` | `Device` without `id` | `Device` (`shared: true` and `kind: "folder"` need admin; an `email` target must match `smtp.allowedRecipients`, else 403) |
+| `PUT /devices/:id` | `Device` | `Device` (shared and folder devices: admin only) |
 | `DELETE /devices/:id` | – | 204 |
-| `POST /send` | `{library, books: number[], device: number, target?: string, fileName?: string, options?: Partial<ConvertOptions>}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`). `options` is merged (shallow) over the device's own options for this send only; the device itself is not changed |
+| `POST /send` | `{library, books: number[], device: number, target?: string, fileName?: string, options?: Partial<ConvertOptions>}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`). `options` is merged (shallow) over the device's own options for this send only; the device itself is not changed. E-mail: the recipient must match `smtp.allowedRecipients` (403 `forbidden` otherwise, admins included) and the user's mails today plus this request's books must not exceed `smtp.dailyLimitPerUser` (429 `rate_limited`). Folder: readers may only use shared folder devices with their configured target (403). At most 5 queued + running send/export/download jobs per user (429 `rate_limited`). Exports never overwrite: an existing file gets a ` (2)`, ` (3)`, … sibling |
 | `GET /fonts` | – | `string[]` font family names available for embedding |
 
 ## Jobs and events
@@ -147,28 +154,28 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | Method & path | Response |
 |---|---|
 | `GET /jobs` | `Job[]` of the current user (admins also see imports), newest first, last 50 |
-| `POST /jobs/:id/cancel` | `Job` |
+| `POST /jobs/:id/cancel` | `Job` (a running Calibre conversion is killed) |
 | `DELETE /jobs?finished=1` | 204 (clears finished/failed/cancelled) |
 | `GET /jobs/:id/download` | the produced file (kept 24 h) |
-| `GET /events` | `text/event-stream`. Events: `event: job` data `Job`; `event: library` data `Library` (status/count changes). Heartbeat comment every 25 s |
+| `GET /events` | `text/event-stream`. Events: `event: job` data `Job`; `event: library` data `Library` (status/count changes). Heartbeat comment every 25 s. The stream ends when the session ends, the user is deleted or an admin is demoted (reconnect to continue) |
 
 ## Settings and users
 
 | Method & path | Body | Response |
 |---|---|---|
-| `GET /settings` **(admin)** | – | `{ smtp: {host, port, security: "none"\|"starttls"\|"tls", username, from, passwordSet: boolean, pauseSeconds}, opds: {enabled: boolean, requireAuth: boolean}, calibre: {available: boolean, version: string\|null} }` |
-| `PUT /settings` **(admin)** | same shape; `smtp.password` write-only (omit to keep) | same as GET |
+| `GET /settings` **(admin)** | – | `{ smtp: {host, port, security: "none"\|"starttls"\|"tls", username, from, passwordSet: boolean, pauseSeconds, allowedRecipients: string[], dailyLimitPerUser: number}, opds: {enabled: boolean, requireAuth: boolean}, calibre: {available: boolean, version: string\|null} }` |
+| `PUT /settings` **(admin)** | same shape; `smtp.password` write-only (omit to keep). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100) | same as GET |
 | `POST /settings/smtp/test` **(admin)** | `{to}` | 204 or 400 with message |
 | `GET /users` **(admin)** | – | `[{id, username, role}]` |
-| `POST /users` **(admin)** | `{username, password, role}` | user |
+| `POST /users` **(admin)** | `{username, password, role}` | user; 409 when the name exists (case-insensitive). User ids are never reused |
 | `PATCH /users/:id` **(admin)** | `{password?, role?}` | user |
-| `DELETE /users/:id` **(admin)** | – | 204 |
+| `DELETE /users/:id` **(admin)** | – | 204 (also cancels and removes the user's jobs and their files) |
 | `GET /me/prefs`, `PUT /me/prefs` | arbitrary JSON ≤ 64 KB (UI state: columns, view mode, last library/author) | JSON |
 
 ## OPDS (not under /api)
 
 OPDS 1.2 Atom feeds, compatible with KOReader, KyBook, Moon+ Reader, FBReader, Apple Books (via apps).
-Basic auth when `opds.requireAuth` (same users). Paths:
+Basic auth when `opds.requireAuth` (same users and the same login rate limits). Paths:
 
 - `/opds` → navigation: libraries (or the default library directly when only one)
 - `/opds/:lib` → New, Authors, Series, Genres, Search (OpenSearch `/opds/:lib/opensearch.xml`, `/opds/:lib/search?q=`)

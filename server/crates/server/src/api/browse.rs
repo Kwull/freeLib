@@ -236,7 +236,7 @@ pub async fn books(
             "exactly one of author, series, genre, shelf, since is required",
         ));
     }
-    let (_, cat) = st.catalog(lib)?;
+    st.catalog(lib)?;
     let filter = BookFilter {
         langs: split_list(q.lang.as_deref()),
         ext: q
@@ -280,21 +280,22 @@ pub async fn books(
         BookSelector::Ids(Vec::new())
     };
     let st2 = st.clone();
-    let out = tokio::task::spawn_blocking(move || -> ApiResult<serde_json::Value> {
-        let sel = match (sel, shelf_keys) {
-            (BookSelector::Ids(_), Some(keys)) => BookSelector::Ids(
-                cat.ids_by_keys(&keys)?
-                    .into_iter()
-                    .map(|(_, id)| id)
-                    .collect(),
-            ),
-            (s, _) => s,
-        };
-        let p = cat.books(&sel, &filter, &page)?;
-        let books = with_marks(&st2, u.id, lib, p.books)?;
-        Ok(json!({"books": books, "nextCursor": p.next_cursor, "total": p.total}))
-    })
-    .await??;
+    let out = st
+        .catalog_call(lib, move |cat| -> ApiResult<serde_json::Value> {
+            let sel = match (&sel, &shelf_keys) {
+                (BookSelector::Ids(_), Some(keys)) => BookSelector::Ids(
+                    cat.ids_by_keys(keys)?
+                        .into_iter()
+                        .map(|(_, id)| id)
+                        .collect(),
+                ),
+                (s, _) => s.clone(),
+            };
+            let p = cat.books(&sel, &filter, &page)?;
+            let books = with_marks(&st2, u.id, lib, p.books)?;
+            Ok(json!({"books": books, "nextCursor": p.next_cursor, "total": p.total}))
+        })
+        .await?;
     json_etag(&headers, &out)
 }
 
@@ -375,21 +376,21 @@ pub async fn search(
         include_deleted: truthy(&p.deleted),
         limit: p.limit.unwrap_or(200).clamp(1, 1000),
     };
-    let (_, cat) = st.catalog(lib)?;
     let st2 = st.clone();
-    let v = tokio::task::spawn_blocking(move || -> ApiResult<serde_json::Value> {
-        let r = cat.search(&sq)?;
-        let books = with_marks(&st2, u.id, lib, r.books)?;
-        Ok(json!({
-            "tookMs": r.took_ms,
-            "authors": r.authors,
-            "series": r.series,
-            "books": books,
-            "total": r.total,
-            "facets": r.facets,
-        }))
-    })
-    .await??;
+    let v = st
+        .catalog_call(lib, move |cat| -> ApiResult<serde_json::Value> {
+            let r = cat.search(&sq)?;
+            let books = with_marks(&st2, u.id, lib, r.books)?;
+            Ok(json!({
+                "tookMs": r.took_ms,
+                "authors": r.authors,
+                "series": r.series,
+                "books": books,
+                "total": r.total,
+                "facets": r.facets,
+            }))
+        })
+        .await?;
     Ok(Json(v))
 }
 

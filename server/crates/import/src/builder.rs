@@ -26,7 +26,7 @@ use freelib_catalog::util::{now_millis, now_rfc3339};
 
 use crate::ImportError;
 use crate::inpx::{self, InpxInfo, ParseOptions, RawAuthor, RawBook};
-use crate::zipdir::{ZipEntryLoc, read_central_directory};
+use crate::zipdir::{EntryIndex, read_central_directory};
 
 /// Progress callback: `(done, total, message)`. Parts count as one step each, followed by
 /// [`FINISH_STEPS`] finishing steps.
@@ -104,17 +104,19 @@ fn process_part(
     let mut books = inpx::parse_inp(&data, name, &info.structure, popts);
     let mut missing = Vec::new();
     if let Some(dir) = lib_dir {
-        let mut dirs: HashMap<String, Option<HashMap<String, ZipEntryLoc>>> = HashMap::new();
+        let mut dirs: HashMap<String, Option<EntryIndex>> = HashMap::new();
         for b in books.iter_mut().filter(|b| !b.archive.is_empty()) {
             let cd = dirs.entry(b.archive.clone()).or_insert_with(|| {
-                let r = read_central_directory(&dir.join(&b.archive)).ok();
+                let r = read_central_directory(&dir.join(&b.archive))
+                    .ok()
+                    .map(EntryIndex::new);
                 if r.is_none() {
                     missing.push(b.archive.clone());
                 }
                 r
             });
             if let Some(cd) = cd {
-                b.loc = cd.get(&b.entry_name()).copied();
+                b.loc = cd.get(&b.entry_name());
             }
         }
     }

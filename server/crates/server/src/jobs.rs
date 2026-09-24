@@ -53,14 +53,33 @@ struct Entry {
     dir: Option<PathBuf>,
 }
 
+/// The library DTO of one `library` event, built once by the first SSE subscriber that needs
+/// it and shared by all others (only `newSinceLastVisit` differs per user).
+pub type SharedDto = Arc<tokio::sync::OnceCell<Option<crate::state::LibraryDto>>>;
+
 /// Server-sent events.
 #[derive(Debug, Clone)]
 pub enum Event {
-    Job { owner: i64, job: Box<Job> },
-    Library { id: i64 },
+    Job {
+        owner: i64,
+        job: Box<Job>,
+    },
+    Library {
+        id: i64,
+        dto: SharedDto,
+    },
+    /// Users were changed or deleted: SSE streams re-check their user.
+    Users,
 }
 
 impl Event {
+    pub fn library(id: i64) -> Event {
+        Event::Library {
+            id,
+            dto: Arc::new(tokio::sync::OnceCell::new()),
+        }
+    }
+
     /// Whether `user` may see this event.
     pub fn visible_to(&self, user: &User) -> bool {
         match self {
@@ -68,6 +87,7 @@ impl Event {
                 *owner == user.id || (user.is_admin() && job.kind == "import")
             }
             Event::Library { .. } => true,
+            Event::Users => false,
         }
     }
 }
@@ -94,6 +114,28 @@ impl JobManager {
             owner,
             job: Box::new(job),
         });
+    }
+
+    /// Creates a queued job unless `owner` already has `max_active` queued or running jobs
+    /// (`None` then); returns it and its cancellation flag.
+    pub fn try_create(
+        &self,
+        kind: &str,
+        title: &str,
+        owner: i64,
+        max_active: usize,
+    ) -> Option<(Job, Arc<AtomicBool>)> {
+        {
+            let g = self.lock();
+            let active = g
+                .iter()
+                .filter(|e| e.owner == owner && !e.job.is_finished())
+                .count();
+            if active >= max_active {
+                return None;
+            }
+        }
+        Some(self.create(kind, title, owner))
     }
 
     /// Creates a queued job; returns it and its cancellation flag.
@@ -232,6 +274,11 @@ impl JobManager {
         self.get(id, user)
     }
 
+    #[cfg(test)]
+    pub fn count(&self) -> usize {
+        self.lock().len()
+    }
+
     pub fn is_cancelled(&self, id: &str) -> bool {
         self.lock()
             .iter()
@@ -259,6 +306,22 @@ impl JobManager {
             .and_then(|e| e.file.clone())
     }
 
+    /// Cancels and forgets every job of a deleted user; returns directories to delete.
+    pub fn purge_user(&self, owner: i64) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        self.lock().retain_mut(|e| {
+            if e.owner != owner {
+                return true;
+            }
+            e.cancel.store(true, Ordering::SeqCst);
+            if let Some(d) = e.dir.take() {
+                dirs.push(d);
+            }
+            false
+        });
+        dirs
+    }
+
     /// Drops jobs finished more than `ttl_secs` ago (and trims the list); returns directories to delete.
     pub fn expire(&self, ttl_secs: i64) -> Vec<PathBuf> {
         let now = unix_now();
@@ -271,15 +334,74 @@ impl JobManager {
             }
             !old
         });
-        // hard cap on memory: keep the newest 1000 entries
+        // hard cap on memory: drop the oldest *finished* jobs beyond 1000 entries (queued and
+        // running jobs are bounded per user and must keep their state and cancel flag)
         if g.len() > 1000 {
-            let n = g.len() - 1000;
-            for mut e in g.drain(..n) {
-                if let Some(d) = e.dir.take() {
-                    dirs.push(d);
+            let mut excess = g.len() - 1000;
+            g.retain_mut(|e| {
+                if excess > 0 && e.job.is_finished() {
+                    excess -= 1;
+                    if let Some(d) = e.dir.take() {
+                        dirs.push(d);
+                    }
+                    false
+                } else {
+                    true
                 }
-            }
+            });
         }
         dirs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user(id: i64) -> User {
+        User {
+            id,
+            username: format!("u{id}"),
+            role: "reader".into(),
+        }
+    }
+
+    #[test]
+    fn per_user_cap_and_trim() {
+        let (tx, _) = broadcast::channel(16);
+        let m = JobManager::new(tx);
+        for _ in 0..3 {
+            assert!(m.try_create("send", "x", 1, 3).is_some());
+        }
+        assert!(m.try_create("send", "x", 1, 3).is_none(), "cap reached");
+        assert!(
+            m.try_create("send", "x", 2, 3).is_some(),
+            "other users unaffected"
+        );
+        let first = m.list(&user(1)).last().unwrap().id.clone();
+        m.fail(&first, "boom");
+        assert!(
+            m.try_create("send", "x", 1, 3).is_some(),
+            "finished jobs free a slot"
+        );
+        // the hard cap only drops finished jobs
+        for i in 0..1100 {
+            let (j, _) = m.create("send", "x", 100 + i);
+            if i % 2 == 0 {
+                m.done(&j.id, "ok", None);
+            }
+        }
+        m.expire(i64::MAX);
+        assert_eq!(m.count(), 1000);
+        assert_eq!(
+            m.list(&user(1)).iter().filter(|j| !j.is_finished()).count(),
+            3,
+            "active jobs survive trimming"
+        );
+        // purge
+        let active = m.list(&user(2))[0].id.clone();
+        m.purge_user(2);
+        assert!(m.get(&active, &user(2)).is_none());
+        assert!(m.is_cancelled(&active));
     }
 }

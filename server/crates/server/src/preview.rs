@@ -56,9 +56,21 @@ pub async fn info(st: &AppState, lib: i64, lib_dir: &Path, d: &BookDetail) -> Ap
     {
         return Ok(v);
     }
+    // whole books are read into memory here: bound how many at once
+    let _permit = st
+        .preview_sem
+        .acquire()
+        .await
+        .map_err(|_| ApiError::internal("preview pool closed"))?;
+    if let Ok(s) = tokio::fs::read(&info_path).await
+        && let Ok(v) = serde_json::from_slice::<InfoCache>(&s)
+    {
+        return Ok(v);
+    }
     let lib_dir = lib_dir.to_path_buf();
     let d = d.clone();
     let conv = st.conv.clone();
+    let st2 = st.clone();
     tokio::task::spawn_blocking(move || -> ApiResult<InfoCache> {
         let bytes = match bookio::read_original(&lib_dir, &d) {
             Ok(b) => b,
@@ -77,25 +89,32 @@ pub async fn info(st: &AppState, lib: i64, lib_dir: &Path, d: &BookDetail) -> Ap
                         cover_base.file_name().unwrap_or_default().to_string_lossy(),
                         cover_ext(&mime)
                     ));
-                    write_file(&p, &data)?;
+                    write_file(&st2, &p, &data)?;
                     out.cover = Some(mime);
                 }
             }
         }
         let json = serde_json::to_vec(&out).map_err(|e| ApiError::internal(e.to_string()))?;
-        write_file(&info_path, &json)?;
+        write_file(&st2, &info_path, &json)?;
         Ok(out)
     })
     .await?
 }
 
-/// JPEG/PNG kept; other formats re-encoded to WebP.
+/// JPEG/PNG kept (after a header check); other formats decoded with size limits and
+/// re-encoded to WebP.
 fn normalize_cover(data: Vec<u8>, mime: &str) -> (Option<Vec<u8>>, String) {
     match mime {
-        "image/jpeg" | "image/png" => (Some(data), mime.to_string()),
-        _ => match image::load_from_memory(&data) {
-            Ok(img) => (encode_webp(&img, 85.0), "image/webp".into()),
-            Err(_) => (None, String::new()),
+        "image/jpeg" | "image/png" => {
+            if freelib_fb2conv::limit::checked_dimensions(&data).is_some() {
+                (Some(data), mime.to_string())
+            } else {
+                (None, String::new())
+            }
+        }
+        _ => match freelib_fb2conv::limit::decode_image(&data) {
+            Some(img) => (encode_webp(&img, 85.0), "image/webp".into()),
+            None => (None, String::new()),
         },
     }
 }
@@ -113,13 +132,18 @@ fn encode_webp(img: &image::DynamicImage, quality: f32) -> Option<Vec<u8>> {
     )
 }
 
-fn write_file(p: &Path, data: &[u8]) -> ApiResult<()> {
+fn write_file(st: &AppState, p: &Path, data: &[u8]) -> ApiResult<()> {
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = p.with_extension(format!("tmp{}", crate::util::random_id()));
+    let tmp = p.with_extension(format!(
+        "{}{}",
+        crate::output::TMP_EXT_PREFIX,
+        crate::util::random_id()
+    ));
     std::fs::write(&tmp, data)?;
     std::fs::rename(&tmp, p)?;
+    crate::cache::written(st, data.len() as u64);
     Ok(())
 }
 
@@ -165,9 +189,10 @@ pub async fn cover(
         .await
         .map_err(|_| ApiError::internal("worker pool closed"))?;
     let t2 = tpath.clone();
+    let st2 = st.clone();
     let made = tokio::task::spawn_blocking(move || -> ApiResult<bool> {
         let data = std::fs::read(&full)?;
-        let Ok(img) = image::load_from_memory(&data) else {
+        let Some(img) = freelib_fb2conv::limit::decode_image(&data) else {
             return Ok(false);
         };
         let img = if img.height() > THUMB_HEIGHT {
@@ -179,7 +204,7 @@ pub async fn cover(
         };
         match encode_webp(&img, 80.0) {
             Some(bytes) => {
-                write_file(&t2, &bytes)?;
+                write_file(&st2, &t2, &bytes)?;
                 Ok(true)
             }
             None => Ok(false),

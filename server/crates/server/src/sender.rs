@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use freelib_catalog::BookDetail;
@@ -63,9 +65,30 @@ pub async fn start(st: &AppState, user: &User, req: SendRequest) -> ApiResult<Jo
                     "SMTP server is not configured (Settings → Mail)",
                 ));
             }
+            crate::api::devices::check_recipient(&smtp, &to)?;
+            let (uid, day) = (user.id, local_today());
+            let used = st.db.run(move |c| db::mail_count(c, uid, &day)).await?;
+            let limit = i64::from(smtp.daily_limit_per_user);
+            if used + req.books.len() as i64 > limit {
+                return Err(ApiError::rate_limited(format!(
+                    "daily mail limit reached: {used} of {limit} mails sent today"
+                )));
+            }
             Some(smtp)
         }
         "folder" => {
+            // server folders are admin business: readers may use shared folder devices as
+            // configured, but neither own folder devices nor another target folder
+            if !user.is_admin()
+                && (!dev.shared
+                    || req.target.as_deref().is_some_and(|t| {
+                        !t.trim().is_empty() && Some(t.trim()) != dev.target.as_deref()
+                    }))
+            {
+                return Err(ApiError::forbidden(
+                    "only administrators can choose server folders",
+                ));
+            }
             if safe_subdir(target.as_deref().unwrap_or("")).is_none() {
                 return Err(ApiError::bad_request("invalid target folder"));
             }
@@ -74,7 +97,7 @@ pub async fn start(st: &AppState, user: &User, req: SendRequest) -> ApiResult<Jo
         "download" => None,
         _ => return Err(ApiError::bad_request("unknown device kind")),
     };
-    let (_, cat) = st.catalog(req.library)?;
+    st.catalog(req.library)?;
     let n = req.books.len();
     let (kind, title) = match dev.kind.as_str() {
         "email" => (
@@ -102,11 +125,20 @@ pub async fn start(st: &AppState, user: &User, req: SendRequest) -> ApiResult<Jo
             ),
         ),
     };
-    let (job, _cancel) = st.jobs.create(kind, &title, user.id);
+    let max = st.cfg.max_jobs_per_user;
+    let (job, cancel) = st
+        .jobs
+        .try_create(kind, &title, user.id, max)
+        .ok_or_else(|| {
+            ApiError::rate_limited(format!(
+                "at most {max} send/download jobs can run at once; wait for one to finish"
+            ))
+        })?;
     let st2 = st.clone();
     let job_id = job.id.clone();
+    let uid = user.id;
     tokio::spawn(async move {
-        let r = run(&st2, &job_id, cat, req, target, smtp).await;
+        let r = run(&st2, &job_id, uid, req, target, smtp, cancel).await;
         match r {
             Ok(()) => {}
             Err(e) if e.code == "cancelled" => st2.jobs.cancelled(&job_id),
@@ -120,24 +152,72 @@ fn cancelled() -> ApiError {
     ApiError::new(axum::http::StatusCode::OK, "cancelled", "cancelled")
 }
 
+/// Today in the server's local time zone (`YYYY-MM-DD`), the day of the mail limit.
+fn local_today() -> String {
+    crate::util::local_date_at(crate::util::unix_now())
+}
+
+/// Creates `dir/rel` without replacing an existing file: `name (2).ext`, `name (3).ext`, ….
+async fn create_unique(dir: &Path, rel: &str) -> ApiResult<(PathBuf, tokio::fs::File)> {
+    let path = join_safe(dir, rel).ok_or_else(|| ApiError::bad_request("invalid file name"))?;
+    if let Some(p) = path.parent() {
+        tokio::fs::create_dir_all(p).await?;
+    }
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // `kepub.epub` stays one extension
+    let (stem, ext) = match file_name.find(".kepub.epub") {
+        Some(i) => (file_name[..i].to_string(), file_name[i..].to_string()),
+        None => match file_name.rsplit_once('.') {
+            Some((s, e)) => (s.to_string(), format!(".{e}")),
+            None => (file_name.clone(), String::new()),
+        },
+    };
+    for k in 1..1000 {
+        let candidate = if k == 1 {
+            path.clone()
+        } else {
+            path.with_file_name(format!("{stem} ({k}){ext}"))
+        };
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+            .await
+        {
+            Ok(f) => return Ok((candidate, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Err(ApiError::conflict("too many files with this name"))
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run(
     st: &AppState,
     job_id: &str,
-    cat: std::sync::Arc<freelib_catalog::Catalog>,
+    user_id: i64,
     req: SendRequest,
     target: Option<String>,
     smtp: Option<SmtpConfig>,
+    cancel: Arc<AtomicBool>,
 ) -> ApiResult<()> {
     let dev = req.device;
     let ids = req.books.clone();
-    let details: Vec<BookDetail> =
-        tokio::task::spawn_blocking(move || -> ApiResult<Vec<BookDetail>> {
-            Ok(ids
-                .iter()
-                .filter_map(|id| cat.book(*id).ok().flatten())
-                .collect())
+    let details: Vec<BookDetail> = st
+        .catalog_call(req.library, move |cat| {
+            let mut v = Vec::with_capacity(ids.len());
+            for id in &ids {
+                if let Some(b) = cat.book(*id)? {
+                    v.push(b);
+                }
+            }
+            Ok(v)
         })
-        .await??;
+        .await?;
     if details.is_empty() {
         return Err(ApiError::not_found("books not found"));
     }
@@ -161,9 +241,10 @@ async fn run(
         let first = &unit.books[0];
         st.jobs
             .running(job_id, i as f64 / total as f64, &first.book.title);
-        let res = produce_unit(st, req.library, &lib_dir, unit, &dev.format, &opts).await;
+        let res = produce_unit(st, req.library, &lib_dir, unit, &dev.format, &opts, &cancel).await;
         let (data, ext) = match res {
             Ok(x) => x,
+            Err(e) if e.code == "cancelled" => return Err(cancelled()),
             Err(e) => {
                 errors += 1;
                 st.jobs
@@ -195,6 +276,9 @@ async fn run(
                 let name = format!("{}.{ext}", base.replace('/', " - "));
                 let to = target.clone().unwrap_or_default();
                 let mime = mime_for_ext(ext.rsplit('.').next().unwrap_or(&ext));
+                let data = data.into_bytes().await?;
+                let day = local_today();
+                st.db.run(move |c| db::add_mail(c, user_id, &day)).await?;
                 match crate::mail::send(
                     smtp,
                     &to,
@@ -214,13 +298,18 @@ async fn run(
             "folder" => {
                 let sub = safe_subdir(target.as_deref().unwrap_or("")).unwrap_or_default();
                 let dir = st.cfg.export_dir.join(sub);
-                let path = join_safe(&dir, &format!("{base}.{ext}"))
-                    .ok_or_else(|| ApiError::bad_request("invalid file name"))?;
-                if let Some(p) = path.parent() {
-                    tokio::fs::create_dir_all(p).await?;
+                // never overwrite: an existing file gets a " (2)" sibling
+                let (path, f) = create_unique(&dir, &format!("{base}.{ext}")).await?;
+                drop(f);
+                if let Err(e) = data.write_to(&path).await {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return Err(e);
                 }
-                tokio::fs::write(&path, &data).await?;
-                st.jobs.log(job_id, &format!("Saved {base}.{ext}"));
+                let shown = path
+                    .strip_prefix(&dir)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| format!("{base}.{ext}"));
+                st.jobs.log(job_id, &format!("Saved {shown}"));
             }
             _ => {
                 let rel = if multi_file {
@@ -231,7 +320,7 @@ async fn run(
                 tokio::fs::create_dir_all(&job_dir).await?;
                 st.jobs.set_dir(job_id, job_dir.clone());
                 let p = job_dir.join(format!("{i:05}.part"));
-                tokio::fs::write(&p, &data).await?;
+                data.write_to(&p).await?;
                 produced.push((rel, p));
             }
         }
@@ -303,7 +392,7 @@ fn make_units(details: Vec<BookDetail>, format: &str, opts: &ConvertOptions) -> 
     out
 }
 
-/// Bytes and extension of one unit.
+/// Result and extension of one unit.
 async fn produce_unit(
     st: &AppState,
     lib: i64,
@@ -311,14 +400,13 @@ async fn produce_unit(
     unit: &Unit,
     format: &str,
     opts: &ConvertOptions,
-) -> ApiResult<(Vec<u8>, String)> {
+    cancel: &Arc<AtomicBool>,
+) -> ApiResult<(Produced, String)> {
     let first = &unit.books[0];
     if unit.books.len() == 1 {
-        let p: Produced = output::produce(st, lib, lib_dir, first, format, opts).await?;
-        return Ok((
-            p.into_bytes().await?,
-            output::file_ext(format, &first.book.ext),
-        ));
+        let p: Produced =
+            output::produce(st, lib, lib_dir, first, format, opts, Some(cancel)).await?;
+        return Ok((p, output::file_ext(format, &first.book.ext)));
     }
     let _permit = st
         .workers
@@ -342,16 +430,16 @@ async fn produce_unit(
     .await?
     .map_err(|e| ApiError::internal(format!("conversion failed: {e:#}")))?;
     match format {
-        "epub" => Ok((epub, "epub".into())),
+        "epub" => Ok((Produced::Bytes(epub), "epub".into())),
         "kepub" => {
             let conv = st.conv.clone();
             let k = tokio::task::spawn_blocking(move || conv.to_kepub(&epub))
                 .await?
                 .map_err(|e| ApiError::internal(format!("KEPUB conversion failed: {e:#}")))?;
-            Ok((k, "kepub.epub".into()))
+            Ok((Produced::Bytes(k), "kepub.epub".into()))
         }
         f => Ok((
-            output::calibre_run(st, &epub, "epub", f).await?,
+            Produced::Bytes(output::calibre_run(st, &epub, "epub", f, Some(cancel)).await?),
             f.to_string(),
         )),
     }
@@ -378,8 +466,7 @@ fn write_zip(path: &std::path::Path, items: &[(String, PathBuf)]) -> ApiResult<(
             .any(|e| n.to_lowercase().ends_with(e));
         z.start_file(n, if text { deflated } else { stored })
             .map_err(|e| ApiError::internal(format!("zip: {e}")))?;
-        let data = std::fs::read(p)?;
-        z.write_all(&data)?;
+        std::io::copy(&mut std::fs::File::open(p)?, &mut z)?;
     }
     z.finish()
         .map_err(|e| ApiError::internal(format!("zip: {e}")))?

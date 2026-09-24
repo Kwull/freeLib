@@ -26,6 +26,9 @@ pub async fn start(st: &AppState, lib_id: i64, owner: &User) -> ApiResult<Job> {
     };
     let (job, cancel) = {
         let mut g = rt.import.lock().unwrap_or_else(|e| e.into_inner());
+        if rt.is_deleted() {
+            return Err(ApiError::not_found("library not found"));
+        }
         if g.is_some() {
             return Err(ApiError::conflict(
                 "an import of this library is already running",
@@ -95,6 +98,13 @@ async fn run(
                 progress: Some(p),
                 message: Some(msg.into()),
             });
+            if done >= total && !rt2.is_deleted() {
+                // the new file was just renamed into place: switch to it at once, so requests
+                // never open connections to the new file through the old catalog (stale)
+                if rt2.handle.reload().is_ok() {
+                    rt2.clear_lists();
+                }
+            }
             let mut le = last_emit.lock().unwrap_or_else(|e| e.into_inner());
             if le.elapsed() > Duration::from_millis(500) || done >= total {
                 *le = Instant::now();
@@ -104,7 +114,26 @@ async fn run(
         freelib_import::import_inpx(&opts, &progress, &cancel)
     })
     .await;
+    finish(&st, &rt, &job_id, result);
+    // the slot is released last: a delete waits for (is refused during) all of the above
     *rt.import.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+fn finish(
+    st: &AppState,
+    rt: &Arc<LibRuntime>,
+    job_id: &str,
+    result: Result<Result<freelib_import::ImportStats, ImportError>, tokio::task::JoinError>,
+) {
+    let job_id = job_id.to_string();
+    if rt.is_deleted() {
+        // deleted while importing: throw the result away
+        rt.handle.close();
+        let _ = std::fs::remove_file(rt.handle.path());
+        let _ = std::fs::remove_file(freelib_import::new_db_path(rt.handle.path()));
+        st.jobs.cancelled(&job_id);
+        return;
+    }
     match result {
         Ok(Ok(stats)) => {
             let reload = rt.handle.reload();
@@ -131,7 +160,7 @@ async fn run(
                     rt.set_status(LibraryStatus::default());
                     st.jobs.done(&job_id, &msg, None);
                     st.emit_library(rt.id);
-                    warm(&st, &rt, cat);
+                    warm(st, rt, cat);
                 }
                 Err(e) => {
                     let m = format!("imported catalog cannot be opened: {e}");

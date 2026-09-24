@@ -795,7 +795,8 @@ async fn shelves_devices_and_jobs() {
 
 #[tokio::test]
 async fn fs_and_request_security() {
-    let app = TestApp::new(|_, root| {
+    let app = TestApp::new(|cfg, root| {
+        cfg.allowed_hosts = vec!["books.example".into()];
         make_library(root, 50);
         std::fs::create_dir_all(root.join("outside")).unwrap();
         std::os::unix::fs::symlink(root.join("outside"), root.join("books/escape")).unwrap();
@@ -1355,11 +1356,8 @@ async fn calibre_and_smtp() {
             txt["id"]
         ))
         .await;
-    if ["txt", "rtf", "html", "htm", "doc", "docx"].contains(&ext) {
-        assert_eq!(f.status, StatusCode::OK);
-    } else {
-        assert_eq!(f.status, StatusCode::NOT_IMPLEMENTED, "{ext}");
-    }
+    // Calibre only ever gets EPUB input: other originals are not converted
+    assert_eq!(f.status, StatusCode::NOT_IMPLEMENTED, "{ext}");
 
     // SMTP: settings (password write-only), test mail, Send to Kindle job
     let (port, msgs) = fake_smtp().await;

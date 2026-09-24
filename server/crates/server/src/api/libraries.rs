@@ -146,15 +146,19 @@ pub async fn delete(
     UrlPath(id): UrlPath<i64>,
 ) -> ApiResult<StatusCode> {
     let rt = st.lib(id)?;
-    if rt
-        .import
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .is_some()
     {
-        return Err(ApiError::conflict("an import of this library is running"));
+        // under the import lock: refuse while an import runs, and make sure none can start
+        // (importer::start checks `deleted` under the same lock)
+        let g = rt.import.lock().unwrap_or_else(|e| e.into_inner());
+        if g.is_some() {
+            return Err(ApiError::conflict("an import of this library is running"));
+        }
+        rt.deleted.store(true, std::sync::atomic::Ordering::SeqCst);
     }
-    st.db.run(move |c| db::delete_library(c, id)).await?;
+    if let Err(e) = st.db.run(move |c| db::delete_library(c, id)).await {
+        rt.deleted.store(false, std::sync::atomic::Ordering::SeqCst);
+        return Err(e);
+    }
     rt.handle.close();
     st.remove_lib(id);
     let db_path = rt.handle.path().to_path_buf();

@@ -5,7 +5,6 @@
 //! deliberate differences, see `docs/web/ARCHITECTURE.md` ("INPX parsing").
 
 use std::fs::File;
-use std::io::Read;
 use std::path::Path;
 
 use zip::ZipArchive;
@@ -392,10 +391,15 @@ pub struct InpxInfo {
     pub parts: Vec<String>,
 }
 
+/// Largest `.inp` part we read (the zip crate does not enforce declared sizes: zip bombs).
+pub const MAX_PART: u64 = 512 * 1024 * 1024;
+/// Largest INPX metadata file (`collection.info`, `version.info`, `structure.info`).
+const MAX_INFO: u64 = 1024 * 1024;
+
 fn read_entry_text(za: &mut ZipArchive<File>, name: &str) -> Result<String, ImportError> {
-    let mut f = za.by_name(name)?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
+    let f = za.by_name(name)?;
+    let hint = f.size();
+    let buf = crate::zipdir::read_limited(f, MAX_INFO, hint)?;
     Ok(String::from_utf8_lossy(&buf)
         .trim_start_matches('\u{feff}')
         .to_string())
@@ -435,15 +439,37 @@ pub fn read_info(path: &Path) -> Result<InpxInfo, ImportError> {
 
 /// Read one `.inp` part's bytes.
 pub fn read_part(za: &mut ZipArchive<File>, name: &str) -> Result<Vec<u8>, ImportError> {
-    let mut f = za.by_name(name)?;
-    let mut buf = Vec::with_capacity(f.size() as usize);
-    f.read_to_end(&mut buf)?;
-    Ok(buf)
+    let f = za.by_name(name)?;
+    let hint = f.size();
+    Ok(crate::zipdir::read_limited(f, MAX_PART, hint)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn zip_file(dir: &Path, bytes: &[u8]) -> ZipArchive<File> {
+        let p = dir.join("t.inpx");
+        std::fs::write(&p, bytes).unwrap();
+        ZipArchive::new(File::open(&p).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn inp_zip_bomb_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let mib = (MAX_PART >> 20) as usize + 1;
+        let mut za = zip_file(dir.path(), &crate::testutil::zip_bomb("a.inp", mib, 1000));
+        assert!(read_part(&mut za, "a.inp").is_err());
+    }
+
+    #[test]
+    fn huge_declared_size_does_not_abort() {
+        let dir = tempfile::tempdir().unwrap();
+        let z = crate::testutil::raw_zip("a.inp", 0, b"abc", 1 << 62);
+        let mut za = zip_file(dir.path(), &z);
+        // must not try to allocate 4 EiB up front; any result but a crash is fine
+        let _ = read_part(&mut za, "a.inp");
+    }
 
     fn rec(fields: &[&str]) -> String {
         fields.join("\x04") + "\x04"

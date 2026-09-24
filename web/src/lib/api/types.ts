@@ -106,6 +106,9 @@ export type SearchResponse = {
 export type SmtpSettings = {
   host: string; port: number; security: 'none' | 'starttls' | 'tls';
   username: string; from: string; passwordSet: boolean; pauseSeconds: number;
+  /** Recipient patterns (`*` = any characters) that sending by e-mail is limited to. */
+  allowedRecipients: string[];
+  dailyLimitPerUser: number;
 };
 export type Settings = {
   smtp: SmtpSettings;

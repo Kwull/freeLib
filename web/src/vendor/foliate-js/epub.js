@@ -705,6 +705,22 @@ class Resources {
     }
 }
 
+// freeLib patch: books never run scripts. Sections are rendered from blob: URLs in a
+// same-origin iframe, so strip everything executable before the blob is created (defence in
+// depth: the server's Content-Security-Policy, which blob documents inherit, blocks scripts too).
+const JS_URL = /^[\s\u0000-\u001f]*(javascript|vbscript|data\s*:\s*text\/html)/i
+const sanitizeDoc = doc => {
+    for (const el of doc.querySelectorAll('script, object, embed, applet, base, meta[http-equiv]'))
+        el.remove()
+    for (const el of doc.querySelectorAll('*')) {
+        for (const attr of Array.from(el.attributes)) {
+            const name = attr.name.toLowerCase()
+            if (name.startsWith('on') || name === 'srcdoc' || JS_URL.test(attr.value))
+                el.removeAttributeNode(attr)
+        }
+    }
+}
+
 class Loader {
     #cache = new Map()
     #children = new Map()
@@ -822,6 +838,7 @@ class Loader {
                 item.mediaType = MIME.HTML
                 doc = new DOMParser().parseFromString(str, item.mediaType)
             }
+            sanitizeDoc(doc) // freeLib patch, see above
             // replace hrefs in XML processing instructions
             // this is mainly for SVGs that use xml-stylesheet
             if ([MIME.XHTML, MIME.SVG].includes(item.mediaType)) {

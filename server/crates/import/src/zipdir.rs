@@ -73,6 +73,10 @@ pub fn read_central_directory(path: &Path) -> io::Result<HashMap<String, ZipEntr
     if cd_off.checked_add(cd_size).is_none_or(|end| end > len) {
         return Err(bad("central directory out of range"));
     }
+    // ~100 bytes per entry: 512 MiB is millions of books, far beyond any real archive
+    if cd_size > 512 * 1024 * 1024 {
+        return Err(bad("central directory too large"));
+    }
     let mut cd = vec![0u8; cd_size as usize];
     f.seek(SeekFrom::Start(cd_off))?;
     f.read_exact(&mut cd)?;
@@ -125,6 +129,69 @@ pub fn read_central_directory(path: &Path) -> io::Result<HashMap<String, ZipEntr
             );
         }
         p = extra_end + comment_len;
+    }
+    Ok(out)
+}
+
+/// Case-insensitive name match used whenever an INPX entry name is looked up in an archive:
+/// the full entry name, or the entry's last path component (some archives keep books in a
+/// folder), both ASCII-case-insensitively. The zip crate fallback of the server uses the same
+/// rule, so offsets resolved at import time and the fallback agree.
+pub fn entry_matches(entry: &str, wanted: &str) -> bool {
+    entry.eq_ignore_ascii_case(wanted)
+        || entry
+            .rsplit('/')
+            .next()
+            .is_some_and(|b| b.eq_ignore_ascii_case(wanted))
+}
+
+/// A central directory with [`entry_matches`] lookups (exact name first).
+pub struct EntryIndex {
+    exact: HashMap<String, ZipEntryLoc>,
+    /// lower-cased full name and lower-cased last component → first entry in name order
+    folded: HashMap<String, ZipEntryLoc>,
+}
+
+impl EntryIndex {
+    pub fn new(exact: HashMap<String, ZipEntryLoc>) -> EntryIndex {
+        let mut names: Vec<&String> = exact.keys().collect();
+        names.sort();
+        let mut full = HashMap::with_capacity(exact.len());
+        let mut base = HashMap::new();
+        for n in names {
+            let loc = exact[n];
+            full.entry(n.to_ascii_lowercase()).or_insert(loc);
+            if let Some((_, b)) = n.rsplit_once('/') {
+                base.entry(b.to_ascii_lowercase()).or_insert(loc);
+            }
+        }
+        for (k, v) in base {
+            full.entry(k).or_insert(v);
+        }
+        EntryIndex {
+            exact,
+            folded: full,
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<ZipEntryLoc> {
+        self.exact
+            .get(name)
+            .or_else(|| self.folded.get(&name.to_ascii_lowercase()))
+            .copied()
+    }
+}
+
+/// Reads `r` to the end, failing once more than `limit` bytes arrive (zip bombs: the zip crate
+/// does not enforce an entry's declared size). `size_hint` only sizes the initial buffer.
+pub fn read_limited<R: Read>(r: R, limit: u64, size_hint: u64) -> io::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(size_hint.min(limit).min(64 << 20) as usize);
+    r.take(limit.saturating_add(1)).read_to_end(&mut out)?;
+    if out.len() as u64 > limit {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("zip entry larger than {limit} bytes"),
+        ));
     }
     Ok(out)
 }
@@ -183,6 +250,27 @@ mod tests {
                 assert_eq!(start, ds);
             }
         }
+    }
+
+    #[test]
+    fn lookup_rules() {
+        let loc = |o| ZipEntryLoc {
+            offset: o,
+            csize: 1,
+            usize: 1,
+            method: 0,
+        };
+        let mut m = HashMap::new();
+        m.insert("A.fb2".to_string(), loc(1));
+        m.insert("dir/B.FB2".to_string(), loc(2));
+        m.insert("a.fb2".to_string(), loc(3));
+        let ix = EntryIndex::new(m);
+        assert_eq!(ix.get("a.fb2").unwrap().offset, 3);
+        assert_eq!(ix.get("A.FB2").unwrap().offset, 1);
+        assert_eq!(ix.get("b.fb2").unwrap().offset, 2);
+        assert!(ix.get("c.fb2").is_none());
+        assert!(entry_matches("dir/B.FB2", "b.fb2"));
+        assert!(!entry_matches("dir/B.FB2", "dir"));
     }
 
     #[test]

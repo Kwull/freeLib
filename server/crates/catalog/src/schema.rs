@@ -94,6 +94,16 @@ CREATE INDEX session_user ON session(user_id);
 CREATE INDEX shelf_user ON shelf(user_id);
 CREATE INDEX device_user ON device(user_id);
 "#,
+    // v2: case-insensitive unique user names (older duplicates get their id appended),
+    // user-id high-water mark (ids are never reused), persisted previous visit, mail counters
+    r#"
+UPDATE user SET username = username || ' (' || id || ')'
+ WHERE EXISTS (SELECT 1 FROM user u2 WHERE u2.username = user.username COLLATE NOCASE AND u2.id < user.id);
+CREATE UNIQUE INDEX user_username_nocase ON user(username COLLATE NOCASE);
+INSERT OR REPLACE INTO setting(key, value) SELECT 'last_user_id', CAST(coalesce(max(id), 0) AS TEXT) FROM user;
+ALTER TABLE user_state ADD COLUMN prev_visit TEXT;
+CREATE TABLE mail_count (user_id INTEGER NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (user_id, day)) WITHOUT ROWID;
+"#,
 ];
 
 /// Current `app.db` schema version (`PRAGMA user_version` after migrating).
@@ -126,4 +136,44 @@ pub fn migrate_app_db(conn: &Connection) -> rusqlite::Result<i64> {
         tx.commit()?;
     }
     Ok(APP_SCHEMA_VERSION)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v2_dedupes_user_names() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(APP_MIGRATIONS[0]).unwrap();
+        c.pragma_update(None, "user_version", 1).unwrap();
+        c.execute_batch(
+            "INSERT INTO user VALUES (1,'Bob','h','admin','t'),(2,'bob','h','reader','t'),(5,'eve','h','reader','t');",
+        )
+        .unwrap();
+        assert_eq!(migrate_app_db(&c).unwrap(), APP_SCHEMA_VERSION);
+        let names: Vec<String> = c
+            .prepare("SELECT username FROM user ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(names, ["Bob", "bob (2)", "eve"]);
+        assert!(
+            c.execute(
+                "INSERT INTO user(username, password_hash, role, created_at) VALUES ('EVE','h','reader','t')",
+                []
+            )
+            .is_err()
+        );
+        let hwm: String = c
+            .query_row(
+                "SELECT value FROM setting WHERE key='last_user_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hwm, "5");
+    }
 }

@@ -5,14 +5,93 @@
 //!   (or `X-Forwarded-Host`), unless `Sec-Fetch-Site` says `same-origin` (dev proxies rewrite `Host`).
 //! * A request body must be `application/json` (HTML forms cannot send that cross-site
 //!   without a CORS preflight, which this server never allows).
+//!
+//! DNS rebinding: in open mode (and always when `FREELIB_ALLOWED_HOSTS` is set) a request whose
+//! `Host` is neither `localhost`, an IP literal nor an allowed name gets 421.
+//!
+//! Content Security Policy: [`APP_CSP`] on every response, except book files and covers, which
+//! get [`FILE_CSP`] (`sandbox`: an HTML/SVG book opened directly can run nothing on our origin).
+
+use std::net::IpAddr;
 
 use axum::body::Body;
-use axum::extract::Request;
-use axum::http::{Method, header};
+use axum::extract::{Request, State};
+use axum::http::{Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
 use crate::error::ApiError;
+use crate::state::AppState;
+
+/// Policy of the web app and the API. The reader renders EPUB sections from `blob:` URLs in a
+/// same-origin iframe; blob documents inherit this policy, so book scripts cannot run.
+pub const APP_CSP: &str = "default-src 'self'; script-src 'self'; object-src 'none'; \
+base-uri 'none'; frame-ancestors 'self'; img-src 'self' data: blob:; \
+style-src 'self' 'unsafe-inline' blob:; font-src 'self' data: blob:; connect-src 'self'; \
+frame-src 'self' blob:; worker-src 'self'; form-action 'self'";
+
+/// Policy of book files and covers.
+pub const FILE_CSP: &str = "sandbox";
+
+/// `example.org:8080` → `example.org`, `[::1]:80` → `[::1]`.
+pub fn strip_port(host: &str) -> &str {
+    if host.starts_with('[') {
+        return match host.find(']') {
+            Some(i) => &host[..=i],
+            None => host,
+        };
+    }
+    match host.rsplit_once(':') {
+        Some((h, p)) if !h.contains(':') && p.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => host,
+    }
+}
+
+/// Whether a request for `host` (the `Host` header, port allowed) is accepted.
+pub fn host_allowed(host: &str, allowed: &[String]) -> bool {
+    let h = strip_port(host.trim())
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if h == "localhost" {
+        return true;
+    }
+    let bare = h.trim_start_matches('[').trim_end_matches(']');
+    if bare.parse::<IpAddr>().is_ok() {
+        return true;
+    }
+    allowed.iter().any(|a| {
+        if let Some(suffix) = a.strip_prefix("*.") {
+            h.len() > suffix.len() + 1
+                && h.ends_with(suffix)
+                && h.as_bytes()[h.len() - suffix.len() - 1] == b'.'
+        } else {
+            *a == h
+        }
+    })
+}
+
+/// Rejects requests for unexpected host names (DNS rebinding against open mode).
+pub async fn host_guard(State(st): State<AppState>, req: Request<Body>, next: Next) -> Response {
+    if st.open_mode() || !st.cfg.allowed_hosts.is_empty() {
+        let host = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+            .or_else(|| req.uri().authority().map(|a| a.to_string()));
+        if let Some(h) = host
+            && !host_allowed(&h, &st.cfg.allowed_hosts)
+        {
+            tracing::warn!(host = %h, "request for an unexpected host refused (set FREELIB_ALLOWED_HOSTS)");
+            return (
+                StatusCode::MISDIRECTED_REQUEST,
+                "unknown host name: add it to FREELIB_ALLOWED_HOSTS",
+            )
+                .into_response();
+        }
+    }
+    next.run(req).await
+}
 
 fn host_of_origin(origin: &str) -> Option<&str> {
     let rest = origin.split_once("://")?.1;
@@ -96,5 +175,41 @@ pub async fn security_headers(req: Request<Body>, next: Next) -> Response {
         .or_insert(header::HeaderValue::from_static("same-origin"));
     h.entry("x-frame-options")
         .or_insert(header::HeaderValue::from_static("SAMEORIGIN"));
+    h.entry(header::CONTENT_SECURITY_POLICY)
+        .or_insert(header::HeaderValue::from_static(APP_CSP));
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hosts() {
+        let allowed = vec!["books.example.org".to_string(), "*.lan".to_string()];
+        for ok in [
+            "localhost",
+            "LOCALHOST:8080",
+            "127.0.0.1:8080",
+            "[::1]:8080",
+            "192.168.1.5",
+            "books.example.org",
+            "Books.Example.Org:443",
+            "nas.lan",
+        ] {
+            assert!(host_allowed(ok, &allowed), "{ok}");
+        }
+        for bad in [
+            "evil.com",
+            "books.example.org.evil.com",
+            "lan",
+            "xlan",
+            "localhost.evil.com",
+        ] {
+            assert!(!host_allowed(bad, &allowed), "{bad}");
+        }
+        assert_eq!(strip_port("a:1"), "a");
+        assert_eq!(strip_port("[::1]:1"), "[::1]");
+        assert_eq!(strip_port("::1"), "::1");
+    }
 }
