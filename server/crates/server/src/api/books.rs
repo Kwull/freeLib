@@ -86,24 +86,61 @@ pub async fn cover(
     };
     let (_, d) = load_book(&st, lib, id).await?;
     let dir = lib_dir(&st, lib).await?;
-    let Some((path, mime)) = preview::cover(&st, lib, &dir, &d, thumb).await? else {
+    cover_response(&st, lib, &dir, &d, thumb, Some(&headers)).await
+}
+
+/// Shared by `GET .../cover` and the OPDS cover link. Serves the real cover when the book has
+/// one; for `thumb` without a real cover, a generated SVG placeholder (see `placeholder.rs`)
+/// stands in, so the client never has to guess and never 404s on a plain grid render. `full`
+/// without a real cover still 404s: there is no "full size placeholder" to serve.
+pub async fn cover_response(
+    st: &AppState,
+    lib: i64,
+    dir: &PathBuf,
+    d: &BookDetail,
+    thumb: bool,
+    headers: Option<&HeaderMap>,
+) -> ApiResult<Response> {
+    if let Some((path, mime)) = preview::cover(st, lib, dir, d, thumb).await? {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let etag = format!("\"{name}\"");
+        let cache = "private, max-age=86400";
+        if let Some(h) = headers
+            && etag_matches(h, &etag)
+        {
+            return Ok(not_modified(&etag, cache));
+        }
+        let data = tokio::fs::read(&path).await?;
+        let mut r = Response::new(Body::from(data));
+        set_header(&mut r, header::CONTENT_TYPE, &mime);
+        set_header(&mut r, header::ETAG, &etag);
+        set_header(&mut r, header::CACHE_CONTROL, cache);
+        return Ok(r);
+    }
+    if !thumb {
         return Err(ApiError::not_found("no cover"));
-    };
-    let name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    let etag = format!("\"{name}\"");
-    let cache = "private, max-age=86400";
-    if etag_matches(&headers, &etag) {
+    }
+    let svg = crate::placeholder::svg(&d.book.title, &d.book.authors, 160, 240);
+    let etag = format!("\"ph-{}\"", crate::util::short_hash(&svg));
+    let cache = "public, max-age=86400";
+    if let Some(h) = headers
+        && etag_matches(h, &etag)
+    {
         return Ok(not_modified(&etag, cache));
     }
-    let data = tokio::fs::read(&path).await?;
-    let mut r = Response::new(Body::from(data));
-    set_header(&mut r, header::CONTENT_TYPE, &mime);
+    let mut r = Response::new(Body::from(svg));
+    set_header(&mut r, header::CONTENT_TYPE, "image/svg+xml");
     set_header(&mut r, header::ETAG, &etag);
     set_header(&mut r, header::CACHE_CONTROL, cache);
+    set_header(
+        &mut r,
+        axum::http::HeaderName::from_static("x-cover"),
+        "generated",
+    );
     Ok(r)
 }
 

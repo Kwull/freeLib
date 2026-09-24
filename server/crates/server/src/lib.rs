@@ -16,6 +16,7 @@ pub mod jobs;
 pub mod mail;
 pub mod opds;
 pub mod output;
+pub mod placeholder;
 pub mod preview;
 pub mod security;
 pub mod sender;

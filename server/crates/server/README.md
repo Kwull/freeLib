@@ -100,8 +100,12 @@ Subcommands:
     folder exports, `/` makes sub-folders.
   * KEPUB files are named `*.kepub.epub`.
   * `?device=<id>` takes that device's options, template and default format.
-* **Cover.** `size` defaults to `thumb`. Books without a cover, and books that are not FB2 or
-  EPUB, return 404.
+* **Cover.** `size` defaults to `thumb`. `size=full` 404s for books without a cover (including
+  books that are not FB2 or EPUB). `size=thumb` never 404s for an existing book: when there is
+  no real cover, a generated SVG placeholder (`placeholder.rs`) is returned instead — the same
+  look as the SPA's own placeholder (background colour hashed from the title, author line,
+  title text) — with `X-Cover: generated` and a public, cacheable `Cache-Control` (it depends
+  only on title/author, not on user permissions).
 * **Login rate limiting.** After 5 failures from one IP, each further failure doubles the
   lock-out: 1 s, 2 s, … up to 5 min. A locked-out attempt returns 429 with error code
   `unauthorized` and a message that says when to retry. OPDS Basic auth shares the same limiter.

@@ -21,7 +21,10 @@
       onerror={() => (errored = true)}
     />
   {/if}
-  {#if !loaded}
+  {#if errored || !loaded}
+    <!-- Instant-paint fallback: the background colour plus title. Usually replaced almost at
+         once by the loaded cover image, or by the server's own generated placeholder (which
+         looks the same), so this never double-renders on top of it. -->
     <span class="ph">{title}</span>
   {/if}
 </div>

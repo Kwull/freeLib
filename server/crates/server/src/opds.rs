@@ -27,7 +27,6 @@ use crate::auth;
 use crate::db::{self, OpdsConfig, User};
 use crate::error::{ApiError, ApiResult};
 use crate::output;
-use crate::preview;
 use crate::state::AppState;
 use crate::util::{now_rfc3339, sha256_hex};
 
@@ -991,14 +990,7 @@ async fn book_file(
     let dir = lib_dir(&st, lib).await?;
     if format == "cover" {
         let thumb = q.size.as_deref() == Some("thumb");
-        let Some((path, mime)) = preview::cover(&st, lib, &dir, &d, thumb).await? else {
-            return Err(ApiError::not_found("no cover"));
-        };
-        let data = tokio::fs::read(path).await?;
-        let mut r = Response::new(Body::from(data));
-        crate::util::set_header(&mut r, header::CONTENT_TYPE, &mime);
-        crate::util::set_header(&mut r, header::CACHE_CONTROL, "private, max-age=86400");
-        return Ok(r);
+        return crate::api::books::cover_response(&st, lib, &dir, &d, thumb, None).await;
     }
     let opts = ConvertOptions::default();
     let produced = output::produce(&st, lib, &dir, &d, &format, &opts).await?;

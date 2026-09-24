@@ -107,6 +107,20 @@
         {/each}
       </div>
 
+      {#if result.authors.length}
+        <section aria-labelledby="h-authors">
+          <h2 id="h-authors">{t('search.authors')}</h2>
+          <div class="series-grid">
+            {#each result.authors as a (a.id)}
+              <a href="/l/{lib}/authors/{a.id}" data-link class="series-card">
+                <span class="name">{a.name}</span>
+                <span class="muted">{t('browse.booksCount', { count: a.count })}</span>
+              </a>
+            {/each}
+          </div>
+        </section>
+      {/if}
+
       {#if result.series.length}
         <section aria-labelledby="h-series">
           <h2 id="h-series">{t('search.series')}</h2>

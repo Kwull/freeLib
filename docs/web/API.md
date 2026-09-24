@@ -113,7 +113,7 @@ their separator. Result is sanitised for file systems; `transliterate` applies R
 | `GET /libraries/:lib/genres` | `v?` | `Genre[]` (all 322 genres, with counts for this library; zero-count leaves included) |
 | `GET /libraries/:lib/books` | exactly one of `author`, `series`, `genre`, `shelf`, `since` (YYYY-MM-DD) plus optional `lang`, `ext`, `deleted=1`, `cursor`, `limit` (default 2000, max 5000) | `{ books: Book[], nextCursor: string \| null, total: number }`. Order: author → series name, serno, title; series → serno, title; genre/shelf/since → date desc, title |
 | `GET /libraries/:lib/books/:id` | – | `BookDetail` (first call may take up to ~150 ms, then cached) |
-| `GET /libraries/:lib/books/:id/cover` | `size=thumb\|full` | image (`image/webp` or original jpeg/png), 404 when none. `thumb` = 240 px high |
+| `GET /libraries/:lib/books/:id/cover` | `size=thumb\|full` | image (`image/webp` or original jpeg/png); `full` is 404 when the book has no cover. `thumb` = 240 px high; when the book has no cover, a generated SVG placeholder tile (background colour from the title, author + title text, like the SPA's own placeholder) is returned instead of 404, with header `X-Cover: generated` |
 | `GET /libraries/:lib/books/:id/file` | `format` (default `original`), `device?` (device id → its options & file name) , `inline=1` for the web reader | the file with `Content-Disposition`; 501 `unsupported_format` if the format needs Calibre and it is missing |
 | `GET /libraries/:lib/search` | `q` (≥ 2 chars), `kind=all\|books\|authors\|series`, `genre` (comma ids), `lang` (comma), `ext`, `from`, `to` (YYYY-MM-DD), `limit` (books, default 200, max 1000) | `{ tookMs, authors: [{id,name,count}] (≤ 20), series: [{id,name,count,authors: string}] (≤ 20), books: Book[], total: number, facets: { genre: [[id,count]], lang: [[code,count]], ext: [[ext,count]] } }`. `q` is prefix-matched per word (FTS5 `word*`); authors/series match on `sort_key` prefix of any word |
 | `GET /languages` | `lib` | `[[code, count]]` for that library |
@@ -139,7 +139,7 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | `POST /devices` | `Device` without `id` | `Device` (`shared: true` needs admin) |
 | `PUT /devices/:id` | `Device` | `Device` |
 | `DELETE /devices/:id` | – | 204 |
-| `POST /send` | `{library, books: number[], device: number, target?: string, fileName?: string}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`) |
+| `POST /send` | `{library, books: number[], device: number, target?: string, fileName?: string, options?: Partial<ConvertOptions>}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`). `options` is merged (shallow) over the device's own options for this send only; the device itself is not changed |
 | `GET /fonts` | – | `string[]` font family names available for embedding |
 
 ## Jobs and events

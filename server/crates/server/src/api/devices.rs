@@ -140,6 +140,11 @@ pub struct SendBody {
     device: i64,
     target: Option<String>,
     file_name: Option<String>,
+    /// Partial `ConvertOptions`, merged (shallow, field by field) over the device's own
+    /// options for this send only; the device itself is left unchanged. Lets the send dialog's
+    /// "generate cover" / "join series" toggles override the device default without the user
+    /// having to edit their device profile.
+    options: Option<serde_json::Value>,
 }
 
 pub async fn send(
@@ -149,7 +154,21 @@ pub async fn send(
 ) -> ApiResult<Json<Job>> {
     let uid = u.id;
     let dev_id = b.device;
-    let device = st.db.run(move |c| db::get_device(c, uid, dev_id)).await?;
+    let mut device = st.db.run(move |c| db::get_device(c, uid, dev_id)).await?;
+    if let Some(patch) = b.options {
+        let patch = patch
+            .as_object()
+            .ok_or_else(|| ApiError::bad_request("options must be an object"))?;
+        let mut val =
+            serde_json::to_value(&device.options).map_err(|e| ApiError::internal(e.to_string()))?;
+        if let Some(obj) = val.as_object_mut() {
+            for (k, v) in patch {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+        device.options = serde_json::from_value(val)
+            .map_err(|e| ApiError::bad_request(format!("invalid options: {e}")))?;
+    }
     let req = SendRequest {
         library: b.library,
         books: b.books,

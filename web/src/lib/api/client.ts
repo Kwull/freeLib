@@ -1,7 +1,7 @@
 import { ApiError } from './types';
 import type {
   Library, Book, BookDetail, Genre, Shelf, Device, Job, Session, NameListResponse,
-  BooksResponse, SearchResponse, Settings, User,
+  BooksResponse, SearchResponse, Settings, User, ConvertOptions,
 } from './types';
 
 const BASE = '/api/v1';
@@ -94,8 +94,10 @@ export const api = {
   createDevice: (d: Omit<Device, 'id'>) => request<Device>('/devices', { method: 'POST', body: JSON.stringify(d) }),
   updateDevice: (id: number, d: Device) => request<Device>(`/devices/${id}`, { method: 'PUT', body: JSON.stringify(d) }),
   deleteDevice: (id: number) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
-  send: (body: { library: number; books: number[]; device: number; target?: string; fileName?: string }) =>
-    request<Job>('/send', { method: 'POST', body: JSON.stringify(body) }),
+  send: (body: {
+    library: number; books: number[]; device: number; target?: string; fileName?: string;
+    options?: Partial<ConvertOptions>;
+  }) => request<Job>('/send', { method: 'POST', body: JSON.stringify(body) }),
   fonts: () => request<string[]>('/fonts'),
 
   // Jobs
