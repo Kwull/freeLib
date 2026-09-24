@@ -29,7 +29,7 @@
   };
 
   let {
-    lib, scope, selectedBookId, onPick, onOpenSend, onOpenShelf, header, onBack,
+    lib, scope, selectedBookId, onPick, onOpenSend, onOpenShelf, header, onBack, onCounts,
   }: {
     lib: number;
     scope: Scope;
@@ -39,6 +39,7 @@
     onOpenShelf: (ids: number[]) => void;
     header?: Header;
     onBack?: () => void;
+    onCounts?: (counts: { books: number; series: number }) => void;
   } = $props();
 
   const ALL_COLUMNS = ['author', 'series', 'genre', 'language', 'format'] as const;
@@ -161,6 +162,12 @@
       for (const r of g.rows) out.push({ kind: 'row', row: r, groupKey: g.key });
     }
     return out;
+  });
+
+  $effect(() => {
+    if (!onCounts) return;
+    const seriesCount = scope.kind === 'author' ? groups.filter((g) => g.name).length : 0;
+    onCounts({ books: total ?? books.length, series: seriesCount });
   });
 
   const availableLangs = $derived.by(() => [...new Set(books.map((b) => b.lang))].sort());

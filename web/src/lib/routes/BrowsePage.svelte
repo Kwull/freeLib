@@ -43,6 +43,25 @@
   const current = $derived(rows.find((r) => r[0] === id) ?? null);
   const title = $derived(kind === 'authors' ? t('nav.authors') : t('nav.series'));
   const filterLabel = $derived(kind === 'authors' ? t('authors.filterLabel') : t('series.filterLabel'));
+
+  let liveBooksCount = $state(0);
+  let liveSeriesCount = $state(0);
+  $effect(() => {
+    liveBooksCount = current ? current[2] : 0;
+    liveSeriesCount = 0;
+  });
+
+  const crumbLetter = $derived(current ? current[1].charAt(0).toUpperCase() : '');
+  const header = $derived(
+    current
+      ? {
+          crumb: `${title} / ${crumbLetter}`,
+          name: current[1],
+          booksCount: liveBooksCount,
+          seriesCount: kind === 'authors' ? liveSeriesCount : undefined,
+        }
+      : undefined,
+  );
 </script>
 
 <div class="browse" class:show-list={mobilePane === 'list'} class:show-books={mobilePane === 'books'}>
@@ -56,6 +75,9 @@
       onPick={pickBook}
       onOpenSend={(ids) => (sendIds = ids)}
       onOpenShelf={(ids) => (shelfIds = ids)}
+      {header}
+      onBack={() => (mobilePane = 'list')}
+      onCounts={(c) => { liveBooksCount = c.books; liveSeriesCount = c.series; }}
     />
     <DetailsPane
       {lib}

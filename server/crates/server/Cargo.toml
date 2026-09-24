@@ -3,8 +3,45 @@ name = "freelib-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+description = "freeLib web edition: HTTP API, OPDS, auth, jobs and the embedded web app"
 
 [dependencies]
 freelib-catalog = { path = "../catalog" }
 freelib-import = { path = "../import" }
 freelib-fb2conv = { path = "../fb2conv" }
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+zip.workspace = true
+quick-xml.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs", "process", "io-util"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "trace", "set-header", "limit"] }
+http-body-util = "0.1"
+rust-embed = { version = "8", features = ["interpolate-folder-path"] }
+mime_guess = "2"
+argon2 = "0.5"
+rand = "0.9"
+subtle = "2"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls-tls", "hostname"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
+webp = "0.3"
+flate2 = "1"
+brotli = "8"
+percent-encoding = "2"
+num_cpus = "1"
+
+[dev-dependencies]
+tempfile.workspace = true

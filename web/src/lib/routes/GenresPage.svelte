@@ -21,6 +21,22 @@
   const top = $derived(genres.filter((g) => g.parent === 0));
   const childrenOf = (pid: number) => genres.filter((g) => g.parent === pid);
   const current = $derived(genres.find((g) => g.id === id) ?? null);
+  let mobilePane = $state<'list' | 'books'>('list');
+  $effect(() => { mobilePane = id ? 'books' : 'list'; });
+
+  let liveBooksCount = $state(0);
+  $effect(() => { liveBooksCount = current ? current.count : 0; });
+
+  const parentName = $derived(current ? genres.find((g) => g.id === current.parent)?.name : undefined);
+  const header = $derived(
+    current
+      ? {
+          crumb: `${t('nav.genres')}${parentName ? ` / ${parentName}` : ''}`,
+          name: current.name,
+          booksCount: liveBooksCount,
+        }
+      : undefined,
+  );
 
   function pickBook(bid: number) {
     selectedBookId = bid;
@@ -28,7 +44,7 @@
   }
 </script>
 
-<div class="genres-page">
+<div class="genres-page" class:show-list={mobilePane === 'list'} class:show-books={mobilePane === 'books'}>
   <section aria-label={t('genres.title')} class="tree">
     <div class="head"><h2>{t('genres.title')}</h2></div>
     <div class="scroll">
@@ -49,6 +65,9 @@
       onPick={pickBook}
       onOpenSend={(ids) => (sendIds = ids)}
       onOpenShelf={(ids) => (shelfIds = ids)}
+      {header}
+      onBack={() => (mobilePane = 'list')}
+      onCounts={(c) => (liveBooksCount = c.books)}
     />
     <DetailsPane {lib} bookId={selectedBookId} onSend={(ids) => (sendIds = ids)} onAddShelf={(ids) => (shelfIds = ids)} />
   {:else}
@@ -71,4 +90,9 @@
   .row.active { background: var(--accent-soft); color: var(--accent-soft-ink); font-weight: 500; }
   .n { color: var(--muted); font-size: 12px; }
   .placeholder { flex-grow: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); background: var(--surface); }
+  @media (max-width: 900px) {
+    .genres-page > :global(*) { display: none; }
+    .genres-page.show-list > .tree { display: flex; width: 100%; }
+    .genres-page.show-books > :global(main) { display: flex; width: 100%; }
+  }
 </style>
