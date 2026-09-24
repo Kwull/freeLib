@@ -1,0 +1,18 @@
+services:
+  freelib:
+    image: ghcr.io/kwull/freelib:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: full
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./books:/books:ro
+      - ./data:/data
+      - ./cache:/cache
+      - ./export:/export
+    environment:
+      FREELIB_ADMIN_PASSWORD: ${FREELIB_ADMIN_PASSWORD}
+      # FREELIB_AUTOIMPORT: /books/library.inpx
+    restart: unless-stopped

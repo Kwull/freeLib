@@ -1,0 +1,123 @@
+name: web-edition
+
+on:
+  push:
+    paths:
+      - 'server/**'
+      - 'web/**'
+      - 'docker/**'
+      - 'docs/web/**'
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'web/**'
+      - 'docker/**'
+      - 'docs/web/**'
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+
+      - name: Check formatting
+        working-directory: server
+        run: cargo fmt --check
+
+      - name: Placeholder web/dist for embedded SPA
+        run: mkdir -p web/dist && echo '<!doctype html>' > web/dist/index.html
+
+      - name: Clippy
+        working-directory: server
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: server
+        run: cargo test --workspace
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Check
+        working-directory: web
+        run: pnpm check
+
+      - name: Build
+        working-directory: web
+        run: pnpm build
+
+      - name: Playwright install
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2E tests
+        working-directory: web
+        run: pnpm test:e2e
+
+  docker:
+    needs: [rust, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set lowercase owner
+        id: owner
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          target: full
+          push: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.owner }}/freelib:latest
+            ghcr.io/${{ steps.owner.outputs.owner }}/freelib:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          target: slim
+          push: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.owner }}/freelib:slim
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

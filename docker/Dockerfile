@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1.7
+FROM node:22-bookworm-slim AS web
+RUN corepack enable pnpm
+WORKDIR /build
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web/ ./
+RUN pnpm build
+
+FROM rust:1-bookworm AS build
+COPY server/ /src/server/
+COPY --from=web /build/dist /src/web/dist
+WORKDIR /src/server
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/server/target \
+    cargo build --release --locked -p freelib-server \
+    && cp /src/server/target/release/freelib-server /tmp/freelib-server
+
+FROM debian:bookworm-slim AS slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    tini \
+    && rm -rf /var/lib/apt/lists/*
+RUN useradd -m -u 1000 freelib \
+    && mkdir -p /data /cache /export /books \
+    && chown freelib:freelib /data /cache /export
+COPY --from=build /tmp/freelib-server /usr/local/bin/freelib-server
+RUN chmod +x /usr/local/bin/freelib-server
+USER freelib
+ENV FREELIB_PORT=8080 \
+    FREELIB_DATA_DIR=/data \
+    FREELIB_BOOKS_DIR=/books \
+    FREELIB_CACHE_DIR=/cache \
+    FREELIB_EXPORT_DIR=/export
+VOLUME /data /cache /export
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD freelib-server healthcheck || exit 1
+ENTRYPOINT ["tini", "--"]
+CMD ["freelib-server"]
+
+FROM slim AS full
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    calibre \
+    fonts-dejavu-core \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+ENV QT_QPA_PLATFORM=offscreen \
+    FREELIB_CALIBRE=/usr/bin/ebook-convert
+USER freelib
