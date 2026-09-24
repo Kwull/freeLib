@@ -30,7 +30,12 @@ fn settings_json(st: &AppState, smtp: &SmtpConfig, opds: &OpdsConfig) -> Value {
 pub async fn get(State(st): State<AppState>, Admin(_): Admin) -> ApiResult<Json<Value>> {
     let (smtp, opds) = st
         .db
-        .run(|c| Ok((db::get_setting::<SmtpConfig>(c, "smtp")?, db::get_setting::<OpdsConfig>(c, "opds")?)))
+        .run(|c| {
+            Ok((
+                db::get_setting::<SmtpConfig>(c, "smtp")?,
+                db::get_setting::<OpdsConfig>(c, "opds")?,
+            ))
+        })
         .await?;
     Ok(Json(settings_json(&st, &smtp, &opds)))
 }
@@ -60,12 +65,18 @@ pub struct SettingsIn {
     opds: Option<OpdsIn>,
 }
 
-pub async fn put(State(st): State<AppState>, Admin(_): Admin, Json(b): Json<SettingsIn>) -> ApiResult<Json<Value>> {
+pub async fn put(
+    State(st): State<AppState>,
+    Admin(_): Admin,
+    Json(b): Json<SettingsIn>,
+) -> ApiResult<Json<Value>> {
     if let Some(s) = &b.smtp
         && let Some(sec) = &s.security
         && !["none", "starttls", "tls"].contains(&sec.as_str())
     {
-        return Err(ApiError::bad_request("security must be none, starttls or tls"));
+        return Err(ApiError::bad_request(
+            "security must be none, starttls or tls",
+        ));
     }
     let (smtp, opds) = st
         .db
@@ -117,9 +128,20 @@ pub struct SmtpTest {
     to: String,
 }
 
-pub async fn smtp_test(State(st): State<AppState>, Admin(_): Admin, Json(b): Json<SmtpTest>) -> ApiResult<StatusCode> {
+pub async fn smtp_test(
+    State(st): State<AppState>,
+    Admin(_): Admin,
+    Json(b): Json<SmtpTest>,
+) -> ApiResult<StatusCode> {
     let smtp: SmtpConfig = st.db.run(|c| db::get_setting(c, "smtp")).await?;
-    crate::mail::send(&smtp, &b.to, "freeLib test message", "SMTP settings of freeLib work.", None).await?;
+    crate::mail::send(
+        &smtp,
+        &b.to,
+        "freeLib test message",
+        "SMTP settings of freeLib work.",
+        None,
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -135,10 +157,18 @@ pub struct NewUser {
 }
 
 fn valid_role(r: &str) -> ApiResult<()> {
-    if r == "admin" || r == "reader" { Ok(()) } else { Err(ApiError::bad_request("role must be admin or reader")) }
+    if r == "admin" || r == "reader" {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request("role must be admin or reader"))
+    }
 }
 
-pub async fn create_user(State(st): State<AppState>, Admin(_): Admin, Json(b): Json<NewUser>) -> ApiResult<Json<User>> {
+pub async fn create_user(
+    State(st): State<AppState>,
+    Admin(_): Admin,
+    Json(b): Json<NewUser>,
+) -> ApiResult<Json<User>> {
     auth::validate_username(&b.username)?;
     auth::validate_password(&b.password)?;
     let role = b.role.unwrap_or_else(|| "reader".into());
@@ -147,12 +177,16 @@ pub async fn create_user(State(st): State<AppState>, Admin(_): Admin, Json(b): J
     let pw = b.password;
     let hash = tokio::task::spawn_blocking(move || auth::hash_password(&pw, fast)).await??;
     let name = b.username;
-    let user = st.db.run(move |c| db::insert_user(c, &name, &hash, &role)).await?;
+    let user = st
+        .db
+        .run(move |c| db::insert_user(c, &name, &hash, &role))
+        .await?;
     if st.open_mode() {
         // the first account ends open mode only once an administrator exists
         let admins = st.db.run(|c| db::count_admins(c)).await?;
         if admins > 0 {
-            st.open_mode.store(false, std::sync::atomic::Ordering::Relaxed);
+            st.open_mode
+                .store(false, std::sync::atomic::Ordering::Relaxed);
             tracing::info!("first administrator created: open mode off");
         }
     }
@@ -188,7 +222,9 @@ pub async fn update_user(
         .run(move |c| {
             let u = db::get_user(c, id)?.ok_or_else(|| ApiError::not_found("user not found"))?;
             if role.as_deref() == Some("reader") && u.is_admin() && db::count_admins(c)? <= 1 {
-                return Err(ApiError::conflict("the last administrator cannot be demoted"));
+                return Err(ApiError::conflict(
+                    "the last administrator cannot be demoted",
+                ));
             }
             db::update_user(c, id, hash.as_deref(), role.as_deref())?;
             db::get_user(c, id)?.ok_or_else(|| ApiError::not_found("user not found"))
@@ -199,7 +235,11 @@ pub async fn update_user(
     Ok(Json(user))
 }
 
-pub async fn delete_user(State(st): State<AppState>, Admin(me): Admin, Path(id): Path<i64>) -> ApiResult<StatusCode> {
+pub async fn delete_user(
+    State(st): State<AppState>,
+    Admin(me): Admin,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
     if id == me.id {
         return Err(ApiError::conflict("you cannot delete yourself"));
     }
@@ -207,7 +247,9 @@ pub async fn delete_user(State(st): State<AppState>, Admin(me): Admin, Path(id):
         .run(move |c| {
             let u = db::get_user(c, id)?.ok_or_else(|| ApiError::not_found("user not found"))?;
             if u.is_admin() && db::count_admins(c)? <= 1 {
-                return Err(ApiError::conflict("the last administrator cannot be deleted"));
+                return Err(ApiError::conflict(
+                    "the last administrator cannot be deleted",
+                ));
             }
             db::delete_user(c, id)?;
             Ok(())
@@ -222,11 +264,20 @@ pub async fn get_prefs(State(st): State<AppState>, Auth(u): Auth) -> ApiResult<J
     Ok(Json(serde_json::from_str(&s).unwrap_or_else(|_| json!({}))))
 }
 
-pub async fn put_prefs(State(st): State<AppState>, Auth(u): Auth, body: Bytes) -> ApiResult<Json<Value>> {
+pub async fn put_prefs(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    body: Bytes,
+) -> ApiResult<Json<Value>> {
     if body.len() > PREFS_LIMIT {
-        return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "bad_request", "prefs must be at most 64 KB"));
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "bad_request",
+            "prefs must be at most 64 KB",
+        ));
     }
-    let v: Value = serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(format!("invalid JSON: {e}")))?;
+    let v: Value = serde_json::from_slice(&body)
+        .map_err(|e| ApiError::bad_request(format!("invalid JSON: {e}")))?;
     let s = serde_json::to_string(&v).map_err(|e| ApiError::internal(e.to_string()))?;
     st.db.run(move |c| db::set_prefs(c, u.id, &s)).await?;
     Ok(Json(v))

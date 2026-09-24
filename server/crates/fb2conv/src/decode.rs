@@ -19,10 +19,13 @@ pub fn unzip_fb2(bytes: &[u8]) -> Result<Cow<'_, [u8]>> {
     if !is_zip(bytes) {
         return Ok(Cow::Borrowed(bytes));
     }
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::Zip(e.to_string()))?;
+    let mut zip =
+        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::Zip(e.to_string()))?;
     let mut idx = None;
     for i in 0..zip.len() {
-        let Some(name) = zip.name_for_index(i) else { continue };
+        let Some(name) = zip.name_for_index(i) else {
+            continue;
+        };
         if name.ends_with('/') {
             continue;
         }
@@ -86,7 +89,11 @@ pub fn decode_xml(bytes: &[u8]) -> Cow<'_, str> {
     }
     let enc = declared_encoding(bytes).unwrap_or(UTF_8);
     // UTF-16 declared but no BOM and ASCII-looking bytes: the declaration lies.
-    let enc = if enc == UTF_16LE || enc == UTF_16BE { UTF_8 } else { enc };
+    let enc = if enc == UTF_16LE || enc == UTF_16BE {
+        UTF_8
+    } else {
+        enc
+    };
     if enc == UTF_8 {
         match std::str::from_utf8(bytes) {
             Ok(s) => return Cow::Borrowed(s),
@@ -180,12 +187,15 @@ mod tests {
 
     #[test]
     fn encodings() {
-        let (cp, _, _) = WINDOWS_1251.encode("<?xml version=\"1.0\" encoding=\"windows-1251\"?><a>Привет</a>");
+        let (cp, _, _) =
+            WINDOWS_1251.encode("<?xml version=\"1.0\" encoding=\"windows-1251\"?><a>Привет</a>");
         assert!(decode_xml(&cp).contains("Привет"));
-        let (k, _, _) = encoding_rs::KOI8_R.encode("<?xml version='1.0' encoding='koi8-r'?><a>Привет</a>");
+        let (k, _, _) =
+            encoding_rs::KOI8_R.encode("<?xml version='1.0' encoding='koi8-r'?><a>Привет</a>");
         assert!(decode_xml(&k).contains("Привет"));
         // mislabelled cp1251 declared as utf-8
-        let (cp, _, _) = WINDOWS_1251.encode("<?xml version=\"1.0\" encoding=\"utf-8\"?><a>Привет мир, как дела</a>");
+        let (cp, _, _) = WINDOWS_1251
+            .encode("<?xml version=\"1.0\" encoding=\"utf-8\"?><a>Привет мир, как дела</a>");
         assert!(decode_xml(&cp).contains("Привет"));
         let mut u16 = vec![0xff, 0xfe];
         for c in "<a>Привет</a>".encode_utf16() {

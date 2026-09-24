@@ -12,10 +12,37 @@ use freelib_fb2conv::{Assets, ConvertOptions, fb2_to_epub, read_info, to_kepub};
 /// Builds a synthetic FB2 of roughly `kb` kilobytes (Russian prose, notes, a poem, an image).
 fn synthetic(kb: usize) -> Vec<u8> {
     // pseudo-random words from Russian syllables: lots of unique words, like real prose
-    const SYL: [&str; 24] = ["ра", "мо", "ски", "вер", "ло", "да", "не", "при", "сто", "ван", "ка", "ли", "тель", "ность", "про", "же", "ни", "ма", "об", "ре", "ту", "зна", "ще", "го"];
+    const SYL: [&str; 24] = [
+        "ра",
+        "мо",
+        "ски",
+        "вер",
+        "ло",
+        "да",
+        "не",
+        "при",
+        "сто",
+        "ван",
+        "ка",
+        "ли",
+        "тель",
+        "ность",
+        "про",
+        "же",
+        "ни",
+        "ма",
+        "об",
+        "ре",
+        "ту",
+        "зна",
+        "ще",
+        "го",
+    ];
     let mut seed: u64 = 42;
     let mut rnd = move |n: u64| {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (seed >> 33) % n
     };
     let mut sentence = move || {
@@ -32,7 +59,13 @@ fn synthetic(kb: usize) -> Vec<u8> {
                 word = first + c.as_str();
             }
             s.push_str(&word);
-            s.push_str(if w + 1 == words { ". " } else if rnd(8) == 0 { ", " } else { " " });
+            s.push_str(if w + 1 == words {
+                ". "
+            } else if rnd(8) == 0 {
+                ", "
+            } else {
+                " "
+            });
         }
         s
     };
@@ -41,8 +74,12 @@ fn synthetic(kb: usize) -> Vec<u8> {
     let mut ch = 0;
     while body.len() < kb * 1024 {
         ch += 1;
-        body.push_str(&format!("<section id=\"c{ch}\"><title><p>Глава {ch}</p></title>\n"));
-        body.push_str("<epigraph><p>Эпиграф к главе.</p><text-author>Автор</text-author></epigraph>\n");
+        body.push_str(&format!(
+            "<section id=\"c{ch}\"><title><p>Глава {ch}</p></title>\n"
+        ));
+        body.push_str(
+            "<epigraph><p>Эпиграф к главе.</p><text-author>Автор</text-author></epigraph>\n",
+        );
         for p in 0..40 {
             body.push_str("<p>");
             for _ in 0..4 {
@@ -103,7 +140,11 @@ fn main() {
     }
     let t_conv = t.elapsed() / n;
     let t = Instant::now();
-    let k = if kepub { Some(to_kepub(&epub).expect("kepub")) } else { None };
+    let k = if kepub {
+        Some(to_kepub(&epub).expect("kepub"))
+    } else {
+        None
+    };
     let t_kepub = t.elapsed();
     eprintln!(
         "{:?}: input {} KB, epub {} KB; read_info {:?}, fb2_to_epub {:?} (avg of {n}), to_kepub {:?}",

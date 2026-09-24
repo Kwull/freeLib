@@ -14,7 +14,8 @@ const MAX_BOOK: u64 = 512 * 1024 * 1024;
 fn safe_rel(rel: &str) -> Result<PathBuf, ApiError> {
     let p = PathBuf::from(rel.replace('\\', "/"));
     if p.as_os_str().is_empty()
-        || p.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+        || p.components()
+            .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
     {
         return Err(ApiError::forbidden("invalid book path"));
     }
@@ -22,7 +23,10 @@ fn safe_rel(rel: &str) -> Result<PathBuf, ApiError> {
 }
 
 fn not_found(what: &Path) -> ApiError {
-    ApiError::not_found(format!("book file not found: {}", what.file_name().unwrap_or_default().to_string_lossy()))
+    ApiError::not_found(format!(
+        "book file not found: {}",
+        what.file_name().unwrap_or_default().to_string_lossy()
+    ))
 }
 
 /// Reads the original file of `d` from the library folder `lib_dir`. Blocking.
@@ -47,31 +51,40 @@ pub fn read_original(lib_dir: &Path, d: &BookDetail) -> Result<Vec<u8>, ApiError
     }
     // fallback: central directory lookup
     f.seek(SeekFrom::Start(0))?;
-    let mut za = zip::ZipArchive::new(f).map_err(|e| ApiError::internal(format!("zip {}: {e}", d.archive)))?;
+    let mut za = zip::ZipArchive::new(f)
+        .map_err(|e| ApiError::internal(format!("zip {}: {e}", d.archive)))?;
     let name = d.entry_name();
-    let mut entry = match za.by_name(&name) {
-        Ok(e) => e,
-        Err(_) => {
-            // some archives store names with different case or folders
-            let idx = (0..za.len()).find(|&i| {
-                za.name_for_index(i)
-                    .is_some_and(|n| n.eq_ignore_ascii_case(&name) || n.rsplit('/').next() == Some(name.as_str()))
-            });
-            match idx {
-                Some(i) => za.by_index(i).map_err(|e| ApiError::internal(format!("zip: {e}")))?,
-                None => return Err(ApiError::not_found(format!("{name} not found in {}", d.archive))),
-            }
-        }
+    let idx = match za.index_for_name(&name) {
+        Some(i) => i,
+        // some archives store names with different case or inside folders
+        None => (0..za.len())
+            .find(|&i| {
+                za.name_for_index(i).is_some_and(|n| {
+                    n.eq_ignore_ascii_case(&name) || n.rsplit('/').next() == Some(name.as_str())
+                })
+            })
+            .ok_or_else(|| ApiError::not_found(format!("{name} not found in {}", d.archive)))?,
     };
+    let mut entry = za
+        .by_index(idx)
+        .map_err(|e| ApiError::internal(format!("zip: {e}")))?;
     if entry.size() > MAX_BOOK {
         return Err(ApiError::bad_request("book file too large"));
     }
     let mut v = Vec::with_capacity(entry.size() as usize);
-    entry.read_to_end(&mut v).map_err(|e| ApiError::internal(format!("zip read: {e}")))?;
+    entry
+        .read_to_end(&mut v)
+        .map_err(|e| ApiError::internal(format!("zip read: {e}")))?;
     Ok(v)
 }
 
-fn read_at_offset(f: &mut File, header: u64, csize: u64, method: i64, size_hint: i64) -> Option<Vec<u8>> {
+fn read_at_offset(
+    f: &mut File,
+    header: u64,
+    csize: u64,
+    method: i64,
+    size_hint: i64,
+) -> Option<Vec<u8>> {
     if csize > MAX_BOOK {
         return None;
     }
@@ -83,7 +96,10 @@ fn read_at_offset(f: &mut File, header: u64, csize: u64, method: i64, size_hint:
         0 => Some(raw),
         8 => {
             let mut out = Vec::with_capacity(size_hint.clamp(0, 64 << 20) as usize);
-            flate2::read::DeflateDecoder::new(&raw[..]).take(MAX_BOOK).read_to_end(&mut out).ok()?;
+            flate2::read::DeflateDecoder::new(&raw[..])
+                .take(MAX_BOOK)
+                .read_to_end(&mut out)
+                .ok()?;
             Some(out)
         }
         _ => None,

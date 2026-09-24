@@ -6,8 +6,8 @@ use axum::routing::{get, post, put};
 
 use crate::state::AppState;
 
-pub mod browse;
 pub mod books;
+pub mod browse;
 pub mod devices;
 pub mod jobs;
 pub mod libraries;
@@ -24,7 +24,10 @@ pub fn router() -> Router<AppState> {
         .route("/login", post(session::login))
         .route("/logout", post(session::logout))
         .route("/libraries", get(libraries::list).post(libraries::create))
-        .route("/libraries/{lib}", axum::routing::patch(libraries::update).delete(libraries::delete))
+        .route(
+            "/libraries/{lib}",
+            axum::routing::patch(libraries::update).delete(libraries::delete),
+        )
         .route("/libraries/{lib}/import", post(libraries::import))
         .route("/fs", get(libraries::fs))
         .route("/libraries/{lib}/authors", get(browse::authors))
@@ -38,10 +41,16 @@ pub fn router() -> Router<AppState> {
         .route("/libraries/{lib}/books/{id}/file", get(books::file))
         .route("/libraries/{lib}/books/{id}/rating", put(shelves::rating))
         .route("/shelves", get(shelves::list).post(shelves::create))
-        .route("/shelves/{id}", axum::routing::patch(shelves::update).delete(shelves::delete))
+        .route(
+            "/shelves/{id}",
+            axum::routing::patch(shelves::update).delete(shelves::delete),
+        )
         .route("/shelves/{id}/books", post(shelves::books))
         .route("/devices", get(devices::list).post(devices::create))
-        .route("/devices/{id}", put(devices::update).delete(devices::delete))
+        .route(
+            "/devices/{id}",
+            put(devices::update).delete(devices::delete),
+        )
         .route("/send", post(devices::send))
         .route("/fonts", get(devices::fonts))
         .route("/jobs", get(jobs::list).delete(jobs::clear))
@@ -51,14 +60,26 @@ pub fn router() -> Router<AppState> {
         .route("/settings", get(settings::get).put(settings::put))
         .route("/settings/smtp/test", post(settings::smtp_test))
         .route("/users", get(settings::users).post(settings::create_user))
-        .route("/users/{id}", axum::routing::patch(settings::update_user).delete(settings::delete_user))
-        .route("/me/prefs", get(settings::get_prefs).put(settings::put_prefs))
+        .route(
+            "/users/{id}",
+            axum::routing::patch(settings::update_user).delete(settings::delete_user),
+        )
+        .route(
+            "/me/prefs",
+            get(settings::get_prefs).put(settings::put_prefs),
+        )
         .fallback(|| async { crate::error::ApiError::not_found("no such endpoint") })
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
 }
 
 /// Parses a comma-separated list, ignoring empty items.
 pub fn split_list(s: Option<&str>) -> Vec<String> {
-    s.map(|s| s.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect())
-        .unwrap_or_default()
+    s.map(|s| {
+        s.split(',')
+            .map(str::trim)
+            .filter(|x| !x.is_empty())
+            .map(String::from)
+            .collect()
+    })
+    .unwrap_or_default()
 }

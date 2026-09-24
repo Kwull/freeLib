@@ -2,10 +2,10 @@ use std::convert::Infallible;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::Response;
+use axum::http::{StatusCode, header};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
-use futures_util::{Stream, StreamExt};
+use axum::response::{IntoResponse, Response};
+use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -20,8 +20,15 @@ pub async fn list(State(st): State<AppState>, Auth(u): Auth) -> Json<Vec<Job>> {
     Json(st.jobs.list(&u))
 }
 
-pub async fn cancel(State(st): State<AppState>, Auth(u): Auth, Path(id): Path<String>) -> ApiResult<Json<Job>> {
-    st.jobs.cancel(&id, &u).map(Json).ok_or_else(|| ApiError::not_found("job not found"))
+pub async fn cancel(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Job>> {
+    st.jobs
+        .cancel(&id, &u)
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("job not found"))
 }
 
 #[derive(Deserialize)]
@@ -29,7 +36,11 @@ pub struct ClearQuery {
     finished: Option<String>,
 }
 
-pub async fn clear(State(st): State<AppState>, Auth(u): Auth, Query(q): Query<ClearQuery>) -> ApiResult<StatusCode> {
+pub async fn clear(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Query(q): Query<ClearQuery>,
+) -> ApiResult<StatusCode> {
     if q.finished.as_deref() != Some("1") {
         return Err(ApiError::bad_request("only finished=1 is supported"));
     }
@@ -39,8 +50,15 @@ pub async fn clear(State(st): State<AppState>, Auth(u): Auth, Query(q): Query<Cl
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn download(State(st): State<AppState>, Auth(u): Auth, Path(id): Path<String>) -> ApiResult<Response> {
-    let f = st.jobs.file(&id, &u).ok_or_else(|| ApiError::not_found("no file for this job"))?;
+pub async fn download(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    let f = st
+        .jobs
+        .file(&id, &u)
+        .ok_or_else(|| ApiError::not_found("no file for this job"))?;
     if !f.path.is_file() {
         return Err(ApiError::not_found("file expired"));
     }
@@ -48,7 +66,8 @@ pub async fn download(State(st): State<AppState>, Auth(u): Auth, Path(id): Path<
     file_response(Produced::File(f.path), &f.name, &ext, false).await
 }
 
-pub async fn events(State(st): State<AppState>, Auth(u): Auth) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+/// SSE stream; `X-Accel-Buffering: no` asks nginx-style proxies not to buffer it.
+pub async fn events(State(st): State<AppState>, Auth(u): Auth) -> impl IntoResponse {
     let rx = st.events().subscribe();
     let st2 = st.clone();
     let stream = BroadcastStream::new(rx)
@@ -61,7 +80,9 @@ pub async fn events(State(st): State<AppState>, Auth(u): Auth) -> Sse<impl Strea
                     return None;
                 }
                 match ev {
-                    Event::Job { job, .. } => Some(SseEvent::default().event("job").json_data(&job).ok()?),
+                    Event::Job { job, .. } => {
+                        Some(SseEvent::default().event("job").json_data(&job).ok()?)
+                    }
                     Event::Library { id } => {
                         let lib = st.library_dto_async(id, u.id).await.ok()?;
                         Some(SseEvent::default().event("library").json_data(&lib).ok()?)
@@ -69,6 +90,12 @@ pub async fn events(State(st): State<AppState>, Auth(u): Auth) -> Sse<impl Strea
                 }
             }
         })
-        .map(Ok);
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(st.cfg.sse_heartbeat).text("ping"))
+        .map(Ok::<SseEvent, Infallible>);
+    (
+        [
+            (header::CACHE_CONTROL, "no-cache"),
+            (header::HeaderName::from_static("x-accel-buffering"), "no"),
+        ],
+        Sse::new(stream).keep_alive(KeepAlive::new().interval(st.cfg.sse_heartbeat).text("ping")),
+    )
 }

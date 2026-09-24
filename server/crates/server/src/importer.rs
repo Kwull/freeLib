@@ -27,13 +27,23 @@ pub async fn start(st: &AppState, lib_id: i64, owner: &User) -> ApiResult<Job> {
     let (job, cancel) = {
         let mut g = rt.import.lock().unwrap_or_else(|e| e.into_inner());
         if g.is_some() {
-            return Err(ApiError::conflict("an import of this library is already running"));
+            return Err(ApiError::conflict(
+                "an import of this library is already running",
+            ));
         }
-        let (job, cancel) = st.jobs.create("import", &format!("Import · {}", row.name), owner.id);
-        *g = Some(ImportRun { job_id: job.id.clone() });
+        let (job, cancel) = st
+            .jobs
+            .create("import", &format!("Import · {}", row.name), owner.id);
+        *g = Some(ImportRun {
+            job_id: job.id.clone(),
+        });
         (job, cancel)
     };
-    rt.set_status(LibraryStatus { state: "importing".into(), progress: Some(0.0), message: None });
+    rt.set_status(LibraryStatus {
+        state: "importing".into(),
+        progress: Some(0.0),
+        message: None,
+    });
     st.emit_library(lib_id);
     let opts = ImportOptions {
         inpx: PathBuf::from(inpx),
@@ -50,22 +60,41 @@ pub async fn start(st: &AppState, lib_id: i64, owner: &User) -> ApiResult<Job> {
     Ok(job)
 }
 
-async fn run(st: AppState, rt: Arc<LibRuntime>, job_id: String, opts: ImportOptions, cancel: Arc<AtomicBool>) {
+async fn run(
+    st: AppState,
+    rt: Arc<LibRuntime>,
+    job_id: String,
+    opts: ImportOptions,
+    cancel: Arc<AtomicBool>,
+) {
     st.jobs.running(&job_id, 0.0, "Starting");
-    st.jobs.log(&job_id, &format!("Reading {}", opts.inpx.display()));
+    st.jobs
+        .log(&job_id, &format!("Reading {}", opts.inpx.display()));
     let st2 = st.clone();
     let rt2 = rt.clone();
     let jid = job_id.clone();
     let result = tokio::task::spawn_blocking(move || {
         let last_emit = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
         let progress = |done: u64, total: u64, msg: &str| {
-            let p = if total > 0 { done as f64 / total as f64 } else { 0.0 };
+            let p = if total > 0 {
+                done as f64 / total as f64
+            } else {
+                0.0
+            };
             st2.jobs.running(&jid, p, msg);
             let step = (total / 10).max(1);
-            if !msg.is_empty() && (done == 0 || done + freelib_import::builder::FINISH_STEPS >= total || done % step == 0) {
+            if !msg.is_empty()
+                && (done == 0
+                    || done + freelib_import::builder::FINISH_STEPS >= total
+                    || done % step == 0)
+            {
                 st2.jobs.log(&jid, msg);
             }
-            rt2.set_status(LibraryStatus { state: "importing".into(), progress: Some(p), message: Some(msg.into()) });
+            rt2.set_status(LibraryStatus {
+                state: "importing".into(),
+                progress: Some(p),
+                message: Some(msg.into()),
+            });
             let mut le = last_emit.lock().unwrap_or_else(|e| e.into_inner());
             if le.elapsed() > Duration::from_millis(500) || done >= total {
                 *le = Instant::now();
@@ -90,7 +119,10 @@ async fn run(st: AppState, rt: Arc<LibRuntime>, job_id: String, opts: ImportOpti
                         stats.elapsed_ms as f64 / 1000.0
                     );
                     if !stats.missing_archives.is_empty() {
-                        msg.push_str(&format!("; {} archives missing", stats.missing_archives.len()));
+                        msg.push_str(&format!(
+                            "; {} archives missing",
+                            stats.missing_archives.len()
+                        ));
                         for a in stats.missing_archives.iter().take(20) {
                             st.jobs.log(&job_id, &format!("Missing archive: {a}"));
                         }
@@ -103,7 +135,11 @@ async fn run(st: AppState, rt: Arc<LibRuntime>, job_id: String, opts: ImportOpti
                 }
                 Err(e) => {
                     let m = format!("imported catalog cannot be opened: {e}");
-                    rt.set_status(LibraryStatus { state: "error".into(), progress: None, message: Some(m.clone()) });
+                    rt.set_status(LibraryStatus {
+                        state: "error".into(),
+                        progress: None,
+                        message: Some(m.clone()),
+                    });
                     st.jobs.fail(&job_id, &m);
                     st.emit_library(rt.id);
                 }
@@ -117,14 +153,22 @@ async fn run(st: AppState, rt: Arc<LibRuntime>, job_id: String, opts: ImportOpti
         Ok(Err(e)) => {
             let m = format!("import failed: {e}");
             tracing::warn!(lib = rt.id, "{m}");
-            rt.set_status(LibraryStatus { state: "error".into(), progress: None, message: Some(m.clone()) });
+            rt.set_status(LibraryStatus {
+                state: "error".into(),
+                progress: None,
+                message: Some(m.clone()),
+            });
             st.jobs.log(&job_id, &m);
             st.jobs.fail(&job_id, &m);
             st.emit_library(rt.id);
         }
         Err(e) => {
             let m = format!("import task failed: {e}");
-            rt.set_status(LibraryStatus { state: "error".into(), progress: None, message: Some(m.clone()) });
+            rt.set_status(LibraryStatus {
+                state: "error".into(),
+                progress: None,
+                message: Some(m.clone()),
+            });
             st.jobs.fail(&job_id, &m);
             st.emit_library(rt.id);
         }
@@ -137,16 +181,24 @@ pub fn warm(st: &AppState, rt: &Arc<LibRuntime>, cat: Arc<freelib_catalog::Catal
     let rt = rt.clone();
     tokio::task::spawn_blocking(move || {
         let t = Instant::now();
+        for kind in ["authors", "series"] {
+            if let Ok(body) = crate::api::browse::build_list(&rt, &cat, kind) {
+                body.encoded("br");
+            }
+        }
         if let Err(e) = cat.attrs() {
             tracing::warn!(lib = rt.id, "attribute load failed: {e}");
         }
         for kind in ["authors", "series"] {
             if let Ok(body) = crate::api::browse::build_list(&rt, &cat, kind) {
-                body.encoded("br");
                 body.encoded("gzip");
             }
         }
         let _ = &st;
-        tracing::info!(lib = rt.id, ms = t.elapsed().as_millis() as u64, "catalog warmed up");
+        tracing::info!(
+            lib = rt.id,
+            ms = t.elapsed().as_millis() as u64,
+            "catalog warmed up"
+        );
     });
 }

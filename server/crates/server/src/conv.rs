@@ -7,7 +7,12 @@ pub trait Converter: Send + Sync {
     fn read_info(&self, bytes: &[u8]) -> anyhow::Result<BookInfo>;
     fn fb2_to_epub(&self, fb2: &[u8], opts: &ConvertOptions) -> anyhow::Result<Vec<u8>>;
     /// Several FB2 books (one series) → one EPUB.
-    fn join_to_epub(&self, books: &[&[u8]], opts: &ConvertOptions, title: Option<&str>) -> anyhow::Result<Vec<u8>>;
+    fn join_to_epub(
+        &self,
+        books: &[&[u8]],
+        opts: &ConvertOptions,
+        title: Option<&str>,
+    ) -> anyhow::Result<Vec<u8>>;
     fn to_kepub(&self, epub: &[u8]) -> anyhow::Result<Vec<u8>>;
     /// Relative file name (may contain `/`) without extension.
     fn file_name(&self, template: &str, fields: &NameFields, transliterate: bool) -> String;
@@ -25,8 +30,18 @@ impl Converter for Fb2Conv {
     fn fb2_to_epub(&self, fb2: &[u8], opts: &ConvertOptions) -> anyhow::Result<Vec<u8>> {
         Ok(freelib_fb2conv::fb2_to_epub(fb2, opts, Assets::shared())?)
     }
-    fn join_to_epub(&self, books: &[&[u8]], opts: &ConvertOptions, title: Option<&str>) -> anyhow::Result<Vec<u8>> {
-        Ok(freelib_fb2conv::join_to_epub(books, opts, Assets::shared(), title)?)
+    fn join_to_epub(
+        &self,
+        books: &[&[u8]],
+        opts: &ConvertOptions,
+        title: Option<&str>,
+    ) -> anyhow::Result<Vec<u8>> {
+        Ok(freelib_fb2conv::join_to_epub(
+            books,
+            opts,
+            Assets::shared(),
+            title,
+        )?)
     }
     fn to_kepub(&self, epub: &[u8]) -> anyhow::Result<Vec<u8>> {
         Ok(freelib_fb2conv::to_kepub(epub)?)

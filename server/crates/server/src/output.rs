@@ -14,7 +14,9 @@ use crate::util::short_hash;
 pub const ALL_FORMATS: [&str; 6] = ["original", "epub", "kepub", "azw3", "mobi", "pdf"];
 const CALIBRE_FORMATS: [&str; 3] = ["azw3", "mobi", "pdf"];
 /// Non-FB2/EPUB inputs Calibre converts reasonably.
-const CALIBRE_INPUTS: [&str; 11] = ["txt", "rtf", "html", "htm", "doc", "docx", "odt", "mobi", "azw3", "azw", "prc"];
+const CALIBRE_INPUTS: [&str; 11] = [
+    "txt", "rtf", "html", "htm", "doc", "docx", "odt", "mobi", "azw3", "azw", "prc",
+];
 
 /// Formats this server can produce for a book with extension `ext`.
 pub fn formats_for(ext: &str, calibre: bool) -> Vec<String> {
@@ -63,13 +65,20 @@ pub fn check_format(st: &AppState, ext: &str, format: &str) -> ApiResult<()> {
     if !ALL_FORMATS.contains(&format) {
         return Err(ApiError::bad_request(format!("unknown format '{format}'")));
     }
-    if formats_for(ext, st.calibre.is_some()).iter().any(|f| f == format) {
+    if formats_for(ext, st.calibre.is_some())
+        .iter()
+        .any(|f| f == format)
+    {
         return Ok(());
     }
     if formats_for(ext, true).iter().any(|f| f == format) {
-        return Err(ApiError::unsupported(format!("{format} needs Calibre, which is not installed")));
+        return Err(ApiError::unsupported(format!(
+            "{format} needs Calibre, which is not installed"
+        )));
     }
-    Err(ApiError::unsupported(format!("cannot convert {ext} to {format}")))
+    Err(ApiError::unsupported(format!(
+        "cannot convert {ext} to {format}"
+    )))
 }
 
 fn book_hash(d: &BookDetail) -> String {
@@ -77,9 +86,14 @@ fn book_hash(d: &BookDetail) -> String {
 }
 
 fn profile_hash(st: &AppState, format: &str, opts: &ConvertOptions) -> String {
-    let calibre = st.calibre.as_ref().and_then(|c| c.version.clone()).unwrap_or_default();
+    let calibre = st
+        .calibre
+        .as_ref()
+        .and_then(|c| c.version.clone())
+        .unwrap_or_default();
     let o = serde_json::to_string(opts).unwrap_or_default();
-    short_hash(format!("{format}\0{o}\0{}\0{calibre}", st.conv.version()).as_bytes())[..12].to_string()
+    short_hash(format!("{format}\0{o}\0{}\0{calibre}", st.conv.version()).as_bytes())[..12]
+        .to_string()
 }
 
 async fn read_original(lib_dir: PathBuf, d: BookDetail) -> ApiResult<Vec<u8>> {
@@ -108,14 +122,25 @@ pub async fn produce(
     let ext = d.book.ext.as_str();
     check_format(st, ext, format)?;
     if format == "original" || (format == "epub" && ext == "epub") {
-        return Ok(Produced::Bytes(read_original(lib_dir.to_path_buf(), d.clone()).await?));
+        return Ok(Produced::Bytes(
+            read_original(lib_dir.to_path_buf(), d.clone()).await?,
+        ));
     }
     let out_dir = st.cache_dir("out", lib_id);
-    let target = out_dir.join(format!("{}-{}.{}", book_hash(d), profile_hash(st, format, opts), file_ext(format, ext)));
+    let target = out_dir.join(format!(
+        "{}-{}.{}",
+        book_hash(d),
+        profile_hash(st, format, opts),
+        file_ext(format, ext)
+    ));
     if target.is_file() {
         return Ok(Produced::File(target));
     }
-    let _permit = st.workers.acquire().await.map_err(|_| ApiError::internal("worker pool closed"))?;
+    let _permit = st
+        .workers
+        .acquire()
+        .await
+        .map_err(|_| ApiError::internal("worker pool closed"))?;
     if target.is_file() {
         return Ok(Produced::File(target));
     }
@@ -155,7 +180,13 @@ pub async fn produce(
 }
 
 /// EPUB bytes of the book (cached conversion for FB2, original for EPUB). Caller holds a permit.
-async fn epub_bytes(st: &AppState, lib_id: i64, lib_dir: &Path, d: &BookDetail, opts: &ConvertOptions) -> ApiResult<Vec<u8>> {
+async fn epub_bytes(
+    st: &AppState,
+    lib_id: i64,
+    lib_dir: &Path,
+    d: &BookDetail,
+    opts: &ConvertOptions,
+) -> ApiResult<Vec<u8>> {
     let ext = d.book.ext.as_str();
     if ext == "epub" {
         return read_original(lib_dir.to_path_buf(), d.clone()).await;
@@ -163,9 +194,11 @@ async fn epub_bytes(st: &AppState, lib_id: i64, lib_dir: &Path, d: &BookDetail, 
     if ext != "fb2" {
         return calibre_convert(st, lib_dir, d, "epub").await;
     }
-    let cached = st
-        .cache_dir("out", lib_id)
-        .join(format!("{}-{}.epub", book_hash(d), profile_hash(st, "epub", opts)));
+    let cached = st.cache_dir("out", lib_id).join(format!(
+        "{}-{}.epub",
+        book_hash(d),
+        profile_hash(st, "epub", opts)
+    ));
     if let Ok(b) = tokio::fs::read(&cached).await {
         return Ok(b);
     }
@@ -179,17 +212,29 @@ async fn epub_bytes(st: &AppState, lib_id: i64, lib_dir: &Path, d: &BookDetail, 
     Ok(epub)
 }
 
-async fn calibre_convert(st: &AppState, lib_dir: &Path, d: &BookDetail, to: &str) -> ApiResult<Vec<u8>> {
+async fn calibre_convert(
+    st: &AppState,
+    lib_dir: &Path,
+    d: &BookDetail,
+    to: &str,
+) -> ApiResult<Vec<u8>> {
     let input = read_original(lib_dir.to_path_buf(), d.clone()).await?;
     calibre_run(st, &input, &d.book.ext, to).await
 }
 
 /// Runs Calibre on `input` (with extension `from`) and returns the output bytes.
 pub async fn calibre_run(st: &AppState, input: &[u8], from: &str, to: &str) -> ApiResult<Vec<u8>> {
-    let calibre = st.calibre.as_ref().ok_or_else(|| ApiError::unsupported(format!("{to} needs Calibre")))?;
+    let calibre = st
+        .calibre
+        .as_ref()
+        .ok_or_else(|| ApiError::unsupported(format!("{to} needs Calibre")))?;
     let tmp = st.cfg.cache_dir.join("tmp").join(crate::util::random_id());
     tokio::fs::create_dir_all(&tmp).await?;
-    let from = if from.chars().all(|c| c.is_ascii_alphanumeric()) && !from.is_empty() { from } else { "bin" };
+    let from = if from.chars().all(|c| c.is_ascii_alphanumeric()) && !from.is_empty() {
+        from
+    } else {
+        "bin"
+    };
     let inp = tmp.join(format!("in.{from}"));
     let out = tmp.join(format!("out.{to}"));
     let r = async {
@@ -223,7 +268,14 @@ pub fn name_fields(d: &freelib_catalog::Book) -> NameFields {
 
 /// Download file name: template (default `%a - %s %n - %b`) + extension, `/` flattened to ` - `
 /// when `flat` (single download), kept as sub-folders otherwise.
-pub fn download_name(st: &AppState, template: &str, b: &freelib_catalog::Book, format: &str, transliterate: bool, flat: bool) -> String {
+pub fn download_name(
+    st: &AppState,
+    template: &str,
+    b: &freelib_catalog::Book,
+    format: &str,
+    transliterate: bool,
+    flat: bool,
+) -> String {
     let base = st.conv.file_name(template, &name_fields(b), transliterate);
     let base = if flat { base.replace('/', " - ") } else { base };
     format!("{base}.{}", file_ext(format, &b.ext))

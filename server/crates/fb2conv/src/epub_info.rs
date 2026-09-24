@@ -16,7 +16,10 @@ pub(crate) fn read_entry(zip: &mut Zip, name: &str) -> Option<Vec<u8>> {
     let idx = zip.index_for_name(name).or_else(|| {
         // case-insensitive fallback
         let lower = name.to_ascii_lowercase();
-        (0..zip.len()).find(|&i| zip.name_for_index(i).is_some_and(|n| n.to_ascii_lowercase() == lower))
+        (0..zip.len()).find(|&i| {
+            zip.name_for_index(i)
+                .is_some_and(|n| n.to_ascii_lowercase() == lower)
+        })
     })?;
     let f = zip.by_index(idx).ok()?;
     let mut out = Vec::with_capacity(f.size().min(MAX_ENTRY) as usize);
@@ -83,13 +86,25 @@ fn person_from_name(name: &str, file_as: Option<&str>) -> Person {
         let mut it = rest.split_whitespace();
         let first = it.next().unwrap_or("").to_string();
         let middle = it.collect::<Vec<_>>().join(" ");
-        return Person { first, middle, last: last.trim().to_string(), nickname: String::new() };
+        return Person {
+            first,
+            middle,
+            last: last.trim().to_string(),
+            nickname: String::new(),
+        };
     }
     let words: Vec<&str> = name.split_whitespace().collect();
     match words.len() {
         0 => Person::default(),
-        1 => Person { last: words[0].to_string(), ..Default::default() },
-        2 => Person { first: words[0].to_string(), last: words[1].to_string(), ..Default::default() },
+        1 => Person {
+            last: words[0].to_string(),
+            ..Default::default()
+        },
+        2 => Person {
+            first: words[0].to_string(),
+            last: words[1].to_string(),
+            ..Default::default()
+        },
         n => Person {
             first: words[0].to_string(),
             middle: words[1..n - 1].join(" "),
@@ -101,21 +116,29 @@ fn person_from_name(name: &str, file_as: Option<&str>) -> Person {
 
 /// Reads EPUB metadata (OPF `dc:*`, Calibre / EPUB 3 series) and the cover image.
 pub fn read_info_epub(bytes: &[u8]) -> Result<BookInfo> {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::Zip(e.to_string()))?;
-    let container = read_entry(&mut zip, "META-INF/container.xml").ok_or_else(|| Error::Format("EPUB without META-INF/container.xml".into()))?;
+    let mut zip =
+        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::Zip(e.to_string()))?;
+    let container = read_entry(&mut zip, "META-INF/container.xml")
+        .ok_or_else(|| Error::Format("EPUB without META-INF/container.xml".into()))?;
     let croot = parse_xml(&container);
     let mut rootfiles = Vec::new();
     find_desc(&croot, "rootfile", &mut rootfiles);
     let opf_path = rootfiles
         .iter()
-        .find(|r| r.attr("media-type").is_none_or(|m| m == "application/oebps-package+xml"))
+        .find(|r| {
+            r.attr("media-type")
+                .is_none_or(|m| m == "application/oebps-package+xml")
+        })
         .and_then(|r| r.attr("full-path"))
         .ok_or_else(|| Error::Format("EPUB container without rootfile".into()))?
         .to_string();
-    let opf = read_entry(&mut zip, &opf_path).ok_or_else(|| Error::Format(format!("missing OPF {opf_path}")))?;
+    let opf = read_entry(&mut zip, &opf_path)
+        .ok_or_else(|| Error::Format(format!("missing OPF {opf_path}")))?;
     let oroot = parse_xml(&opf);
     let package = dom::root_element(&oroot).ok_or_else(|| Error::Format("empty OPF".into()))?;
-    let meta = package.child("metadata").ok_or_else(|| Error::Format("OPF without metadata".into()))?;
+    let meta = package
+        .child("metadata")
+        .ok_or_else(|| Error::Format("OPF without metadata".into()))?;
     // Some OPFs nest dc-metadata (OPF 1.x); flatten
     let mut md: Vec<&Element> = meta.elements().collect();
     if let Some(dcm) = meta.child("dc-metadata") {
@@ -129,19 +152,29 @@ pub fn read_info_epub(bytes: &[u8]) -> Result<BookInfo> {
     let refines = |id: Option<&str>, prop: &str| -> Option<String> {
         let id = id?;
         md.iter()
-            .find(|m| m.name == "meta" && m.attr("refines") == Some(&format!("#{id}")) && m.attr("property") == Some(prop))
+            .find(|m| {
+                m.name == "meta"
+                    && m.attr("refines") == Some(&format!("#{id}"))
+                    && m.attr("property") == Some(prop)
+            })
             .map(|m| m.clean_text())
     };
     for m in &md {
         match m.name.as_str() {
             "title" if info.title.is_empty() => info.title = m.clean_text(),
             "creator" => {
-                let role = m.attr("role").map(str::to_string).or_else(|| refines(m.attr("id"), "role"));
+                let role = m
+                    .attr("role")
+                    .map(str::to_string)
+                    .or_else(|| refines(m.attr("id"), "role"));
                 let name = m.clean_text();
                 if name.is_empty() {
                     continue;
                 }
-                let file_as = m.attr("file-as").map(str::to_string).or_else(|| refines(m.attr("id"), "file-as"));
+                let file_as = m
+                    .attr("file-as")
+                    .map(str::to_string)
+                    .or_else(|| refines(m.attr("id"), "file-as"));
                 let p = person_from_name(&name, file_as.as_deref());
                 match role.as_deref() {
                     None | Some("aut") => info.authors.push(p),
@@ -171,7 +204,11 @@ pub fn read_info_epub(bytes: &[u8]) -> Result<BookInfo> {
                 if scheme == "isbn" || v.to_ascii_lowercase().starts_with("urn:isbn:") {
                     info.isbn = v.trim_start_matches("urn:isbn:").to_string();
                 }
-                if info.id.is_empty() || package.attr("unique-identifier").is_some_and(|u| m.attr("id") == Some(u)) {
+                if info.id.is_empty()
+                    || package
+                        .attr("unique-identifier")
+                        .is_some_and(|u| m.attr("id") == Some(u))
+                {
                     info.id = v;
                 }
             }
@@ -179,7 +216,9 @@ pub fn read_info_epub(bytes: &[u8]) -> Result<BookInfo> {
                 let name = m.attr("name").unwrap_or("");
                 let content = m.attr("content").unwrap_or("");
                 match name {
-                    "calibre:series" if !content.trim().is_empty() => info.series = Some(collapse_ws(content)),
+                    "calibre:series" if !content.trim().is_empty() => {
+                        info.series = Some(collapse_ws(content))
+                    }
                     "calibre:series_index" => info.serno = parse_serno(content),
                     _ => {}
                 }
@@ -197,20 +236,37 @@ pub fn read_info_epub(bytes: &[u8]) -> Result<BookInfo> {
     }
 
     // cover
-    let manifest: Vec<&Element> = package.child("manifest").map(|m| m.children_named("item").collect()).unwrap_or_default();
-    let is_img = |i: &&Element| i.attr("media-type").is_some_and(|t| t.starts_with("image/"));
+    let manifest: Vec<&Element> = package
+        .child("manifest")
+        .map(|m| m.children_named("item").collect())
+        .unwrap_or_default();
+    let is_img = |i: &&Element| {
+        i.attr("media-type")
+            .is_some_and(|t| t.starts_with("image/"))
+    };
     let cover_item = manifest
         .iter()
-        .find(|i| i.attr("properties").is_some_and(|p| p.split_whitespace().any(|p| p == "cover-image")))
+        .find(|i| {
+            i.attr("properties")
+                .is_some_and(|p| p.split_whitespace().any(|p| p == "cover-image"))
+        })
         .or_else(|| {
-            let id = md.iter().find(|m| m.name == "meta" && m.attr("name") == Some("cover")).and_then(|m| m.attr("content"))?;
-            manifest.iter().find(|i| i.attr("id") == Some(id) && is_img(i))
+            let id = md
+                .iter()
+                .find(|m| m.name == "meta" && m.attr("name") == Some("cover"))
+                .and_then(|m| m.attr("content"))?;
+            manifest
+                .iter()
+                .find(|i| i.attr("id") == Some(id) && is_img(i))
         })
         .or_else(|| {
             manifest.iter().find(|i| {
                 is_img(i)
-                    && (i.attr("id").is_some_and(|s| s.to_ascii_lowercase().contains("cover"))
-                        || i.attr("href").is_some_and(|s| s.to_ascii_lowercase().contains("cover")))
+                    && (i
+                        .attr("id")
+                        .is_some_and(|s| s.to_ascii_lowercase().contains("cover"))
+                        || i.attr("href")
+                            .is_some_and(|s| s.to_ascii_lowercase().contains("cover")))
             })
         });
     if let Some(item) = cover_item
@@ -219,8 +275,15 @@ pub fn read_info_epub(bytes: &[u8]) -> Result<BookInfo> {
         let path = resolve_path(&opf_path, href);
         if let Some(data) = read_entry(&mut zip, &path) {
             let kind = images::sniff(&data);
-            if matches!(kind, Kind::Jpeg | Kind::Png | Kind::Gif | Kind::Webp | Kind::Bmp) && images::dimensions(&data, kind).is_some() {
-                info.cover = Some(CoverImage { data, mime: kind.mime().to_string() });
+            if matches!(
+                kind,
+                Kind::Jpeg | Kind::Png | Kind::Gif | Kind::Webp | Kind::Bmp
+            ) && images::dimensions(&data, kind).is_some()
+            {
+                info.cover = Some(CoverImage {
+                    data,
+                    mime: kind.mime().to_string(),
+                });
             }
         }
     }

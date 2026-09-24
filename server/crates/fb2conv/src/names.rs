@@ -44,14 +44,21 @@ impl NameFields {
     fn year(&self) -> String {
         let d = self.date.trim();
         let digits: String = d.chars().take(4).collect();
-        if digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()) { digits } else { String::new() }
+        if digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()) {
+            digits
+        } else {
+            String::new()
+        }
     }
 }
 
 const MARK: char = '\u{1}';
 
 fn is_sep(c: char) -> bool {
-    matches!(c, ' ' | '-' | '–' | '—' | '_' | '.' | ',' | ':' | ';' | '#' | '№' | '\u{a0}') || c == MARK
+    matches!(
+        c,
+        ' ' | '-' | '–' | '—' | '_' | '.' | ',' | ':' | ';' | '#' | '№' | '\u{a0}'
+    ) || c == MARK
 }
 
 /// Expands placeholders; empty values leave a marker for [`collapse`].
@@ -60,7 +67,11 @@ fn substitute(template: &str, f: &NameFields) -> String {
     let mut it = template.chars().peekable();
     let push_val = |out: &mut String, v: String| {
         let v = v.trim().to_string();
-        if v.is_empty() { out.push(MARK) } else { out.push_str(&v) }
+        if v.is_empty() {
+            out.push(MARK)
+        } else {
+            out.push_str(&v)
+        }
     };
     while let Some(c) = it.next() {
         if c != '%' {
@@ -127,9 +138,18 @@ fn collapse(component: &str) -> String {
     // 1. empty bracket pairs around missing values: "(\u1)", "[ \u1 ]"
     let mut s = component.to_string();
     if s.contains(MARK) {
-        for (o, c) in [('(', ')'), ('[', ']'), ('{', '}'), ('«', '»'), ('"', '"'), ('<', '>')] {
+        for (o, c) in [
+            ('(', ')'),
+            ('[', ']'),
+            ('{', '}'),
+            ('«', '»'),
+            ('"', '"'),
+            ('<', '>'),
+        ] {
             while let Some(start) = s.find(o) {
-                let Some(rel) = s[start + o.len_utf8()..].find(c) else { break };
+                let Some(rel) = s[start + o.len_utf8()..].find(c) else {
+                    break;
+                };
                 let end = start + o.len_utf8() + rel;
                 let inner = &s[start + o.len_utf8()..end];
                 if inner.chars().all(is_sep) && inner.contains(MARK) {
@@ -177,15 +197,23 @@ fn collapse(component: &str) -> String {
             }
         }
     }
-    let t = out.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '–' | '—' | '_' | '.' | ',' | ':' | ';' | '#' | '№'));
-    let t = t.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '–' | '—' | '_' | ',' | ':' | ';' | '#' | '№'));
+    let t = out.trim_start_matches(|c: char| {
+        c.is_whitespace() || matches!(c, '-' | '–' | '—' | '_' | '.' | ',' | ':' | ';' | '#' | '№')
+    });
+    let t = t.trim_end_matches(|c: char| {
+        c.is_whitespace() || matches!(c, '-' | '–' | '—' | '_' | ',' | ':' | ';' | '#' | '№')
+    });
     t.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Expands a template (e.g. a cover label `"%s %n"`) without file-system sanitising.
 pub fn expand(template: &str, f: &NameFields) -> String {
     let s = substitute(template, f);
-    s.split('/').map(collapse).filter(|c| !c.is_empty()).collect::<Vec<_>>().join("/")
+    s.split('/')
+        .map(collapse)
+        .filter(|c| !c.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// `dir`: trailing dots are removed from directory names (Windows drops them silently).
@@ -204,14 +232,22 @@ fn sanitize_component(c: &str, dir: bool) -> String {
     }
     let joined = out.split_whitespace().collect::<Vec<_>>().join(" ");
     let t = joined.trim_start_matches(['.', ' ']).trim_end_matches(' ');
-    let t = if dir { t.trim_end_matches(['.', ' ']) } else { t };
+    let t = if dir {
+        t.trim_end_matches(['.', ' '])
+    } else {
+        t
+    };
     // keep components within common file-system limits (255 bytes) leaving room for extensions
     let mut end = t.len().min(200);
     while !t.is_char_boundary(end) {
         end -= 1;
     }
     let t = t[..end].trim_end_matches(' ');
-    if dir { t.trim_end_matches(['.', ' ']).to_string() } else { t.to_string() }
+    if dir {
+        t.trim_end_matches(['.', ' ']).to_string()
+    } else {
+        t.to_string()
+    }
 }
 
 /// Builds a relative file path (without extension) from a template, e.g.
@@ -224,7 +260,13 @@ pub fn file_name(template: &str, fields: &NameFields, transliterate: bool) -> St
     let comps: Vec<String> = s
         .split('/')
         .map(collapse)
-        .map(|c| if transliterate { transliteration(&c) } else { c })
+        .map(|c| {
+            if transliterate {
+                transliteration(&c)
+            } else {
+                c
+            }
+        })
         .filter(|c| !c.is_empty())
         .collect();
     let n = comps.len();
@@ -235,8 +277,19 @@ pub fn file_name(template: &str, fields: &NameFields, transliterate: bool) -> St
         .filter(|c| !c.is_empty() && c != "." && c != "..")
         .collect();
     if parts.is_empty() {
-        let fallback = if fields.title.trim().is_empty() { "book".to_string() } else { fields.title.clone() };
-        let fb = sanitize_component(&if transliterate { transliteration(&fallback) } else { fallback }, false);
+        let fallback = if fields.title.trim().is_empty() {
+            "book".to_string()
+        } else {
+            fields.title.clone()
+        };
+        let fb = sanitize_component(
+            &if transliterate {
+                transliteration(&fallback)
+            } else {
+                fallback
+            },
+            false,
+        );
         return if fb.is_empty() { "book".into() } else { fb };
     }
     parts.join("/")
@@ -247,8 +300,8 @@ pub fn file_name(template: &str, fields: &NameFields, transliterate: bool) -> St
 pub fn transliteration(s: &str) -> String {
     const UPPER: &str = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЫЭЮЯ";
     const LAT_UPPER: [&str; 31] = [
-        "A", "B", "V", "G", "D", "E", "Jo", "Zh", "Z", "I", "J", "K", "L", "M", "N", "O", "P", "R", "S", "T", "U", "F",
-        "H", "C", "Ch", "Sh", "Sh", "I", "E", "Ju", "Ja",
+        "A", "B", "V", "G", "D", "E", "Jo", "Zh", "Z", "I", "J", "K", "L", "M", "N", "O", "P", "R",
+        "S", "T", "U", "F", "H", "C", "Ch", "Sh", "Sh", "I", "E", "Ju", "Ja",
     ];
     let mut out = String::with_capacity(s.len());
     for ch in s.trim().chars() {
@@ -312,9 +365,18 @@ mod tests {
     #[test]
     fn full() {
         let f = fields();
-        assert_eq!(file_name("%a/%s/%n %b", &f, false), "Стругацкий А/Мир Полудня/03 Трудно быть богом");
-        assert_eq!(file_name("%fa - %b (%y) [%l]", &f, false), "Стругацкий Аркадий Натанович - Трудно быть богом (2007) [ru]");
-        assert_eq!(file_name("%a - %b", &f, true), "Strugackij A. - Trudno bit bogom");
+        assert_eq!(
+            file_name("%a/%s/%n %b", &f, false),
+            "Стругацкий А/Мир Полудня/03 Трудно быть богом"
+        );
+        assert_eq!(
+            file_name("%fa - %b (%y) [%l]", &f, false),
+            "Стругацкий Аркадий Натанович - Трудно быть богом (2007) [ru]"
+        );
+        assert_eq!(
+            file_name("%a - %b", &f, true),
+            "Strugackij A. - Trudno bit bogom"
+        );
     }
 
     #[test]
@@ -322,9 +384,18 @@ mod tests {
         let mut f = fields();
         f.series = None;
         f.serno = None;
-        assert_eq!(file_name("%a/%s/%n %b", &f, false), "Стругацкий А/Трудно быть богом");
-        assert_eq!(file_name("%a - %s %n - %b", &f, false), "Стругацкий А. - Трудно быть богом");
-        assert_eq!(file_name("%a - [%s #%n] %b", &f, false), "Стругацкий А. - Трудно быть богом");
+        assert_eq!(
+            file_name("%a/%s/%n %b", &f, false),
+            "Стругацкий А/Трудно быть богом"
+        );
+        assert_eq!(
+            file_name("%a - %s %n - %b", &f, false),
+            "Стругацкий А. - Трудно быть богом"
+        );
+        assert_eq!(
+            file_name("%a - [%s #%n] %b", &f, false),
+            "Стругацкий А. - Трудно быть богом"
+        );
         assert_eq!(file_name("%s, %n. %b", &f, false), "Трудно быть богом");
         assert_eq!(expand("%s %n", &f), "");
         f.title = "Что? Где: Когда*".into();

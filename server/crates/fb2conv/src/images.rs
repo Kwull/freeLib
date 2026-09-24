@@ -94,9 +94,19 @@ pub fn prepare(data: Vec<u8>) -> Option<Prepared> {
     match kind {
         Kind::Jpeg | Kind::Png | Kind::Gif => {
             let (width, height) = dimensions(&data, kind)?;
-            Some(Prepared { data, kind, width, height })
+            Some(Prepared {
+                data,
+                kind,
+                width,
+                height,
+            })
         }
-        Kind::Svg => Some(Prepared { data, kind, width: 600, height: 800 }),
+        Kind::Svg => Some(Prepared {
+            data,
+            kind,
+            width: 600,
+            height: 800,
+        }),
         _ => {
             let img = image::load_from_memory(&data).ok()?;
             let (width, height) = (img.width(), img.height());
@@ -105,13 +115,21 @@ pub fn prepare(data: Vec<u8>) -> Option<Prepared> {
             }
             let mut out = Vec::new();
             let kind = if img.color().has_alpha() {
-                img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
+                img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
+                    .ok()?;
                 Kind::Png
             } else {
-                img.to_rgb8().write_to(&mut Cursor::new(&mut out), ImageFormat::Jpeg).ok()?;
+                img.to_rgb8()
+                    .write_to(&mut Cursor::new(&mut out), ImageFormat::Jpeg)
+                    .ok()?;
                 Kind::Jpeg
             };
-            Some(Prepared { data: out, kind, width, height })
+            Some(Prepared {
+                data: out,
+                kind,
+                width,
+                height,
+            })
         }
     }
 }

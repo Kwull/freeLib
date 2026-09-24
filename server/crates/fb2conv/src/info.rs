@@ -20,13 +20,21 @@ impl Person {
     /// `Last First Middle` (catalog display order); the nickname when no name parts are set.
     pub fn display_name(&self) -> String {
         let s = join_non_empty(&[&self.last, &self.first, &self.middle]);
-        if s.is_empty() { self.nickname.trim().to_string() } else { s }
+        if s.is_empty() {
+            self.nickname.trim().to_string()
+        } else {
+            s
+        }
     }
 
     /// `First Middle Last` (natural order, used in EPUB `dc:creator`).
     pub fn natural_name(&self) -> String {
         let s = join_non_empty(&[&self.first, &self.middle, &self.last]);
-        if s.is_empty() { self.nickname.trim().to_string() } else { s }
+        if s.is_empty() {
+            self.nickname.trim().to_string()
+        } else {
+            s
+        }
     }
 
     /// `Last, First Middle` for `file-as`.
@@ -45,7 +53,12 @@ impl Person {
 }
 
 fn join_non_empty(parts: &[&String]) -> String {
-    parts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
+    parts
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,23 +96,45 @@ pub struct BookInfo {
 
 fn person(el: &Element) -> Person {
     let t = |n: &str| el.child(n).map(|e| e.clean_text()).unwrap_or_default();
-    Person { first: t("first-name"), middle: t("middle-name"), last: t("last-name"), nickname: t("nickname") }
+    Person {
+        first: t("first-name"),
+        middle: t("middle-name"),
+        last: t("last-name"),
+        nickname: t("nickname"),
+    }
 }
 
 pub(crate) fn parse_serno(s: &str) -> Option<u32> {
-    let d: String = s.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+    let d: String = s
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     d.parse::<u32>().ok().filter(|&n| n > 0)
 }
 
 /// Metadata from `<description>`, plus the cover binary id (without `#`).
 pub(crate) fn parse_description(desc: Option<&Element>) -> (BookInfo, Option<String>) {
     let mut info = BookInfo::default();
-    let Some(desc) = desc else { return (info, None) };
+    let Some(desc) = desc else {
+        return (info, None);
+    };
     let mut cover_id = None;
     if let Some(ti) = desc.child("title-info") {
-        info.title = ti.child("book-title").map(|e| e.clean_text()).unwrap_or_default();
-        info.authors = ti.children_named("author").map(person).filter(|p| !p.is_empty()).collect();
-        info.translators = ti.children_named("translator").map(person).filter(|p| !p.is_empty()).collect();
+        info.title = ti
+            .child("book-title")
+            .map(|e| e.clean_text())
+            .unwrap_or_default();
+        info.authors = ti
+            .children_named("author")
+            .map(person)
+            .filter(|p| !p.is_empty())
+            .collect();
+        info.translators = ti
+            .children_named("translator")
+            .map(person)
+            .filter(|p| !p.is_empty())
+            .collect();
         info.genres = ti
             .children_named("genre")
             .map(|g| g.clean_text())
@@ -110,16 +145,29 @@ pub(crate) fn parse_description(desc: Option<&Element>) -> (BookInfo, Option<Str
                 }
                 v
             });
-        info.lang = ti.child("lang").map(|e| e.clean_text().to_lowercase()).unwrap_or_default();
-        info.keywords = ti.child("keywords").map(|e| e.clean_text()).unwrap_or_default();
+        info.lang = ti
+            .child("lang")
+            .map(|e| e.clean_text().to_lowercase())
+            .unwrap_or_default();
+        info.keywords = ti
+            .child("keywords")
+            .map(|e| e.clean_text())
+            .unwrap_or_default();
         info.date = ti
             .child("date")
             .map(|e| {
                 let t = e.clean_text();
-                if t.is_empty() { e.attr("value").unwrap_or_default().to_string() } else { t }
+                if t.is_empty() {
+                    e.attr("value").unwrap_or_default().to_string()
+                } else {
+                    t
+                }
             })
             .unwrap_or_default();
-        if let Some(seq) = ti.children_named("sequence").find(|s| s.attr("name").is_some_and(|n| !n.trim().is_empty())) {
+        if let Some(seq) = ti
+            .children_named("sequence")
+            .find(|s| s.attr("name").is_some_and(|n| !n.trim().is_empty()))
+        {
             info.series = seq.attr("name").map(collapse_ws);
             info.serno = seq.attr("number").and_then(parse_serno);
         }
@@ -140,7 +188,9 @@ pub(crate) fn parse_description(desc: Option<&Element>) -> (BookInfo, Option<Str
         info.year = t("year");
         info.isbn = t("isbn");
         if info.series.is_none()
-            && let Some(seq) = pi.children_named("sequence").find(|s| s.attr("name").is_some_and(|n| !n.trim().is_empty()))
+            && let Some(seq) = pi
+                .children_named("sequence")
+                .find(|s| s.attr("name").is_some_and(|n| !n.trim().is_empty()))
         {
             info.series = seq.attr("name").map(collapse_ws);
             info.serno = seq.attr("number").and_then(parse_serno);
@@ -197,7 +247,8 @@ fn inline_html(el: &Element, out: &mut String) {
                     }
                     inline_html(e, out);
                 }
-                "image" | "img" | "binary" | "script" | "style" if e.name != "style" || !e.has_text() => {}
+                "image" | "img" | "binary" | "script" | "style"
+                    if e.name != "style" || !e.has_text() => {}
                 _ => inline_html(e, out),
             },
         }
@@ -238,7 +289,8 @@ fn block_html(el: &Element, out: &mut String) {
     for c in &el.children {
         match c {
             Node::Elem(e) => match e.name.as_str() {
-                "p" | "subtitle" | "v" | "text-author" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                "p" | "subtitle" | "v" | "text-author" | "li" | "h1" | "h2" | "h3" | "h4"
+                | "h5" | "h6" => {
                     flush(&mut loose, out);
                     let mut p = String::new();
                     if e.name == "subtitle" || e.name.starts_with('h') && e.name.len() == 2 {
@@ -254,8 +306,8 @@ fn block_html(el: &Element, out: &mut String) {
                     }
                 }
                 "empty-line" | "br" if loose.children.is_empty() => {}
-                "poem" | "stanza" | "cite" | "epigraph" | "div" | "section" | "blockquote" | "ul" | "ol" | "table"
-                | "tr" | "td" | "th" | "annotation" | "body" => {
+                "poem" | "stanza" | "cite" | "epigraph" | "div" | "section" | "blockquote"
+                | "ul" | "ol" | "table" | "tr" | "td" | "th" | "annotation" | "body" => {
                     flush(&mut loose, out);
                     block_html(e, out);
                 }
@@ -310,13 +362,21 @@ pub(crate) fn find_binary<'a>(src: &'a str, id: &str) -> Option<(&'a str, Option
             continue;
         }
         let (el, _) = dom::parse(tag, None);
-        let Some(el) = dom::root_element(&el) else { continue };
+        let Some(el) = dom::root_element(&el) else {
+            continue;
+        };
         if el.attr("id").map(str::trim) != Some(id) {
             continue;
         }
         let body_start = tag_end + 1;
-        let body_end = src[body_start..].find("</").map(|i| body_start + i).unwrap_or(src.len());
-        return Some((&src[body_start..body_end], el.attr("content-type").map(str::to_string)));
+        let body_end = src[body_start..]
+            .find("</")
+            .map(|i| body_start + i)
+            .unwrap_or(src.len());
+        return Some((
+            &src[body_start..body_end],
+            el.attr("content-type").map(str::to_string),
+        ));
     }
     None
 }
@@ -327,7 +387,10 @@ pub(crate) fn cover_from_base64(b64: &str) -> Option<CoverImage> {
     match kind {
         Kind::Jpeg | Kind::Png | Kind::Gif | Kind::Webp | Kind::Bmp => {
             images::dimensions(&data, kind)?;
-            Some(CoverImage { data, mime: kind.mime().to_string() })
+            Some(CoverImage {
+                data,
+                mime: kind.mime().to_string(),
+            })
         }
         _ => None,
     }
@@ -342,7 +405,10 @@ pub fn read_info(bytes: &[u8]) -> Result<BookInfo> {
     let (root, pos) = dom::parse(&src, Some("description"));
     let fb = dom::root_element(&root).ok_or_else(|| Error::Format("not an XML document".into()))?;
     if fb.name != "fictionbook" && fb.name != "FictionBook" && fb.child("description").is_none() {
-        return Err(Error::Format(format!("not an FB2 document (root element <{}>)", fb.name)));
+        return Err(Error::Format(format!(
+            "not an FB2 document (root element <{}>)",
+            fb.name
+        )));
     }
     let (mut info, cover_id) = parse_description(fb.child("description"));
     if let Some(id) = cover_id {
@@ -351,7 +417,9 @@ pub fn read_info(bytes: &[u8]) -> Result<BookInfo> {
             .children_named("binary")
             .find(|b| b.attr("id").map(str::trim) == Some(id.as_str()))
             .and_then(|b| cover_from_base64(&b.text()));
-        info.cover = from_tree.or_else(|| find_binary(&src[pos.min(src.len())..], &id).and_then(|(b64, _)| cover_from_base64(b64)));
+        info.cover = from_tree.or_else(|| {
+            find_binary(&src[pos.min(src.len())..], &id).and_then(|(b64, _)| cover_from_base64(b64))
+        });
     }
     Ok(info)
 }

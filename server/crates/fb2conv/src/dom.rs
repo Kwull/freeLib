@@ -23,7 +23,10 @@ pub enum Node {
 
 impl Element {
     pub fn attr(&self, name: &str) -> Option<&str> {
-        self.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+        self.attrs
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
     }
 
     pub fn elements(&self) -> impl Iterator<Item = &Element> {
@@ -240,7 +243,11 @@ fn make_element(e: &BytesStart) -> Element {
             attrs.push((key, v));
         }
     }
-    Element { name, attrs, children: Vec::new() }
+    Element {
+        name,
+        attrs,
+        children: Vec::new(),
+    }
 }
 
 /// Parses `src` into a synthetic root element whose children are the top-level nodes.
@@ -258,7 +265,10 @@ pub fn parse(src: &str, stop_after: Option<&str>) -> (Element, usize) {
         cfg.check_comments = false;
         cfg.expand_empty_elements = false;
     }
-    let mut stack: Vec<Element> = vec![Element { name: String::new(), ..Default::default() }];
+    let mut stack: Vec<Element> = vec![Element {
+        name: String::new(),
+        ..Default::default()
+    }];
     let mut errors = 0;
     loop {
         let ev = match reader.read_event() {
@@ -337,7 +347,10 @@ fn push_text(el: &mut Element, s: &str) {
     let clean: std::borrow::Cow<str> = if s.chars().all(is_xml_char) {
         s.into()
     } else {
-        s.chars().filter(|&c| is_xml_char(c)).collect::<String>().into()
+        s.chars()
+            .filter(|&c| is_xml_char(c))
+            .collect::<String>()
+            .into()
     };
     if let Some(Node::Text(t)) = el.children.last_mut() {
         t.push_str(&clean);

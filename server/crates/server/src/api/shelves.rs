@@ -15,7 +15,9 @@ pub fn valid_color(c: &str) -> bool {
 fn valid_name(n: &str) -> ApiResult<String> {
     let n = n.trim();
     if n.is_empty() || n.chars().count() > 100 {
-        return Err(ApiError::bad_request("shelf name must have 1..100 characters"));
+        return Err(ApiError::bad_request(
+            "shelf name must have 1..100 characters",
+        ));
     }
     Ok(n.to_string())
 }
@@ -30,13 +32,21 @@ pub struct ShelfBody {
     color: Option<String>,
 }
 
-pub async fn create(State(st): State<AppState>, Auth(u): Auth, Json(b): Json<ShelfBody>) -> ApiResult<Json<Shelf>> {
+pub async fn create(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Json(b): Json<ShelfBody>,
+) -> ApiResult<Json<Shelf>> {
     let name = valid_name(b.name.as_deref().unwrap_or(""))?;
     let color = b.color.unwrap_or_else(|| "#1F5F5B".into());
     if !valid_color(&color) {
         return Err(ApiError::bad_request("color must be #rrggbb"));
     }
-    Ok(Json(st.db.run(move |c| db::create_shelf(c, u.id, &name, &color)).await?))
+    Ok(Json(
+        st.db
+            .run(move |c| db::create_shelf(c, u.id, &name, &color))
+            .await?,
+    ))
 }
 
 pub async fn update(
@@ -51,10 +61,18 @@ pub async fn update(
     {
         return Err(ApiError::bad_request("color must be #rrggbb"));
     }
-    Ok(Json(st.db.run(move |c| db::update_shelf(c, u.id, id, name.as_deref(), b.color.as_deref())).await?))
+    Ok(Json(
+        st.db
+            .run(move |c| db::update_shelf(c, u.id, id, name.as_deref(), b.color.as_deref()))
+            .await?,
+    ))
 }
 
-pub async fn delete(State(st): State<AppState>, Auth(u): Auth, Path(id): Path<i64>) -> ApiResult<StatusCode> {
+pub async fn delete(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
     st.db.run(move |c| db::delete_shelf(c, u.id, id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -79,8 +97,11 @@ pub async fn books(
     st.db.run(move |c| db::get_shelf(c, uid, id)).await?;
     let (_, cat) = st.catalog(b.library)?;
     let ids = b.books.clone();
-    let keys: Vec<String> =
-        tokio::task::spawn_blocking(move || cat.keys_by_ids(&ids)).await??.into_iter().map(|(_, k)| k).collect();
+    let keys: Vec<String> = tokio::task::spawn_blocking(move || cat.keys_by_ids(&ids))
+        .await??
+        .into_iter()
+        .map(|(_, k)| k)
+        .collect();
     let lib = b.library;
     let add = b.add;
     Ok(Json(
@@ -113,6 +134,8 @@ pub async fn rating(
         .pop()
         .map(|(_, k)| k)
         .ok_or_else(|| ApiError::not_found("book not found"))?;
-    st.db.run(move |c| db::set_rating(c, u.id, lib, &key, b.rating)).await?;
+    st.db
+        .run(move |c| db::set_rating(c, u.id, lib, &key, b.rating))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }

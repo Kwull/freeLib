@@ -19,10 +19,14 @@ pub async fn list(State(st): State<AppState>, Auth(u): Auth) -> ApiResult<Json<V
 fn validate(d: &mut Device, u: &User) -> ApiResult<()> {
     d.name = d.name.trim().to_string();
     if d.name.is_empty() || d.name.chars().count() > 100 {
-        return Err(ApiError::bad_request("device name must have 1..100 characters"));
+        return Err(ApiError::bad_request(
+            "device name must have 1..100 characters",
+        ));
     }
     if !["email", "download", "folder"].contains(&d.kind.as_str()) {
-        return Err(ApiError::bad_request("kind must be email, download or folder"));
+        return Err(ApiError::bad_request(
+            "kind must be email, download or folder",
+        ));
     }
     if !ALL_FORMATS.contains(&d.format.as_str()) {
         return Err(ApiError::bad_request("unknown format"));
@@ -33,7 +37,11 @@ fn validate(d: &mut Device, u: &User) -> ApiResult<()> {
     if d.file_name.len() > 500 {
         return Err(ApiError::bad_request("file name template too long"));
     }
-    d.target = d.target.take().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    d.target = d
+        .target
+        .take()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
     match d.kind.as_str() {
         "email" => {
             if let Some(t) = &d.target
@@ -44,7 +52,9 @@ fn validate(d: &mut Device, u: &User) -> ApiResult<()> {
         }
         "folder" => {
             if safe_subdir(d.target.as_deref().unwrap_or("")).is_none() {
-                return Err(ApiError::bad_request("target must be a sub-folder of the export folder"));
+                return Err(ApiError::bad_request(
+                    "target must be a sub-folder of the export folder",
+                ));
             }
         }
         _ => d.target = None,
@@ -55,13 +65,19 @@ fn validate(d: &mut Device, u: &User) -> ApiResult<()> {
         return Err(ApiError::bad_request("userCss too long"));
     }
     if d.shared && !u.is_admin() {
-        return Err(ApiError::forbidden("only administrators can create shared devices"));
+        return Err(ApiError::forbidden(
+            "only administrators can create shared devices",
+        ));
     }
     d.user_id = if d.shared { None } else { Some(u.id) };
     Ok(())
 }
 
-pub async fn create(State(st): State<AppState>, Auth(u): Auth, Json(mut d): Json<Device>) -> ApiResult<Json<Device>> {
+pub async fn create(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Json(mut d): Json<Device>,
+) -> ApiResult<Json<Device>> {
     d.id = 0;
     validate(&mut d, &u)?;
     let uid = u.id;
@@ -75,11 +91,18 @@ pub async fn create(State(st): State<AppState>, Auth(u): Auth, Json(mut d): Json
     Ok(Json(dev))
 }
 
-pub async fn update(State(st): State<AppState>, Auth(u): Auth, Path(id): Path<i64>, Json(mut d): Json<Device>) -> ApiResult<Json<Device>> {
+pub async fn update(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Path(id): Path<i64>,
+    Json(mut d): Json<Device>,
+) -> ApiResult<Json<Device>> {
     let uid = u.id;
     let existing = st.db.run(move |c| db::get_device(c, uid, id)).await?;
     if existing.shared && !u.is_admin() {
-        return Err(ApiError::forbidden("shared devices can only be changed by administrators"));
+        return Err(ApiError::forbidden(
+            "shared devices can only be changed by administrators",
+        ));
     }
     d.id = id;
     validate(&mut d, &u)?;
@@ -93,11 +116,17 @@ pub async fn update(State(st): State<AppState>, Auth(u): Auth, Path(id): Path<i6
     Ok(Json(dev))
 }
 
-pub async fn delete(State(st): State<AppState>, Auth(u): Auth, Path(id): Path<i64>) -> ApiResult<StatusCode> {
+pub async fn delete(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
     let uid = u.id;
     let existing = st.db.run(move |c| db::get_device(c, uid, id)).await?;
     if existing.shared && !u.is_admin() {
-        return Err(ApiError::forbidden("shared devices can only be deleted by administrators"));
+        return Err(ApiError::forbidden(
+            "shared devices can only be deleted by administrators",
+        ));
     }
     st.db.run(move |c| db::delete_device(c, id)).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -113,11 +142,21 @@ pub struct SendBody {
     file_name: Option<String>,
 }
 
-pub async fn send(State(st): State<AppState>, Auth(u): Auth, Json(b): Json<SendBody>) -> ApiResult<Json<Job>> {
+pub async fn send(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Json(b): Json<SendBody>,
+) -> ApiResult<Json<Job>> {
     let uid = u.id;
     let dev_id = b.device;
     let device = st.db.run(move |c| db::get_device(c, uid, dev_id)).await?;
-    let req = SendRequest { library: b.library, books: b.books, device, target: b.target, file_name: b.file_name };
+    let req = SendRequest {
+        library: b.library,
+        books: b.books,
+        device,
+        target: b.target,
+        file_name: b.file_name,
+    };
     Ok(Json(sender::start(&st, &u, req).await?))
 }
 

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use freelib_catalog::{Catalog, CatalogHandle};
+use freelib_catalog::{Catalog, CatalogHandle, NameList};
 use serde::Serialize;
 use tokio::sync::{Semaphore, broadcast};
 
@@ -96,23 +96,41 @@ impl AppState {
     /// The runtime of library `id` and its current catalog (404 when not imported yet).
     pub fn catalog(&self, id: i64) -> ApiResult<(Arc<LibRuntime>, Arc<Catalog>)> {
         let rt = self.lib(id)?;
-        let cat = rt.handle.get().ok_or_else(|| ApiError::not_found("library is not imported yet"))?;
+        let cat = rt
+            .handle
+            .get()
+            .ok_or_else(|| ApiError::not_found("library is not imported yet"))?;
         Ok((rt, cat))
     }
 
     pub fn add_lib(&self, id: i64) -> Arc<LibRuntime> {
-        let rt = Arc::new(LibRuntime::new(id, self.cfg.data_dir.join(format!("lib_{id}.db"))));
-        self.libs.write().unwrap_or_else(|e| e.into_inner()).insert(id, rt.clone());
+        let rt = Arc::new(LibRuntime::new(
+            id,
+            self.cfg.data_dir.join(format!("lib_{id}.db")),
+        ));
+        self.libs
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, rt.clone());
         rt
     }
 
     pub fn remove_lib(&self, id: i64) -> Option<Arc<LibRuntime>> {
-        self.libs.write().unwrap_or_else(|e| e.into_inner()).remove(&id)
+        self.libs
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id)
     }
 
     pub fn invalidate_sessions(&self) {
-        self.session_cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        self.basic_cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.session_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.basic_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     pub fn cache_dir(&self, kind: &str, lib: i64) -> PathBuf {
@@ -151,7 +169,12 @@ impl AppState {
 
     /// Date (`YYYY-MM-DD`) of the user's previous visit.
     fn visit_baseline(&self, user_id: i64) -> Option<String> {
-        if let Some(v) = self.prev_visit.lock().unwrap_or_else(|e| e.into_inner()).get(&user_id) {
+        if let Some(v) = self
+            .prev_visit
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&user_id)
+        {
             return Some(v.clone());
         }
         let c = self.db.lock();
@@ -203,7 +226,11 @@ pub struct LibraryStatus {
 
 impl Default for LibraryStatus {
     fn default() -> Self {
-        LibraryStatus { state: "idle".into(), progress: None, message: None }
+        LibraryStatus {
+            state: "idle".into(),
+            progress: None,
+            message: None,
+        }
     }
 }
 
@@ -218,14 +245,26 @@ pub struct CachedBody {
 
 impl CachedBody {
     pub fn new(version: i64, etag: String, json: Vec<u8>) -> CachedBody {
-        CachedBody { version, etag, json: Bytes::from(json), br: OnceLock::new(), gzip: OnceLock::new() }
+        CachedBody {
+            version,
+            etag,
+            json: Bytes::from(json),
+            br: OnceLock::new(),
+            gzip: OnceLock::new(),
+        }
     }
 
     /// Blocking (compresses on first use).
     pub fn encoded(&self, enc: &str) -> Bytes {
         match enc {
-            "br" => self.br.get_or_init(|| Bytes::from(crate::compress::brotli(&self.json))).clone(),
-            "gzip" => self.gzip.get_or_init(|| Bytes::from(crate::compress::gzip(&self.json))).clone(),
+            "br" => self
+                .br
+                .get_or_init(|| Bytes::from(crate::compress::brotli(&self.json)))
+                .clone(),
+            "gzip" => self
+                .gzip
+                .get_or_init(|| Bytes::from(crate::compress::gzip(&self.json)))
+                .clone(),
             _ => self.json.clone(),
         }
     }
@@ -243,6 +282,9 @@ pub struct LibRuntime {
     pub import: Mutex<Option<ImportRun>>,
     /// "authors" / "series" → cached body for the current catalog version.
     pub lists: Mutex<HashMap<&'static str, Arc<CachedBody>>>,
+    names: Mutex<HashMap<&'static str, (i64, Arc<NameList>)>>,
+    /// Serialises building of the lists (a request and the warm-up must not both build them).
+    pub build_lock: Mutex<()>,
 }
 
 impl LibRuntime {
@@ -253,11 +295,16 @@ impl LibRuntime {
             status: Mutex::new(LibraryStatus::default()),
             import: Mutex::new(None),
             lists: Mutex::new(HashMap::new()),
+            names: Mutex::new(HashMap::new()),
+            build_lock: Mutex::new(()),
         }
     }
 
     pub fn status(&self) -> LibraryStatus {
-        self.status.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn set_status(&self, s: LibraryStatus) {
@@ -274,11 +321,43 @@ impl LibRuntime {
     }
 
     pub fn put_list(&self, kind: &'static str, body: Arc<CachedBody>) {
-        self.lists.lock().unwrap_or_else(|e| e.into_inner()).insert(kind, body);
+        self.lists
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(kind, body);
     }
 
     pub fn clear_lists(&self) {
         self.lists.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.names.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    /// Authors (`"authors"`) or series list of `cat`, cached per catalog version. Blocking.
+    pub fn name_list(
+        &self,
+        cat: &Catalog,
+        kind: &'static str,
+    ) -> Result<Arc<NameList>, freelib_catalog::CatalogError> {
+        let v = cat.catalog_version();
+        if let Some((ver, l)) = self
+            .names
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(kind)
+            && *ver == v
+        {
+            return Ok(l.clone());
+        }
+        let l = Arc::new(if kind == "authors" {
+            cat.authors()?
+        } else {
+            cat.series_list()?
+        });
+        self.names
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(kind, (v, l.clone()));
+        Ok(l)
     }
 }
 
@@ -312,6 +391,9 @@ impl RateLimiter {
     }
 
     pub fn success(&self, ip: IpAddr) {
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).remove(&ip);
+        self.map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&ip);
     }
 }

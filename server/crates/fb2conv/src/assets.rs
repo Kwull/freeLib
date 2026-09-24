@@ -55,13 +55,37 @@ impl Assets {
         let fonts = vec![FontFamily {
             name: "PT Serif",
             faces: vec![
-                FontFace { file_name: "PTSerif-Regular.ttf", bold: false, italic: false, data: PT_SERIF_REGULAR },
-                FontFace { file_name: "PTSerif-Italic.ttf", bold: false, italic: true, data: PT_SERIF_ITALIC },
-                FontFace { file_name: "PTSerif-Bold.ttf", bold: true, italic: false, data: PT_SERIF_BOLD },
-                FontFace { file_name: "PTSerif-BoldItalic.ttf", bold: true, italic: true, data: PT_SERIF_BOLD_ITALIC },
+                FontFace {
+                    file_name: "PTSerif-Regular.ttf",
+                    bold: false,
+                    italic: false,
+                    data: PT_SERIF_REGULAR,
+                },
+                FontFace {
+                    file_name: "PTSerif-Italic.ttf",
+                    bold: false,
+                    italic: true,
+                    data: PT_SERIF_ITALIC,
+                },
+                FontFace {
+                    file_name: "PTSerif-Bold.ttf",
+                    bold: true,
+                    italic: false,
+                    data: PT_SERIF_BOLD,
+                },
+                FontFace {
+                    file_name: "PTSerif-BoldItalic.ttf",
+                    bold: true,
+                    italic: true,
+                    data: PT_SERIF_BOLD_ITALIC,
+                },
             ],
         }];
-        Assets { fonts, hyph: Default::default(), font_zip: OnceLock::new() }
+        Assets {
+            fonts,
+            hyph: Default::default(),
+            font_zip: OnceLock::new(),
+        }
     }
 
     /// A process-wide shared instance.
@@ -109,10 +133,17 @@ impl Assets {
         self.font_zip.get_or_init(|| {
             use std::io::Write;
             let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-            let mut all: Vec<(&str, &[u8])> = self.fonts.iter().flat_map(|f| f.faces.iter().map(|x| (x.file_name, x.data))).collect();
+            let mut all: Vec<(&str, &[u8])> = self
+                .fonts
+                .iter()
+                .flat_map(|f| f.faces.iter().map(|x| (x.file_name, x.data)))
+                .collect();
             all.push(("Sangha.ttf", SANGHA));
             for (name, data) in all {
-                if zw.start_file(format!("OEBPS/fonts/{name}"), crate::epub::deflated()).is_ok() {
+                if zw
+                    .start_file(format!("OEBPS/fonts/{name}"), crate::epub::deflated())
+                    .is_ok()
+                {
                     let _ = zw.write_all(data);
                 }
             }
@@ -125,6 +156,10 @@ impl Assets {
     }
 
     pub(crate) fn cover_font(&self, bold: bool) -> &'static [u8] {
-        if bold { PT_SERIF_BOLD } else { PT_SERIF_REGULAR }
+        if bold {
+            PT_SERIF_BOLD
+        } else {
+            PT_SERIF_REGULAR
+        }
     }
 }

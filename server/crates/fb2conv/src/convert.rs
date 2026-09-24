@@ -33,10 +33,34 @@ pub(crate) struct Labels {
 
 pub(crate) fn labels(lang: &str) -> Labels {
     match lang.split('-').next().unwrap_or("") {
-        "ru" | "be" => Labels { contents: "Содержание", annotation: "Аннотация", notes: "Примечания", cover: "Обложка", start: "Начало" },
-        "uk" => Labels { contents: "Зміст", annotation: "Анотація", notes: "Примітки", cover: "Обкладинка", start: "Початок" },
-        "de" => Labels { contents: "Inhalt", annotation: "Annotation", notes: "Anmerkungen", cover: "Umschlag", start: "Anfang" },
-        _ => Labels { contents: "Contents", annotation: "Annotation", notes: "Notes", cover: "Cover", start: "Start" },
+        "ru" | "be" => Labels {
+            contents: "Содержание",
+            annotation: "Аннотация",
+            notes: "Примечания",
+            cover: "Обложка",
+            start: "Начало",
+        },
+        "uk" => Labels {
+            contents: "Зміст",
+            annotation: "Анотація",
+            notes: "Примітки",
+            cover: "Обкладинка",
+            start: "Початок",
+        },
+        "de" => Labels {
+            contents: "Inhalt",
+            annotation: "Annotation",
+            notes: "Anmerkungen",
+            cover: "Umschlag",
+            start: "Anfang",
+        },
+        _ => Labels {
+            contents: "Contents",
+            annotation: "Annotation",
+            notes: "Notes",
+            cover: "Cover",
+            start: "Start",
+        },
     }
 }
 
@@ -54,12 +78,21 @@ impl Doc {
         let hash = epub::hash128(&raw);
         let src = decode_xml(&raw);
         let (root, _) = dom::parse(&src, None);
-        let fb = dom::root_element(&root).ok_or_else(|| Error::Format("not an XML document".into()))?;
+        let fb =
+            dom::root_element(&root).ok_or_else(|| Error::Format("not an XML document".into()))?;
         if fb.name != "fictionbook" && fb.child("body").is_none() {
-            return Err(Error::Format(format!("not an FB2 document (root element <{}>)", fb.name)));
+            return Err(Error::Format(format!(
+                "not an FB2 document (root element <{}>)",
+                fb.name
+            )));
         }
         let (info, cover_id) = parse_description(fb.child("description"));
-        Ok(Doc { root, info, cover_id, hash })
+        Ok(Doc {
+            root,
+            info,
+            cover_id,
+            hash,
+        })
     }
 
     fn fb(&self) -> &Element {
@@ -78,8 +111,11 @@ pub(crate) fn normalize_lang(lang: &str, sample: &str) -> String {
         _ => l,
     };
     let valid = !l.is_empty()
-        && l.split('-').all(|p| !p.is_empty() && p.len() <= 8 && p.chars().all(|c| c.is_ascii_alphanumeric()))
-        && l.split('-').next().is_some_and(|p| (2..=3).contains(&p.len()) && p.chars().all(|c| c.is_ascii_alphabetic()));
+        && l.split('-')
+            .all(|p| !p.is_empty() && p.len() <= 8 && p.chars().all(|c| c.is_ascii_alphanumeric()))
+        && l.split('-').next().is_some_and(|p| {
+            (2..=3).contains(&p.len()) && p.chars().all(|c| c.is_ascii_alphabetic())
+        });
     if valid {
         l
     } else if sample.chars().any(|c| ('\u{400}'..='\u{4ff}').contains(&c)) {
@@ -140,13 +176,29 @@ pub(crate) struct Builder<'a> {
 
 fn is_uri(h: &str) -> bool {
     let l = h.to_ascii_lowercase();
-    l.starts_with("http://") || l.starts_with("https://") || l.starts_with("mailto:") || l.starts_with("ftp://")
+    l.starts_with("http://")
+        || l.starts_with("https://")
+        || l.starts_with("mailto:")
+        || l.starts_with("ftp://")
 }
 
 fn is_block_name(n: &str) -> bool {
     matches!(
         n,
-        "p" | "v" | "stanza" | "poem" | "cite" | "subtitle" | "text-author" | "section" | "title" | "epigraph" | "annotation" | "table" | "tr" | "empty-line" | "date"
+        "p" | "v"
+            | "stanza"
+            | "poem"
+            | "cite"
+            | "subtitle"
+            | "text-author"
+            | "section"
+            | "title"
+            | "epigraph"
+            | "annotation"
+            | "table"
+            | "tr"
+            | "empty-line"
+            | "date"
     )
 }
 
@@ -154,7 +206,13 @@ fn is_block_name(n: &str) -> bool {
 fn sanitize_id(s: &str) -> String {
     let mut out: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if !out.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
         out.insert_str(0, "id");
@@ -167,7 +225,16 @@ fn sanitize_file_stem(s: &str) -> String {
         Some(i) if i > 0 => &s[..i],
         _ => s,
     };
-    let mut out: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
+    let mut out: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     if out.is_empty() || !out.starts_with(|c: char| c.is_ascii_alphanumeric()) {
         out.insert(0, 'i');
     }
@@ -227,7 +294,9 @@ impl<'a> Builder<'a> {
     }
 
     fn flush_file(&mut self) {
-        if self.cur_has_content() || !self.cur_name.is_empty() && self.ids.values().any(|(f, _)| *f == self.files.len()) {
+        if self.cur_has_content()
+            || !self.cur_name.is_empty() && self.ids.values().any(|(f, _)| *f == self.files.len())
+        {
             let body = std::mem::take(&mut self.cur);
             self.files.push(XhtmlFile {
                 name: std::mem::take(&mut self.cur_name),
@@ -264,7 +333,14 @@ impl<'a> Builder<'a> {
     // ---------------------------------------------------------------- ids and links
 
     fn key(&self, fb2_id: &str) -> String {
-        format!("{}{}", self.books.get(self.book).map(|b| b.prefix.as_str()).unwrap_or(""), fb2_id.trim())
+        format!(
+            "{}{}",
+            self.books
+                .get(self.book)
+                .map(|b| b.prefix.as_str())
+                .unwrap_or(""),
+            fb2_id.trim()
+        )
     }
 
     /// Registers an id for the element being written to the current file.
@@ -296,7 +372,14 @@ impl<'a> Builder<'a> {
         match e.attr("id").map(str::trim).filter(|s| !s.is_empty()) {
             Some(id) => {
                 let key = self.key(id);
-                let want = format!("{}{}", self.books.get(self.book).map(|b| b.prefix.as_str()).unwrap_or(""), id);
+                let want = format!(
+                    "{}{}",
+                    self.books
+                        .get(self.book)
+                        .map(|b| b.prefix.as_str())
+                        .unwrap_or(""),
+                    id
+                );
                 match self.register(key, &want) {
                     Some(h) => format!(" id=\"{h}\""),
                     None => String::new(),
@@ -642,13 +725,21 @@ impl<'a> Builder<'a> {
                         l.children.push(c.clone());
                     }
                 }
-                Node::Elem(e) if is_block_name(&e.name) || matches!(e.name.as_str(), "image" | "code" | "div" | "blockquote") && e.elements().any(|x| is_block_name(&x.name)) || e.name == "image" => {
+                Node::Elem(e)
+                    if is_block_name(&e.name)
+                        || matches!(e.name.as_str(), "image" | "code" | "div" | "blockquote")
+                            && e.elements().any(|x| is_block_name(&x.name))
+                        || e.name == "image" =>
+                {
                     if let Some(l) = loose.take() {
                         self.para(&l, "p", "", out);
                     }
                     self.block(e, out);
                 }
-                _ => loose.get_or_insert_with(Element::default).children.push(c.clone()),
+                _ => loose
+                    .get_or_insert_with(Element::default)
+                    .children
+                    .push(c.clone()),
             }
         }
         if let Some(l) = loose.take() {
@@ -709,7 +800,10 @@ impl<'a> Builder<'a> {
                     Node::Text(t) => out.push_str(t),
                     Node::Elem(x) => {
                         if x.name == "a"
-                            && (x.attr("type") == Some("note") || x.href().and_then(|h| h.strip_prefix('#')).is_some_and(|id| b.note_index.contains_key(&b.key(id))))
+                            && (x.attr("type") == Some("note")
+                                || x.href()
+                                    .and_then(|h| h.strip_prefix('#'))
+                                    .is_some_and(|id| b.note_index.contains_key(&b.key(id))))
                         {
                             continue;
                         }
@@ -752,7 +846,10 @@ impl<'a> Builder<'a> {
                 let id = self.id_attr(e);
                 let mut inner = String::new();
                 self.inline(e, &mut inner);
-                out.push_str(&format!("<p{id} class=\"code\"><code>{}</code></p>\n", inner.trim()));
+                out.push_str(&format!(
+                    "<p{id} class=\"code\"><code>{}</code></p>\n",
+                    inner.trim()
+                ));
                 self.no_hyph -= 1;
             }
             "empty-line" => out.push_str("<p class=\"empty-line\">\u{a0}</p>\n"),
@@ -774,7 +871,10 @@ impl<'a> Builder<'a> {
             "table" => self.table(e, out),
             "tr" => {
                 // stray row outside a table
-                let mut t = Element { name: "table".into(), ..Default::default() };
+                let mut t = Element {
+                    name: "table".into(),
+                    ..Default::default()
+                };
                 t.children.push(Node::Elem(e.clone()));
                 self.table(&t, out);
             }
@@ -799,15 +899,27 @@ impl<'a> Builder<'a> {
                 let cid = self.id_attr(td);
                 let mut attrs = cid;
                 for a in ["colspan", "rowspan"] {
-                    if let Some(v) = td.attr(a).and_then(|v| v.trim().parse::<u32>().ok()).filter(|&v| v > 1 && v < 1000) {
+                    if let Some(v) = td
+                        .attr(a)
+                        .and_then(|v| v.trim().parse::<u32>().ok())
+                        .filter(|&v| v > 1 && v < 1000)
+                    {
                         attrs.push_str(&format!(" {a}=\"{v}\""));
                     }
                 }
                 let mut style = String::new();
-                if let Some(al) = td.attr("align").map(|s| s.trim().to_ascii_lowercase()).filter(|a| matches!(a.as_str(), "left" | "right" | "center" | "justify")) {
+                if let Some(al) = td
+                    .attr("align")
+                    .map(|s| s.trim().to_ascii_lowercase())
+                    .filter(|a| matches!(a.as_str(), "left" | "right" | "center" | "justify"))
+                {
                     style.push_str(&format!("text-align: {al};"));
                 }
-                if let Some(va) = td.attr("valign").map(|s| s.trim().to_ascii_lowercase()).filter(|a| matches!(a.as_str(), "top" | "middle" | "bottom" | "baseline")) {
+                if let Some(va) = td
+                    .attr("valign")
+                    .map(|s| s.trim().to_ascii_lowercase())
+                    .filter(|a| matches!(a.as_str(), "top" | "middle" | "bottom" | "baseline"))
+                {
                     style.push_str(&format!("vertical-align: {va};"));
                 }
                 if !style.is_empty() {
@@ -847,10 +959,21 @@ impl<'a> Builder<'a> {
         .unwrap_or_else(|| self.gen_id("toc"));
         let lines = self.title_lines(t);
         let class = format!("titleblock h{}", depth.min(6));
-        let pb = if depth > 1 && self.opts.break_after_chapter && self.cur_has_content() { " pb" } else { "" };
-        self.cur.push_str(&format!("<h{h} class=\"{class}{pb}\" id=\"{id}\">{lines}</h{h}>\n"));
+        let pb = if depth > 1 && self.opts.break_after_chapter && self.cur_has_content() {
+            " pb"
+        } else {
+            ""
+        };
+        self.cur.push_str(&format!(
+            "<h{h} class=\"{class}{pb}\" id=\"{id}\">{lines}</h{h}>\n"
+        ));
         if !text.is_empty() {
-            self.toc.push(TocEntry { level, title: text.clone(), file: self.cur_index(), anchor: Some(id) });
+            self.toc.push(TocEntry {
+                level,
+                title: text.clone(),
+                file: self.cur_index(),
+                anchor: Some(id),
+            });
             if self.cur_title.is_none() {
                 self.cur_title = Some(text);
             }
@@ -876,10 +999,17 @@ impl<'a> Builder<'a> {
     }
 
     fn loose_to_cur(&mut self, nodes: &[Node]) {
-        if nodes.iter().all(|n| matches!(n, Node::Text(t) if t.trim().is_empty())) {
+        if nodes
+            .iter()
+            .all(|n| matches!(n, Node::Text(t) if t.trim().is_empty()))
+        {
             return;
         }
-        let el = Element { name: "p".into(), attrs: vec![], children: nodes.to_vec() };
+        let el = Element {
+            name: "p".into(),
+            attrs: vec![],
+            children: nodes.to_vec(),
+        };
         self.block_to_cur(&el);
     }
 
@@ -928,7 +1058,14 @@ impl<'a> Builder<'a> {
         self.dropcap_pending = false;
     }
 
-    fn title_page(&mut self, info: &BookInfo, body: &Element, file_name: String, level: usize, annotation: Option<&Element>) {
+    fn title_page(
+        &mut self,
+        info: &BookInfo,
+        body: &Element,
+        file_name: String,
+        level: usize,
+        annotation: Option<&Element>,
+    ) {
         self.start_file(file_name, "");
         let id = self.gen_id("title");
         let body_title = body.child("title").filter(|t| t.has_text());
@@ -936,19 +1073,38 @@ impl<'a> Builder<'a> {
         if let Some(t) = body_title {
             let lines = self.title_lines(t);
             let h = (level + self.heading_level_offset).clamp(1, 6);
-            self.cur.push_str(&format!("<h{h} class=\"titleblock h0\" id=\"{id}\">{lines}</h{h}>\n"));
-            toc_title = if info.title.is_empty() { self.plain_title(t) } else { info.title.clone() };
+            self.cur.push_str(&format!(
+                "<h{h} class=\"titleblock h0\" id=\"{id}\">{lines}</h{h}>\n"
+            ));
+            toc_title = if info.title.is_empty() {
+                self.plain_title(t)
+            } else {
+                info.title.clone()
+            };
         } else {
-            let authors = info.authors.iter().map(|a| a.natural_name()).collect::<Vec<_>>().join(", ");
+            let authors = info
+                .authors
+                .iter()
+                .map(|a| a.natural_name())
+                .collect::<Vec<_>>()
+                .join(", ");
             let h = (level + self.heading_level_offset).clamp(1, 6);
-            self.cur.push_str(&format!("<div class=\"titlepage\" id=\"{id}\">\n"));
+            self.cur
+                .push_str(&format!("<div class=\"titlepage\" id=\"{id}\">\n"));
             if !authors.is_empty() {
                 self.cur.push_str("<p class=\"tp-author\">");
                 esc_text(&authors, &mut self.cur);
                 self.cur.push_str("</p>\n");
             }
             self.cur.push_str(&format!("<h{h} class=\"tp-title\">"));
-            esc_text(if info.title.is_empty() { "—" } else { &info.title }, &mut self.cur);
+            esc_text(
+                if info.title.is_empty() {
+                    "—"
+                } else {
+                    &info.title
+                },
+                &mut self.cur,
+            );
             self.cur.push_str(&format!("</h{h}>\n"));
             if let Some(s) = &info.series {
                 self.cur.push_str("<p class=\"tp-series\">");
@@ -962,9 +1118,18 @@ impl<'a> Builder<'a> {
             self.cur.push_str("</div>\n");
             toc_title = info.title.clone();
         }
-        let toc_title = if toc_title.is_empty() { self.labels.start.to_string() } else { toc_title };
+        let toc_title = if toc_title.is_empty() {
+            self.labels.start.to_string()
+        } else {
+            toc_title
+        };
         self.cur_title = Some(toc_title.clone());
-        self.toc.push(TocEntry { level, title: toc_title, file: self.cur_index(), anchor: None });
+        self.toc.push(TocEntry {
+            level,
+            title: toc_title,
+            file: self.cur_index(),
+            anchor: None,
+        });
         if let Some(a) = annotation {
             self.container_depth += 1;
             let mut buf = std::mem::take(&mut self.cur);
@@ -979,7 +1144,9 @@ impl<'a> Builder<'a> {
         self.start_file("annotation.xhtml".into(), "");
         let id = self.gen_id("annotation");
         let h = (1 + self.heading_level_offset).min(6);
-        self.cur.push_str(&format!("<div class=\"annotation\">\n<h{h} class=\"titleblock h1\" id=\"{id}\">"));
+        self.cur.push_str(&format!(
+            "<div class=\"annotation\">\n<h{h} class=\"titleblock h1\" id=\"{id}\">"
+        ));
         esc_text(self.labels.annotation, &mut self.cur);
         self.cur.push_str(&format!("</h{h}>\n"));
         let mut buf = std::mem::take(&mut self.cur);
@@ -990,20 +1157,34 @@ impl<'a> Builder<'a> {
         self.cur.push_str("</div>\n");
         self.cur_title = Some(self.labels.annotation.to_string());
         let title = self.labels.annotation.to_string();
-        self.toc.push(TocEntry { level: 1, title, file: self.cur_index(), anchor: None });
+        self.toc.push(TocEntry {
+            level: 1,
+            title,
+            file: self.cur_index(),
+            anchor: None,
+        });
         self.flush_file();
     }
 
     fn collect_notes(&mut self, el: &'a Element, book: usize) {
         for c in el.elements() {
-            if c.name == "section" && let Some(id) = c.attr("id").map(str::trim).filter(|s| !s.is_empty()) {
+            if c.name == "section"
+                && let Some(id) = c.attr("id").map(str::trim).filter(|s| !s.is_empty())
+            {
                 let key = self.key(id);
                 if self.note_index.contains_key(&key) {
                     continue;
                 }
                 let title = c.child("title").map(|t| t.clean_text()).unwrap_or_default();
                 self.note_index.insert(key.clone(), self.notes.len());
-                self.notes.push(Note { key, el: c, title, book, backref: None, label: String::new() });
+                self.notes.push(Note {
+                    key,
+                    el: c,
+                    title,
+                    book,
+                    backref: None,
+                    label: String::new(),
+                });
             } else if c.name == "section" || c.name == "body" {
                 self.collect_notes(c, book);
             }
@@ -1014,7 +1195,11 @@ impl<'a> Builder<'a> {
     fn add_book(&mut self, doc: &'a Doc, joined: bool) {
         let fb = doc.fb();
         let book = self.books.len();
-        let prefix = if joined { format!("b{}_", book + 1) } else { String::new() };
+        let prefix = if joined {
+            format!("b{}_", book + 1)
+        } else {
+            String::new()
+        };
         let binaries = fb
             .children_named("binary")
             .filter_map(|b| b.attr("id").map(|id| (id.trim(), b)))
@@ -1023,21 +1208,37 @@ impl<'a> Builder<'a> {
         self.book = book;
         let bodies: Vec<&'a Element> = fb.children_named("body").collect();
         type Bodies<'b> = Vec<(usize, &'b Element)>;
-        let (main_bodies, note_bodies): (Bodies, Bodies) =
-            bodies.iter().copied().enumerate().partition(|(i, b)| *i == 0 || b.attr("name").is_none_or(|n| n.trim().is_empty()));
+        let (main_bodies, note_bodies): (Bodies, Bodies) = bodies
+            .iter()
+            .copied()
+            .enumerate()
+            .partition(|(i, b)| *i == 0 || b.attr("name").is_none_or(|n| n.trim().is_empty()));
         self.notes_titles.push(None);
         for (_, nb) in &note_bodies {
             if self.notes_titles[book].is_none() {
-                self.notes_titles[book] = nb.child("title").map(|t| t.clean_text()).filter(|t| !t.is_empty());
+                self.notes_titles[book] = nb
+                    .child("title")
+                    .map(|t| t.clean_text())
+                    .filter(|t| !t.is_empty());
             }
             self.collect_notes(nb, book);
         }
-        let annotation_el = fb.path(&["description", "title-info", "annotation"]).filter(|a| a.has_text());
+        let annotation_el = fb
+            .path(&["description", "title-info", "annotation"])
+            .filter(|a| a.has_text());
         let level = 1;
         for (i, (_, body)) in main_bodies.iter().enumerate() {
             if i == 0 {
-                let name = if joined { format!("title{:02}.xhtml", book + 1) } else { "title.xhtml".into() };
-                let ann = if joined && self.opts.annotation { annotation_el } else { None };
+                let name = if joined {
+                    format!("title{:02}.xhtml", book + 1)
+                } else {
+                    "title.xhtml".into()
+                };
+                let ann = if joined && self.opts.annotation {
+                    annotation_el
+                } else {
+                    None
+                };
                 self.title_page(&doc.info, body, name, level, ann);
                 self.level_base = if joined { 1 } else { 0 };
             } else {
@@ -1074,21 +1275,40 @@ impl<'a> Builder<'a> {
         self.in_notes = true;
         let mut n_file = 1;
         self.start_file("notes.xhtml".into(), "");
-        let title = self.notes_titles.iter().flatten().next().cloned().unwrap_or_else(|| self.labels.notes.to_string());
+        let title = self
+            .notes_titles
+            .iter()
+            .flatten()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| self.labels.notes.to_string());
         let id = self.gen_id("notes");
         let h = (1 + self.heading_level_offset).min(6);
-        self.cur.push_str(&format!("<h{h} class=\"titlenotes\" id=\"{id}\">"));
+        self.cur
+            .push_str(&format!("<h{h} class=\"titlenotes\" id=\"{id}\">"));
         esc_text(&title, &mut self.cur);
         self.cur.push_str(&format!("</h{h}>\n"));
         self.cur_title = Some(title.clone());
-        self.toc.push(TocEntry { level: 1, title, file: self.cur_index(), anchor: Some(id) });
+        self.toc.push(TocEntry {
+            level: 1,
+            title,
+            file: self.cur_index(),
+            anchor: Some(id),
+        });
         let popup = self.opts.footnotes == Footnotes::Popup;
         let multi = self.books.len() > 1;
         let mut last_book = usize::MAX;
         for i in 0..self.notes.len() {
             let (key, el, ntitle, book, backref, label) = {
                 let n = &self.notes[i];
-                (n.key.clone(), n.el, n.title.clone(), n.book, n.backref.clone(), n.label.clone())
+                (
+                    n.key.clone(),
+                    n.el,
+                    n.title.clone(),
+                    n.book,
+                    n.backref.clone(),
+                    n.label.clone(),
+                )
             };
             self.book = book;
             if self.cur.len() > SOFT_LIMIT {
@@ -1098,13 +1318,24 @@ impl<'a> Builder<'a> {
             if multi && book != last_book {
                 let h2 = (h + 1).min(6);
                 self.cur.push_str(&format!("<h{h2} class=\"titlenotes\">"));
-                esc_text(books_titles.get(book).map(String::as_str).unwrap_or(""), &mut self.cur);
+                esc_text(
+                    books_titles.get(book).map(String::as_str).unwrap_or(""),
+                    &mut self.cur,
+                );
                 self.cur.push_str(&format!("</h{h2}>\n"));
             }
             last_book = book;
             let want = key.clone();
-            let Some(hid) = self.register(key, &want) else { continue };
-            let shown = if !ntitle.is_empty() { ntitle } else if !label.is_empty() { label } else { "*".into() };
+            let Some(hid) = self.register(key, &want) else {
+                continue;
+            };
+            let shown = if !ntitle.is_empty() {
+                ntitle
+            } else if !label.is_empty() {
+                label
+            } else {
+                "*".into()
+            };
             let mut buf = std::mem::take(&mut self.cur);
             if popup {
                 buf.push_str(&format!("<aside class=\"note\" epub:type=\"footnote\" id=\"{hid}\">\n<p class=\"note-title\">"));
@@ -1125,7 +1356,16 @@ impl<'a> Builder<'a> {
                 buf.push_str("</p>\n");
             }
             self.container_depth += 1;
-            let body = Element { name: "section".into(), attrs: vec![], children: el.children.iter().filter(|c| !matches!(c, Node::Elem(e) if e.name == "title")).cloned().collect() };
+            let body = Element {
+                name: "section".into(),
+                attrs: vec![],
+                children: el
+                    .children
+                    .iter()
+                    .filter(|c| !matches!(c, Node::Elem(e) if e.name == "title"))
+                    .cloned()
+                    .collect(),
+            };
             self.blocks(&body, &mut buf);
             self.container_depth -= 1;
             buf.push_str(if popup { "</aside>\n" } else { "</div>\n" });
@@ -1192,49 +1432,93 @@ fn apply_dropcap(html: &mut String) -> bool {
 fn name_fields(info: &BookInfo, lang: &str) -> NameFields {
     let a = info.authors.first().cloned().unwrap_or_default();
     NameFields {
-        author_last: if a.last.is_empty() { a.nickname.clone() } else { a.last.clone() },
+        author_last: if a.last.is_empty() {
+            a.nickname.clone()
+        } else {
+            a.last.clone()
+        },
         author_first: a.first,
         author_middle: a.middle,
         series: info.series.clone(),
         serno: info.serno,
         title: info.title.clone(),
         lang: lang.to_string(),
-        date: if info.date.is_empty() { info.year.clone() } else { info.date.clone() },
+        date: if info.date.is_empty() {
+            info.year.clone()
+        } else {
+            info.date.clone()
+        },
     }
 }
 
-fn prepare_cover(b: &mut Builder, doc: &Doc, info: &BookInfo, lang: &str, key_prefix: &str) -> Option<usize> {
+fn prepare_cover(
+    b: &mut Builder,
+    doc: &Doc,
+    info: &BookInfo,
+    lang: &str,
+    key_prefix: &str,
+) -> Option<usize> {
     let opts = b.opts;
     let fb2_cover = doc.cover_id.as_deref().and_then(|id| {
         let fb = doc.fb();
-        let bin = fb.children_named("binary").find(|x| x.attr("id").map(str::trim) == Some(id))?;
+        let bin = fb
+            .children_named("binary")
+            .find(|x| x.attr("id").map(str::trim) == Some(id))?;
         images::prepare(base64_decode(&bin.text()))
     });
-    let label = opts.cover_label.as_deref().map(|t| expand(t, &name_fields(info, lang))).filter(|l| !l.trim().is_empty());
+    let label = opts
+        .cover_label
+        .as_deref()
+        .map(|t| expand(t, &name_fields(info, lang)))
+        .filter(|l| !l.trim().is_empty());
     let generate = |b: &Builder| {
         let authors = info
             .authors
             .iter()
             .map(|a| {
-                let short = [a.first.trim(), a.last.trim()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
-                if short.is_empty() { a.natural_name() } else { short }
+                let short = [a.first.trim(), a.last.trim()]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if short.is_empty() {
+                    a.natural_name()
+                } else {
+                    short
+                }
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let bottom = label.clone().unwrap_or_else(|| match (&info.series, info.serno) {
-            (Some(s), Some(n)) => format!("{s}\n{n}"),
-            (Some(s), None) => s.clone(),
-            _ => String::new(),
-        });
+        let bottom = label
+            .clone()
+            .unwrap_or_else(|| match (&info.series, info.serno) {
+                (Some(s), Some(n)) => format!("{s}\n{n}"),
+                (Some(s), None) => s.clone(),
+                _ => String::new(),
+            });
         let data = cover::generate_cover(b.assets, &authors, &info.title, &bottom);
         let (w, h) = images::dimensions(&data, Kind::Jpeg).unwrap_or((800, 1280));
-        Prepared { data, kind: Kind::Jpeg, width: w, height: h }
+        Prepared {
+            data,
+            kind: Kind::Jpeg,
+            width: w,
+            height: h,
+        }
     };
     let (img, reusable) = match (opts.create_cover, fb2_cover) {
         (CreateCover::Always, _) | (CreateCover::Missing, None) => (generate(b), false),
         (_, Some(c)) => match &label {
             Some(l) => match cover::label_cover(b.assets, &c.data, l) {
-                Some(data) => (Prepared { data, kind: Kind::Jpeg, width: c.width, height: c.height }, false),
+                Some(data) => (
+                    Prepared {
+                        data,
+                        kind: Kind::Jpeg,
+                        width: c.width,
+                        height: c.height,
+                    },
+                    false,
+                ),
                 None => (c, true),
             },
             None => (c, true),
@@ -1258,7 +1542,15 @@ fn cover_page(b: &mut Builder, res: usize) -> XhtmlFile {
         "<div class=\"cover\"><svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" version=\"1.1\" width=\"100%\" height=\"100%\" viewBox=\"0 0 {w} {h}\" preserveAspectRatio=\"xMidYMid meet\"><image width=\"{w}\" height=\"{h}\" xlink:href=\"{}\"/></svg></div>\n",
         r.href
     );
-    XhtmlFile { name: "cover.xhtml".into(), title: b.labels.cover.to_string(), body, body_class: "cover", linear: true, svg: true, in_spine: true }
+    XhtmlFile {
+        name: "cover.xhtml".into(),
+        title: b.labels.cover.to_string(),
+        body,
+        body_class: "cover",
+        linear: true,
+        svg: true,
+        in_spine: true,
+    }
 }
 
 fn build_css(opts: &ConvertOptions, assets: &Assets, fonts: &mut Vec<Resource>) -> String {
@@ -1277,13 +1569,32 @@ fn build_css(opts: &ConvertOptions, assets: &Assets, fonts: &mut Vec<Resource>) 
                 if face.italic { "italic" } else { "normal" },
                 face.file_name
             ));
-            fonts.push(Resource { href: format!("fonts/{}", face.file_name), media_type: "font/ttf".into(), data: face.data.to_vec(), cover_image: false, width: 0, height: 0, packed: true });
+            fonts.push(Resource {
+                href: format!("fonts/{}", face.file_name),
+                media_type: "font/ttf".into(),
+                data: face.data.to_vec(),
+                cover_image: false,
+                width: 0,
+                height: 0,
+                packed: true,
+            });
         }
-        css.push_str(&format!("body {{\n    font-family: \"{}\", serif;\n}}\n", fam.name));
+        css.push_str(&format!(
+            "body {{\n    font-family: \"{}\", serif;\n}}\n",
+            fam.name
+        ));
     }
     if opts.drop_caps {
         css.push_str("@font-face {\n    font-family: \"Sangha\";\n    src: url(\"../fonts/Sangha.ttf\");\n}\nspan.dropcaps {\n    font-family: \"Sangha\", serif;\n    font-weight: normal;\n}\n");
-        fonts.push(Resource { href: "fonts/Sangha.ttf".into(), media_type: "font/ttf".into(), data: assets.dropcaps_font().to_vec(), cover_image: false, width: 0, height: 0, packed: true });
+        fonts.push(Resource {
+            href: "fonts/Sangha.ttf".into(),
+            media_type: "font/ttf".into(),
+            data: assets.dropcaps_font().to_vec(),
+            cover_image: false,
+            width: 0,
+            height: 0,
+            packed: true,
+        });
     }
     if let Some(u) = opts.user_css.as_deref().filter(|u| !u.trim().is_empty()) {
         css.push_str("\n/* user CSS */\n");
@@ -1293,14 +1604,24 @@ fn build_css(opts: &ConvertOptions, assets: &Assets, fonts: &mut Vec<Resource>) 
     css
 }
 
-pub(crate) fn convert_docs(docs: &[Doc], opts: &ConvertOptions, assets: &Assets, series_title: Option<&str>) -> Result<Vec<u8>> {
-    let first = docs.first().ok_or_else(|| Error::Format("no books".into()))?;
+pub(crate) fn convert_docs(
+    docs: &[Doc],
+    opts: &ConvertOptions,
+    assets: &Assets,
+    series_title: Option<&str>,
+) -> Result<Vec<u8>> {
+    let first = docs
+        .first()
+        .ok_or_else(|| Error::Format("no books".into()))?;
     let joined = docs.len() > 1;
     let lang = normalize_lang(&first.info.lang, &first.info.title);
     // metadata of the output
     let mut info = first.info.clone();
     if joined {
-        let series = series_title.map(str::to_string).or_else(|| first.info.series.clone()).unwrap_or_else(|| first.info.title.clone());
+        let series = series_title
+            .map(str::to_string)
+            .or_else(|| first.info.series.clone())
+            .unwrap_or_else(|| first.info.title.clone());
         info.title = series.clone();
         info.series = Some(series);
         info.serno = None;
@@ -1328,12 +1649,21 @@ pub(crate) fn convert_docs(docs: &[Doc], opts: &ConvertOptions, assets: &Assets,
     // annotation page (single book)
     if !joined
         && opts.annotation
-        && let Some(a) = first.fb().path(&["description", "title-info", "annotation"]).filter(|a| a.has_text())
+        && let Some(a) = first
+            .fb()
+            .path(&["description", "title-info", "annotation"])
+            .filter(|a| a.has_text())
     {
         // render with book 0 context so ids/images resolve
         let fb = first.fb();
-        let binaries = fb.children_named("binary").filter_map(|x| x.attr("id").map(|id| (id.trim(), x))).collect();
-        b.books.push(BookCtx { prefix: String::new(), binaries });
+        let binaries = fb
+            .children_named("binary")
+            .filter_map(|x| x.attr("id").map(|id| (id.trim(), x)))
+            .collect();
+        b.books.push(BookCtx {
+            prefix: String::new(),
+            binaries,
+        });
         b.book = 0;
         b.annotation_page(a);
         b.books.clear();
@@ -1343,8 +1673,14 @@ pub(crate) fn convert_docs(docs: &[Doc], opts: &ConvertOptions, assets: &Assets,
         // series title page
         b.start_file("series.xhtml".into(), "");
         let id = b.gen_id("series");
-        b.cur.push_str(&format!("<div class=\"titlepage\" id=\"{id}\">\n"));
-        let authors = info.authors.iter().map(|a| a.natural_name()).collect::<Vec<_>>().join(", ");
+        b.cur
+            .push_str(&format!("<div class=\"titlepage\" id=\"{id}\">\n"));
+        let authors = info
+            .authors
+            .iter()
+            .map(|a| a.natural_name())
+            .collect::<Vec<_>>()
+            .join(", ");
         if !authors.is_empty() {
             b.cur.push_str("<p class=\"tp-author\">");
             esc_text(&authors, &mut b.cur);
@@ -1369,14 +1705,28 @@ pub(crate) fn convert_docs(docs: &[Doc], opts: &ConvertOptions, assets: &Assets,
     let mut files = pre_files;
     let offset = files.len();
     let content_files = std::mem::take(&mut b.files);
-    let toc: Vec<TocEntry> = b.toc.iter().map(|t| TocEntry { file: t.file + offset, ..t.clone() }).collect();
+    let toc: Vec<TocEntry> = b
+        .toc
+        .iter()
+        .map(|t| TocEntry {
+            file: t.file + offset,
+            ..t.clone()
+        })
+        .collect();
     let body_start = offset + n_pre; // title page (or series page)
     files.extend(content_files);
     let mut fonts = Vec::new();
     let css = build_css(opts, assets, &mut fonts);
     let mut resources = std::mem::take(&mut b.resources);
     resources.extend(fonts);
-    let identifier = epub::identifier(&info.id, first.hash ^ docs.iter().skip(1).fold(0u128, |a, d| a.rotate_left(7) ^ d.hash));
+    let identifier = epub::identifier(
+        &info.id,
+        first.hash
+            ^ docs
+                .iter()
+                .skip(1)
+                .fold(0u128, |a, d| a.rotate_left(7) ^ d.hash),
+    );
     let mut spine = Vec::new();
     let nav_pos = match opts.toc_placement {
         TocPlacement::Start => Some(body_start),
@@ -1418,8 +1768,16 @@ pub fn fb2_to_epub(bytes: &[u8], opts: &ConvertOptions, assets: &Assets) -> Resu
 /// Joins several FB2 books (e.g. a series, in reading order) into one EPUB: a series title page,
 /// then each book as a part with its own title page and nested chapters. `title` defaults to
 /// the series name of the first book.
-pub fn join_to_epub(books: &[&[u8]], opts: &ConvertOptions, assets: &Assets, title: Option<&str>) -> Result<Vec<u8>> {
-    let docs = books.iter().map(|b| Doc::load(b)).collect::<Result<Vec<_>>>()?;
+pub fn join_to_epub(
+    books: &[&[u8]],
+    opts: &ConvertOptions,
+    assets: &Assets,
+    title: Option<&str>,
+) -> Result<Vec<u8>> {
+    let docs = books
+        .iter()
+        .map(|b| Doc::load(b))
+        .collect::<Result<Vec<_>>>()?;
     if docs.len() == 1 {
         return convert_docs(&docs, opts, assets, None);
     }

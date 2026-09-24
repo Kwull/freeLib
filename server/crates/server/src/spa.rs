@@ -50,7 +50,12 @@ fn respond(headers: &HeaderMap, path: &str, data: Vec<u8>, etag: &str, cache: &s
     r
 }
 
-pub async fn serve(State(st): State<AppState>, method: Method, uri: Uri, headers: HeaderMap) -> Response {
+pub async fn serve(
+    State(st): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
     let path = uri.path();
     if path.starts_with("/api/") || path == "/api" {
         return crate::error::ApiError::not_found("no such endpoint").into_response();
@@ -63,7 +68,11 @@ pub async fn serve(State(st): State<AppState>, method: Method, uri: Uri, headers
     if !rel.is_empty()
         && let Some((data, etag)) = load(dir, rel)
     {
-        let cache = if rel.starts_with("assets/") { IMMUTABLE } else { REVALIDATE };
+        let cache = if rel.starts_with("assets/") {
+            IMMUTABLE
+        } else {
+            REVALIDATE
+        };
         return respond(&headers, rel, data, &etag, cache);
     }
     if rel.starts_with("assets/") {
@@ -71,6 +80,10 @@ pub async fn serve(State(st): State<AppState>, method: Method, uri: Uri, headers
     }
     match load(dir, "index.html") {
         Some((data, etag)) => respond(&headers, "index.html", data, &etag, REVALIDATE),
-        None => (StatusCode::NOT_FOUND, "web app not built (web/dist missing)").into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            "web app not built (web/dist missing)",
+        )
+            .into_response(),
     }
 }

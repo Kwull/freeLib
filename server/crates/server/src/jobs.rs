@@ -56,7 +56,7 @@ struct Entry {
 /// Server-sent events.
 #[derive(Debug, Clone)]
 pub enum Event {
-    Job { owner: i64, job: Job },
+    Job { owner: i64, job: Box<Job> },
     Library { id: i64 },
 }
 
@@ -64,7 +64,9 @@ impl Event {
     /// Whether `user` may see this event.
     pub fn visible_to(&self, user: &User) -> bool {
         match self {
-            Event::Job { owner, job } => *owner == user.id || (user.is_admin() && job.kind == "import"),
+            Event::Job { owner, job } => {
+                *owner == user.id || (user.is_admin() && job.kind == "import")
+            }
             Event::Library { .. } => true,
         }
     }
@@ -77,7 +79,10 @@ pub struct JobManager {
 
 impl JobManager {
     pub fn new(events: broadcast::Sender<Event>) -> JobManager {
-        JobManager { entries: Mutex::new(Vec::new()), events }
+        JobManager {
+            entries: Mutex::new(Vec::new()),
+            events,
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Entry>> {
@@ -85,7 +90,10 @@ impl JobManager {
     }
 
     fn emit(&self, owner: i64, job: Job) {
-        let _ = self.events.send(Event::Job { owner, job });
+        let _ = self.events.send(Event::Job {
+            owner,
+            job: Box::new(job),
+        });
     }
 
     /// Creates a queued job; returns it and its cancellation flag.
@@ -191,19 +199,30 @@ impl JobManager {
     }
 
     pub fn get(&self, id: &str, user: &User) -> Option<Job> {
-        self.lock().iter().find(|e| e.job.id == id && Self::visible(e, user)).map(|e| e.job.clone())
+        self.lock()
+            .iter()
+            .find(|e| e.job.id == id && Self::visible(e, user))
+            .map(|e| e.job.clone())
     }
 
     /// Newest first, at most [`MAX_LIST`].
     pub fn list(&self, user: &User) -> Vec<Job> {
-        self.lock().iter().rev().filter(|e| Self::visible(e, user)).take(MAX_LIST).map(|e| e.job.clone()).collect()
+        self.lock()
+            .iter()
+            .rev()
+            .filter(|e| Self::visible(e, user))
+            .take(MAX_LIST)
+            .map(|e| e.job.clone())
+            .collect()
     }
 
     /// Requests cancellation; a queued job is cancelled at once, a running one when it notices.
     pub fn cancel(&self, id: &str, user: &User) -> Option<Job> {
         let queued = {
             let g = self.lock();
-            let e = g.iter().find(|e| e.job.id == id && Self::visible(e, user))?;
+            let e = g
+                .iter()
+                .find(|e| e.job.id == id && Self::visible(e, user))?;
             e.cancel.store(true, Ordering::SeqCst);
             e.job.state == "queued"
         };
@@ -214,7 +233,10 @@ impl JobManager {
     }
 
     pub fn is_cancelled(&self, id: &str) -> bool {
-        self.lock().iter().find(|e| e.job.id == id).is_none_or(|e| e.cancel.load(Ordering::SeqCst))
+        self.lock()
+            .iter()
+            .find(|e| e.job.id == id)
+            .is_none_or(|e| e.cancel.load(Ordering::SeqCst))
     }
 
     /// Removes finished jobs visible to `user`; returns directories to delete.
@@ -231,7 +253,10 @@ impl JobManager {
     }
 
     pub fn file(&self, id: &str, user: &User) -> Option<JobFile> {
-        self.lock().iter().find(|e| e.job.id == id && Self::visible(e, user)).and_then(|e| e.file.clone())
+        self.lock()
+            .iter()
+            .find(|e| e.job.id == id && Self::visible(e, user))
+            .and_then(|e| e.file.clone())
     }
 
     /// Drops jobs finished more than `ttl_secs` ago (and trims the list); returns directories to delete.

@@ -39,7 +39,11 @@ pub struct LibraryBody {
 }
 
 /// Library folder and INPX must be inside `FREELIB_BOOKS_DIR`; stored as absolute paths.
-fn validate_paths(books: &Path, path: &str, inpx: Option<&str>) -> ApiResult<(String, Option<String>)> {
+fn validate_paths(
+    books: &Path,
+    path: &str,
+    inpx: Option<&str>,
+) -> ApiResult<(String, Option<String>)> {
     let dir = resolve_inside(books, path)?;
     if !dir.is_dir() {
         return Err(ApiError::bad_request("library path must be a folder"));
@@ -48,11 +52,12 @@ fn validate_paths(books: &Path, path: &str, inpx: Option<&str>) -> ApiResult<(St
         Some(i) => {
             // relative INPX paths are relative to the books folder (as /fs returns them);
             // a bare file name is looked up in the library folder
-            let candidate = if !Path::new(i).is_absolute() && !i.contains('/') && dir.join(i).is_file() {
-                dir.join(i).to_string_lossy().into_owned()
-            } else {
-                i.to_string()
-            };
+            let candidate =
+                if !Path::new(i).is_absolute() && !i.contains('/') && dir.join(i).is_file() {
+                    dir.join(i).to_string_lossy().into_owned()
+                } else {
+                    i.to_string()
+                };
             let f = resolve_inside(books, &candidate)?;
             if !f.is_file() {
                 return Err(ApiError::bad_request("INPX must be a file"));
@@ -64,7 +69,11 @@ fn validate_paths(books: &Path, path: &str, inpx: Option<&str>) -> ApiResult<(St
     Ok((dir.to_string_lossy().into_owned(), inpx))
 }
 
-pub async fn create(State(st): State<AppState>, Admin(u): Admin, Json(b): Json<LibraryBody>) -> ApiResult<Json<LibraryDto>> {
+pub async fn create(
+    State(st): State<AppState>,
+    Admin(u): Admin,
+    Json(b): Json<LibraryBody>,
+) -> ApiResult<Json<LibraryDto>> {
     let name = b.name.as_deref().map(str::trim).unwrap_or("").to_string();
     let path = b.path.clone().unwrap_or_default();
     let inpx = b.inpx.clone().flatten();
@@ -100,7 +109,11 @@ pub async fn update(
     UrlPath(id): UrlPath<i64>,
     Json(b): Json<LibraryBody>,
 ) -> ApiResult<Json<LibraryDto>> {
-    let mut row = st.db.run(move |c| db::get_library(c, id)).await?.ok_or_else(|| ApiError::not_found("library not found"))?;
+    let mut row = st
+        .db
+        .run(move |c| db::get_library(c, id))
+        .await?
+        .ok_or_else(|| ApiError::not_found("library not found"))?;
     if let Some(n) = b.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
         row.name = n.to_string();
     }
@@ -127,16 +140,28 @@ pub async fn update(
     Ok(Json(st.library_dto_async(id, u.id).await?))
 }
 
-pub async fn delete(State(st): State<AppState>, Admin(_): Admin, UrlPath(id): UrlPath<i64>) -> ApiResult<StatusCode> {
+pub async fn delete(
+    State(st): State<AppState>,
+    Admin(_): Admin,
+    UrlPath(id): UrlPath<i64>,
+) -> ApiResult<StatusCode> {
     let rt = st.lib(id)?;
-    if rt.import.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+    if rt
+        .import
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some()
+    {
         return Err(ApiError::conflict("an import of this library is running"));
     }
     st.db.run(move |c| db::delete_library(c, id)).await?;
     rt.handle.close();
     st.remove_lib(id);
     let db_path = rt.handle.path().to_path_buf();
-    let caches: Vec<PathBuf> = ["info", "covers", "out"].iter().map(|k| st.cache_dir(k, id)).collect();
+    let caches: Vec<PathBuf> = ["info", "covers", "out"]
+        .iter()
+        .map(|k| st.cache_dir(k, id))
+        .collect();
     tokio::task::spawn_blocking(move || {
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_file(freelib_import::new_db_path(&db_path));
@@ -177,7 +202,11 @@ pub struct FsQuery {
     path: Option<String>,
 }
 
-pub async fn fs(State(st): State<AppState>, Admin(_): Admin, Query(q): Query<FsQuery>) -> ApiResult<Json<serde_json::Value>> {
+pub async fn fs(
+    State(st): State<AppState>,
+    Admin(_): Admin,
+    Query(q): Query<FsQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
     let books = st.cfg.books_dir.clone();
     let p = q.path.unwrap_or_default();
     let v = tokio::task::spawn_blocking(move || -> ApiResult<serde_json::Value> {

@@ -1,5 +1,5 @@
-use axum::Json;
 use axum::Extension;
+use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -79,7 +79,11 @@ pub async fn login(
     st.db.run(move |c| db::create_session(c, uid, &t2)).await?;
     tracing::info!(user = %user.username, "login");
     let mut r = Json(json!({ "user": user })).into_response();
-    set_header(&mut r, header::SET_COOKIE, &auth::session_cookie(&token, auth::is_https(&headers)));
+    set_header(
+        &mut r,
+        header::SET_COOKIE,
+        &auth::session_cookie(&token, auth::is_https(&headers)),
+    );
     set_header(&mut r, header::CACHE_CONTROL, "no-store");
     Ok(r)
 }
@@ -93,4 +97,3 @@ pub async fn logout(State(st): State<AppState>, headers: HeaderMap) -> ApiResult
     set_header(&mut r, header::SET_COOKIE, &auth::clear_cookie());
     Ok(r)
 }
-

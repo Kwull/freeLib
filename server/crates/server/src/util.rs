@@ -13,14 +13,22 @@ use sha2::{Digest, Sha256};
 use crate::error::ApiError;
 
 pub fn unix_now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// RFC 3339 (`2024-05-01T12:34:56Z`) for a Unix time.
 pub fn rfc3339_at(secs: i64) -> String {
     let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
     let s = secs.rem_euclid(86_400);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", s / 3600, s / 60 % 60, s % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        s / 3600,
+        s / 60 % 60,
+        s % 60
+    )
 }
 
 pub fn now_rfc3339() -> String {
@@ -56,11 +64,16 @@ pub fn random_id() -> String {
 
 /// True when `If-None-Match` matches `etag` (or `*`).
 pub fn etag_matches(headers: &HeaderMap, etag: &str) -> bool {
-    let Some(v) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) else {
+    let Some(v) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    else {
         return false;
     };
     let bare = etag.trim_start_matches("W/");
-    v.split(',').map(str::trim).any(|t| t == "*" || t.trim_start_matches("W/") == bare)
+    v.split(',')
+        .map(str::trim)
+        .any(|t| t == "*" || t.trim_start_matches("W/") == bare)
 }
 
 pub fn not_modified(etag: &str, cache_control: &str) -> Response {
@@ -79,10 +92,20 @@ pub fn set_header(r: &mut Response, name: header::HeaderName, value: &str) {
 /// JSON response with a content-hash ETag and 304 support (`private, no-cache`).
 pub fn json_etag<T: Serialize>(headers: &HeaderMap, value: &T) -> Result<Response, ApiError> {
     let body = serde_json::to_vec(value).map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(bytes_etag(headers, body, "application/json", "private, no-cache"))
+    Ok(bytes_etag(
+        headers,
+        body,
+        "application/json",
+        "private, no-cache",
+    ))
 }
 
-pub fn bytes_etag(headers: &HeaderMap, body: Vec<u8>, content_type: &str, cache_control: &str) -> Response {
+pub fn bytes_etag(
+    headers: &HeaderMap,
+    body: Vec<u8>,
+    content_type: &str,
+    cache_control: &str,
+) -> Response {
     let etag = format!("\"{}\"", &sha256_hex(&body)[..20]);
     if etag_matches(headers, &etag) {
         return not_modified(&etag, cache_control);
@@ -103,9 +126,19 @@ pub fn content_disposition(inline: bool, name: &str) -> String {
         .remove(b'~');
     let fallback: String = freelib_fb2conv::transliteration(name)
         .chars()
-        .map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' && c != '%' || c == ' ' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_graphic() && c != '"' && c != '\\' && c != '%' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
-    let fallback = if fallback.trim().is_empty() { "book".to_string() } else { fallback };
+    let fallback = if fallback.trim().is_empty() {
+        "book".to_string()
+    } else {
+        fallback
+    };
     format!(
         "{}; filename=\"{}\"; filename*=UTF-8''{}",
         if inline { "inline" } else { "attachment" },
@@ -117,13 +150,24 @@ pub fn content_disposition(inline: bool, name: &str) -> String {
 /// Resolves a user-supplied path (absolute, or relative to `root`) and checks that the result
 /// stays inside `root` after resolving symlinks. The path must exist.
 pub fn resolve_inside(root: &Path, user_path: &str) -> Result<PathBuf, ApiError> {
-    let root_c = root.canonicalize().map_err(|_| ApiError::bad_request("books folder is not available"))?;
+    let root_c = root
+        .canonicalize()
+        .map_err(|_| ApiError::bad_request("books folder is not available"))?;
     let p = Path::new(user_path.trim());
-    let joined = if p.is_absolute() { p.to_path_buf() } else { root_c.join(p) };
-    if joined.components().any(|c| matches!(c, Component::ParentDir)) {
+    let joined = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root_c.join(p)
+    };
+    if joined
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
         return Err(ApiError::forbidden("path must not contain '..'"));
     }
-    let c = joined.canonicalize().map_err(|_| ApiError::bad_request(format!("path not found: {user_path}")))?;
+    let c = joined
+        .canonicalize()
+        .map_err(|_| ApiError::bad_request(format!("path not found: {user_path}")))?;
     if !c.starts_with(&root_c) {
         return Err(ApiError::forbidden("path is outside the books folder"));
     }
@@ -132,7 +176,9 @@ pub fn resolve_inside(root: &Path, user_path: &str) -> Result<PathBuf, ApiError>
 
 /// Path of `p` relative to `root` (both canonical), `""` for the root itself.
 pub fn relative_to(root: &Path, p: &Path) -> String {
-    p.strip_prefix(root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default()
+    p.strip_prefix(root)
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default()
 }
 
 /// Sanitises a relative sub-folder (device target): no `..`, no absolute paths, no empty parts.
@@ -162,7 +208,10 @@ pub fn join_safe(dir: &Path, rel: &str) -> Option<PathBuf> {
 
 /// Parses `Accept-Encoding`: returns "br", "gzip" or "" (identity).
 pub fn preferred_encoding(headers: &HeaderMap) -> &'static str {
-    let Some(v) = headers.get(header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()) else {
+    let Some(v) = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+    else {
         return "";
     };
     let mut br = false;
@@ -171,7 +220,11 @@ pub fn preferred_encoding(headers: &HeaderMap) -> &'static str {
         let mut it = part.split(';');
         let name = it.next().unwrap_or("").trim().to_ascii_lowercase();
         let q = it
-            .find_map(|p| p.trim().strip_prefix("q=").and_then(|q| q.parse::<f32>().ok()))
+            .find_map(|p| {
+                p.trim()
+                    .strip_prefix("q=")
+                    .and_then(|q| q.parse::<f32>().ok())
+            })
             .unwrap_or(1.0);
         if q <= 0.0 {
             continue;
@@ -232,9 +285,15 @@ mod tests {
     #[test]
     fn encodings() {
         let mut h = HeaderMap::new();
-        h.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip, deflate, br;q=0"));
+        h.insert(
+            header::ACCEPT_ENCODING,
+            HeaderValue::from_static("gzip, deflate, br;q=0"),
+        );
         assert_eq!(preferred_encoding(&h), "gzip");
-        h.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip, br"));
+        h.insert(
+            header::ACCEPT_ENCODING,
+            HeaderValue::from_static("gzip, br"),
+        );
         assert_eq!(preferred_encoding(&h), "br");
     }
 

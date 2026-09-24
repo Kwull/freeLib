@@ -39,7 +39,10 @@ fn cover_ext(mime: &str) -> &'static str {
 
 fn paths(st: &AppState, lib: i64, d: &BookDetail) -> (PathBuf, PathBuf) {
     let h = hash(d);
-    (st.cache_dir("info", lib).join(format!("{h}.json")), st.cache_dir("covers", lib).join(h))
+    (
+        st.cache_dir("info", lib).join(format!("{h}.json")),
+        st.cache_dir("covers", lib).join(h),
+    )
 }
 
 /// Annotation + cover presence (reads the book on first call, then cached).
@@ -103,7 +106,11 @@ fn encode_webp(img: &image::DynamicImage, quality: f32) -> Option<Vec<u8>> {
     if w == 0 || h == 0 || w > 16383 || h > 16383 {
         return None;
     }
-    Some(webp::Encoder::from_rgb(rgb.as_raw(), w, h).encode(quality).to_vec())
+    Some(
+        webp::Encoder::from_rgb(rgb.as_raw(), w, h)
+            .encode(quality)
+            .to_vec(),
+    )
 }
 
 fn write_file(p: &Path, data: &[u8]) -> ApiResult<()> {
@@ -117,17 +124,31 @@ fn write_file(p: &Path, data: &[u8]) -> ApiResult<()> {
 }
 
 /// Cover file and its MIME type; `None` when the book has no cover.
-pub async fn cover(st: &AppState, lib: i64, lib_dir: &Path, d: &BookDetail, thumb: bool) -> ApiResult<Option<(PathBuf, String)>> {
+pub async fn cover(
+    st: &AppState,
+    lib: i64,
+    lib_dir: &Path,
+    d: &BookDetail,
+    thumb: bool,
+) -> ApiResult<Option<(PathBuf, String)>> {
     let mut inf = info(st, lib, lib_dir, d).await?;
-    let Some(mut mime) = inf.cover.clone() else { return Ok(None) };
+    let Some(mut mime) = inf.cover.clone() else {
+        return Ok(None);
+    };
     let (info_path, base) = paths(st, lib, d);
-    let name = base.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let name = base
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let mut full = base.with_file_name(format!("{name}-full.{}", cover_ext(&mime)));
     if !full.is_file() {
         // cache partially deleted: rebuild
         let _ = tokio::fs::remove_file(&info_path).await;
         inf = info(st, lib, lib_dir, d).await?;
-        let Some(m) = inf.cover.clone() else { return Ok(None) };
+        let Some(m) = inf.cover.clone() else {
+            return Ok(None);
+        };
         mime = m;
         full = base.with_file_name(format!("{name}-full.{}", cover_ext(&mime)));
     }
@@ -138,13 +159,20 @@ pub async fn cover(st: &AppState, lib: i64, lib_dir: &Path, d: &BookDetail, thum
     if tpath.is_file() {
         return Ok(Some((tpath, "image/webp".into())));
     }
-    let _permit = st.workers.acquire().await.map_err(|_| ApiError::internal("worker pool closed"))?;
+    let _permit = st
+        .workers
+        .acquire()
+        .await
+        .map_err(|_| ApiError::internal("worker pool closed"))?;
     let t2 = tpath.clone();
     let made = tokio::task::spawn_blocking(move || -> ApiResult<bool> {
         let data = std::fs::read(&full)?;
-        let Ok(img) = image::load_from_memory(&data) else { return Ok(false) };
+        let Ok(img) = image::load_from_memory(&data) else {
+            return Ok(false);
+        };
         let img = if img.height() > THUMB_HEIGHT {
-            let w = ((img.width() as u64 * THUMB_HEIGHT as u64) / img.height().max(1) as u64).max(1) as u32;
+            let w = ((img.width() as u64 * THUMB_HEIGHT as u64) / img.height().max(1) as u64).max(1)
+                as u32;
             img.resize_exact(w, THUMB_HEIGHT, image::imageops::FilterType::Triangle)
         } else {
             img

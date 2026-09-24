@@ -31,7 +31,12 @@ pub struct BookOut {
 }
 
 /// Adds rating and shelves of `user_id` (blocking).
-pub fn with_marks(st: &AppState, user_id: i64, lib: i64, books: Vec<Book>) -> ApiResult<Vec<BookOut>> {
+pub fn with_marks(
+    st: &AppState,
+    user_id: i64,
+    lib: i64,
+    books: Vec<Book>,
+) -> ApiResult<Vec<BookOut>> {
     let keys: Vec<String> = books.iter().map(|b| b.key.clone()).collect();
     let (ratings, mut shelves) = {
         let c = st.db.lock();
@@ -53,31 +58,63 @@ pub struct VersionQuery {
 }
 
 /// Builds (or returns the cached) authors / series list body. Blocking.
-pub fn build_list(rt: &LibRuntime, cat: &Catalog, kind: &'static str) -> ApiResult<Arc<CachedBody>> {
+pub fn build_list(
+    rt: &LibRuntime,
+    cat: &Catalog,
+    kind: &'static str,
+) -> ApiResult<Arc<CachedBody>> {
     let version = cat.catalog_version();
     if let Some(b) = rt.cached_list(kind, version) {
         return Ok(b);
     }
-    let list = if kind == "authors" { cat.authors()? } else { cat.series_list()? };
-    let json = serde_json::to_vec(&json!({
-        "version": version,
-        "columns": ["id", "name", "count"],
-        "rows": list.rows,
-        "letters": list.letters,
-    }))
+    let _g = rt.build_lock.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(b) = rt.cached_list(kind, version) {
+        return Ok(b);
+    }
+    let list = rt.name_list(cat, kind)?;
+    #[derive(Serialize)]
+    struct Out<'a> {
+        version: i64,
+        columns: [&'static str; 3],
+        rows: &'a [(i64, String, i64)],
+        letters: &'a [(String, i64, i64)],
+    }
+    let json = serde_json::to_vec(&Out {
+        version,
+        columns: ["id", "name", "count"],
+        rows: &list.rows,
+        letters: &list.letters,
+    })
     .map_err(|e| ApiError::internal(e.to_string()))?;
-    let body = Arc::new(CachedBody::new(version, format!("W/\"{kind}-{}-{version}\"", rt.id), json));
+    let body = Arc::new(CachedBody::new(
+        version,
+        format!("W/\"{kind}-{}-{version}\"", rt.id),
+        json,
+    ));
     rt.put_list(kind, body.clone());
     Ok(body)
 }
 
-async fn name_list(st: AppState, lib: i64, kind: &'static str, v: Option<i64>, headers: HeaderMap) -> ApiResult<Response> {
+async fn name_list(
+    st: AppState,
+    lib: i64,
+    kind: &'static str,
+    v: Option<i64>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
     let rt = st.lib(lib)?;
     let Some(cat) = rt.handle.get() else {
-        return Ok(Json(json!({"version": 0, "columns": ["id", "name", "count"], "rows": [], "letters": []})).into_response());
+        return Ok(Json(
+            json!({"version": 0, "columns": ["id", "name", "count"], "rows": [], "letters": []}),
+        )
+        .into_response());
     };
     let version = cat.catalog_version();
-    let cache = if v == Some(version) { IMMUTABLE } else { REVALIDATE };
+    let cache = if v == Some(version) {
+        IMMUTABLE
+    } else {
+        REVALIDATE
+    };
     let etag = format!("W/\"{kind}-{lib}-{version}\"");
     if etag_matches(&headers, &etag) {
         return Ok(not_modified(&etag, cache));
@@ -129,7 +166,11 @@ pub async fn genres(
     let rt = st.lib(lib)?;
     let cat = rt.handle.get();
     let version = cat.as_ref().map(|c| c.catalog_version()).unwrap_or(0);
-    let cache = if q.v == Some(version) && version > 0 { IMMUTABLE } else { REVALIDATE };
+    let cache = if q.v == Some(version) && version > 0 {
+        IMMUTABLE
+    } else {
+        REVALIDATE
+    };
     let etag = format!("W/\"genres-{lib}-{version}\"");
     if etag_matches(&headers, &etag) {
         return Ok(not_modified(&etag, cache));
@@ -169,7 +210,8 @@ pub struct BooksQuery {
 }
 
 fn truthy(s: &Option<String>) -> bool {
-    s.as_deref().is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    s.as_deref()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 pub async fn books(
@@ -179,20 +221,35 @@ pub async fn books(
     Query(q): Query<BooksQuery>,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
-    let n = [q.author.is_some(), q.series.is_some(), q.genre.is_some(), q.shelf.is_some(), q.since.is_some()]
-        .iter()
-        .filter(|x| **x)
-        .count();
+    let n = [
+        q.author.is_some(),
+        q.series.is_some(),
+        q.genre.is_some(),
+        q.shelf.is_some(),
+        q.since.is_some(),
+    ]
+    .iter()
+    .filter(|x| **x)
+    .count();
     if n != 1 {
-        return Err(ApiError::bad_request("exactly one of author, series, genre, shelf, since is required"));
+        return Err(ApiError::bad_request(
+            "exactly one of author, series, genre, shelf, since is required",
+        ));
     }
     let (_, cat) = st.catalog(lib)?;
     let filter = BookFilter {
         langs: split_list(q.lang.as_deref()),
-        ext: q.ext.clone().filter(|e| !e.is_empty()).map(|e| e.to_lowercase()),
+        ext: q
+            .ext
+            .clone()
+            .filter(|e| !e.is_empty())
+            .map(|e| e.to_lowercase()),
         include_deleted: truthy(&q.deleted),
     };
-    let page = Page { cursor: q.cursor.clone().filter(|c| !c.is_empty()), limit: q.limit.unwrap_or(2000).clamp(1, 5000) };
+    let page = Page {
+        cursor: q.cursor.clone().filter(|c| !c.is_empty()),
+        limit: q.limit.unwrap_or(2000).clamp(1, 5000),
+    };
     let shelf_keys = match q.shelf {
         Some(sid) => {
             let uid = u.id;
@@ -225,9 +282,12 @@ pub async fn books(
     let st2 = st.clone();
     let out = tokio::task::spawn_blocking(move || -> ApiResult<serde_json::Value> {
         let sel = match (sel, shelf_keys) {
-            (BookSelector::Ids(_), Some(keys)) => {
-                BookSelector::Ids(cat.ids_by_keys(&keys)?.into_iter().map(|(_, id)| id).collect())
-            }
+            (BookSelector::Ids(_), Some(keys)) => BookSelector::Ids(
+                cat.ids_by_keys(&keys)?
+                    .into_iter()
+                    .map(|(_, id)| id)
+                    .collect(),
+            ),
             (s, _) => s,
         };
         let p = cat.books(&sel, &filter, &page)?;
@@ -259,7 +319,11 @@ fn opt_date(s: &Option<String>, name: &str) -> ApiResult<Option<String>> {
             if d.is_empty() {
                 // allow a bare year
                 if v.len() == 4 && v.chars().all(|c| c.is_ascii_digit()) {
-                    return Ok(Some(if name == "from" { format!("{v}-01-01") } else { format!("{v}-12-31") }));
+                    return Ok(Some(if name == "from" {
+                        format!("{v}-01-01")
+                    } else {
+                        format!("{v}-12-31")
+                    }));
                 }
                 return Err(ApiError::bad_request(format!("{name} must be YYYY-MM-DD")));
             }
@@ -283,18 +347,29 @@ pub async fn search(
         "books" => SearchKind::Books,
         "authors" => SearchKind::Authors,
         "series" => SearchKind::Series,
-        _ => return Err(ApiError::bad_request("kind must be all, books, authors or series")),
+        _ => {
+            return Err(ApiError::bad_request(
+                "kind must be all, books, authors or series",
+            ));
+        }
     };
     let genres = split_list(p.genre.as_deref())
         .iter()
-        .map(|g| g.parse::<u16>().map_err(|_| ApiError::bad_request("genre must be a list of ids")))
+        .map(|g| {
+            g.parse::<u16>()
+                .map_err(|_| ApiError::bad_request("genre must be a list of ids"))
+        })
         .collect::<ApiResult<Vec<_>>>()?;
     let sq = SearchQuery {
         q,
         kind,
         genres,
         langs: split_list(p.lang.as_deref()),
-        ext: p.ext.clone().filter(|e| !e.is_empty()).map(|e| e.to_lowercase()),
+        ext: p
+            .ext
+            .clone()
+            .filter(|e| !e.is_empty())
+            .map(|e| e.to_lowercase()),
         from: opt_date(&p.from, "from")?,
         to: opt_date(&p.to, "to")?,
         include_deleted: truthy(&p.deleted),
@@ -323,9 +398,16 @@ pub struct LangQuery {
     lib: i64,
 }
 
-pub async fn languages(State(st): State<AppState>, _: Auth, Query(q): Query<LangQuery>, headers: HeaderMap) -> ApiResult<Response> {
+pub async fn languages(
+    State(st): State<AppState>,
+    _: Auth,
+    Query(q): Query<LangQuery>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
     let rt = st.lib(q.lib)?;
-    let Some(cat) = rt.handle.get() else { return Ok(Json(json!([])).into_response()) };
+    let Some(cat) = rt.handle.get() else {
+        return Ok(Json(json!([])).into_response());
+    };
     let v = tokio::task::spawn_blocking(move || cat.languages()).await??;
     json_etag(&headers, &v)
 }

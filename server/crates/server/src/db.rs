@@ -27,7 +27,9 @@ impl AppDb {
     pub fn open(path: &Path) -> anyhow::Result<AppDb> {
         let conn = freelib_catalog::open_app_db(path)?;
         rusqlite::vtab::array::load_module(&conn)?;
-        Ok(AppDb { conn: Arc::new(Mutex::new(conn)) })
+        Ok(AppDb {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     /// Blocking access (inside `spawn_blocking` or at startup).
@@ -50,7 +52,11 @@ impl AppDb {
 }
 
 fn text_array<S: AsRef<str>>(v: &[S]) -> Rc<Vec<Value>> {
-    Rc::new(v.iter().map(|s| Value::Text(s.as_ref().to_string())).collect())
+    Rc::new(
+        v.iter()
+            .map(|s| Value::Text(s.as_ref().to_string()))
+            .collect(),
+    )
 }
 
 // ---------------------------------------------------------------- users & sessions
@@ -68,7 +74,11 @@ impl User {
     }
     /// The implicit user of open mode.
     pub fn open_mode_admin() -> User {
-        User { id: 0, username: "admin".into(), role: "admin".into() }
+        User {
+            id: 0,
+            username: "admin".into(),
+            role: "admin".into(),
+        }
     }
 }
 
@@ -77,32 +87,57 @@ pub fn count_users(c: &Connection) -> ApiResult<i64> {
 }
 
 pub fn count_admins(c: &Connection) -> ApiResult<i64> {
-    Ok(c.query_row("SELECT count(*) FROM user WHERE role='admin'", [], |r| r.get(0))?)
+    Ok(
+        c.query_row("SELECT count(*) FROM user WHERE role='admin'", [], |r| {
+            r.get(0)
+        })?,
+    )
 }
 
 pub fn list_users(c: &Connection) -> ApiResult<Vec<User>> {
     let mut st = c.prepare("SELECT id, username, role FROM user ORDER BY username")?;
-    let rows = st.query_map([], |r| Ok(User { id: r.get(0)?, username: r.get(1)?, role: r.get(2)? }))?;
+    let rows = st.query_map([], |r| {
+        Ok(User {
+            id: r.get(0)?,
+            username: r.get(1)?,
+            role: r.get(2)?,
+        })
+    })?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
 pub fn get_user(c: &Connection, id: i64) -> ApiResult<Option<User>> {
-    Ok(c
-        .query_row("SELECT id, username, role FROM user WHERE id=?1", [id], |r| {
-            Ok(User { id: r.get(0)?, username: r.get(1)?, role: r.get(2)? })
-        })
-        .optional()?)
+    Ok(c.query_row(
+        "SELECT id, username, role FROM user WHERE id=?1",
+        [id],
+        |r| {
+            Ok(User {
+                id: r.get(0)?,
+                username: r.get(1)?,
+                role: r.get(2)?,
+            })
+        },
+    )
+    .optional()?)
 }
 
 /// User and password hash by (case-insensitive) user name.
 pub fn user_with_hash(c: &Connection, username: &str) -> ApiResult<Option<(User, String)>> {
-    Ok(c
-        .query_row(
-            "SELECT id, username, role, password_hash FROM user WHERE username=?1 COLLATE NOCASE",
-            [username],
-            |r| Ok((User { id: r.get(0)?, username: r.get(1)?, role: r.get(2)? }, r.get(3)?)),
-        )
-        .optional()?)
+    Ok(c.query_row(
+        "SELECT id, username, role, password_hash FROM user WHERE username=?1 COLLATE NOCASE",
+        [username],
+        |r| {
+            Ok((
+                User {
+                    id: r.get(0)?,
+                    username: r.get(1)?,
+                    role: r.get(2)?,
+                },
+                r.get(3)?,
+            ))
+        },
+    )
+    .optional()?)
 }
 
 pub fn insert_user(c: &Connection, username: &str, hash: &str, role: &str) -> ApiResult<User> {
@@ -112,7 +147,9 @@ pub fn insert_user(c: &Connection, username: &str, hash: &str, role: &str) -> Ap
         params![username, hash, role, now_rfc3339()],
     )
     .map_err(|e| match e {
-        rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation => {
+        rusqlite::Error::SqliteFailure(f, _)
+            if f.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
             ApiError::conflict("user name already exists")
         }
         e => e.into(),
@@ -121,21 +158,39 @@ pub fn insert_user(c: &Connection, username: &str, hash: &str, role: &str) -> Ap
     if first {
         adopt_open_mode_data(c, id)?;
     }
-    Ok(User { id, username: username.into(), role: role.into() })
+    Ok(User {
+        id,
+        username: username.into(),
+        role: role.into(),
+    })
 }
 
 /// Data created in open mode belongs to user 0; the first real user takes it over.
 fn adopt_open_mode_data(c: &Connection, id: i64) -> ApiResult<()> {
     c.execute("UPDATE shelf SET user_id=?1 WHERE user_id=0", [id])?;
-    c.execute("UPDATE OR IGNORE rating SET user_id=?1 WHERE user_id=0", [id])?;
+    c.execute(
+        "UPDATE OR IGNORE rating SET user_id=?1 WHERE user_id=0",
+        [id],
+    )?;
     c.execute("UPDATE device SET user_id=?1 WHERE user_id=0", [id])?;
-    c.execute("UPDATE OR IGNORE user_state SET user_id=?1 WHERE user_id=0", [id])?;
+    c.execute(
+        "UPDATE OR IGNORE user_state SET user_id=?1 WHERE user_id=0",
+        [id],
+    )?;
     Ok(())
 }
 
-pub fn update_user(c: &Connection, id: i64, hash: Option<&str>, role: Option<&str>) -> ApiResult<()> {
+pub fn update_user(
+    c: &Connection,
+    id: i64,
+    hash: Option<&str>,
+    role: Option<&str>,
+) -> ApiResult<()> {
     if let Some(h) = hash {
-        c.execute("UPDATE user SET password_hash=?1 WHERE id=?2", params![h, id])?;
+        c.execute(
+            "UPDATE user SET password_hash=?1 WHERE id=?2",
+            params![h, id],
+        )?;
         // a new password logs out all sessions of that user
         c.execute("DELETE FROM session WHERE user_id=?1", [id])?;
     }
@@ -174,9 +229,14 @@ pub fn session_user(c: &Connection, token: &str) -> ApiResult<Option<User>> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()?;
-    let Some((stored, id, username, role, expires)) = row else { return Ok(None) };
+    let Some((stored, id, username, role, expires)) = row else {
+        return Ok(None);
+    };
     // the lookup is by hash already; compare in constant time anyway
-    if !bool::from(subtle::ConstantTimeEq::ct_eq(stored.as_bytes(), hash.as_bytes())) {
+    if !bool::from(subtle::ConstantTimeEq::ct_eq(
+        stored.as_bytes(),
+        hash.as_bytes(),
+    )) {
         return Ok(None);
     }
     if expires < now_rfc3339() {
@@ -187,17 +247,23 @@ pub fn session_user(c: &Connection, token: &str) -> ApiResult<Option<User>> {
 }
 
 pub fn delete_session(c: &Connection, token: &str) -> ApiResult<()> {
-    c.execute("DELETE FROM session WHERE token=?1", [sha256_hex(token.as_bytes())])?;
+    c.execute(
+        "DELETE FROM session WHERE token=?1",
+        [sha256_hex(token.as_bytes())],
+    )?;
     Ok(())
 }
 
 // ---------------------------------------------------------------- user state
 
 pub fn last_visit(c: &Connection, user_id: i64) -> ApiResult<Option<String>> {
-    Ok(c
-        .query_row("SELECT last_visit FROM user_state WHERE user_id=?1", [user_id], |r| r.get(0))
-        .optional()?
-        .flatten())
+    Ok(c.query_row(
+        "SELECT last_visit FROM user_state WHERE user_id=?1",
+        [user_id],
+        |r| r.get(0),
+    )
+    .optional()?
+    .flatten())
 }
 
 pub fn set_last_visit(c: &Connection, user_id: i64, when: &str) -> ApiResult<()> {
@@ -209,10 +275,13 @@ pub fn set_last_visit(c: &Connection, user_id: i64, when: &str) -> ApiResult<()>
 }
 
 pub fn get_prefs(c: &Connection, user_id: i64) -> ApiResult<String> {
-    Ok(c
-        .query_row("SELECT prefs FROM user_state WHERE user_id=?1", [user_id], |r| r.get(0))
-        .optional()?
-        .unwrap_or_else(|| "{}".into()))
+    Ok(c.query_row(
+        "SELECT prefs FROM user_state WHERE user_id=?1",
+        [user_id],
+        |r| r.get(0),
+    )
+    .optional()?
+    .unwrap_or_else(|| "{}".into()))
 }
 
 pub fn set_prefs(c: &Connection, user_id: i64, json: &str) -> ApiResult<()> {
@@ -257,7 +326,12 @@ pub fn list_libraries(c: &Connection) -> ApiResult<Vec<LibraryRow>> {
 }
 
 pub fn get_library(c: &Connection, id: i64) -> ApiResult<Option<LibraryRow>> {
-    Ok(c.query_row(&format!("SELECT {LIB_COLS} FROM library WHERE id=?1"), [id], lib_row).optional()?)
+    Ok(c.query_row(
+        &format!("SELECT {LIB_COLS} FROM library WHERE id=?1"),
+        [id],
+        lib_row,
+    )
+    .optional()?)
 }
 
 pub fn insert_library(c: &Connection, l: &LibraryRow) -> ApiResult<i64> {
@@ -291,13 +365,16 @@ pub fn delete_library(c: &Connection, id: i64) -> ApiResult<()> {
 
 // ---------------------------------------------------------------- ratings & shelves
 
+/// book_key → rating, book_key → shelf ids.
+pub type UserMarks = (HashMap<String, i64>, HashMap<String, Vec<i64>>);
+
 /// Ratings and shelf ids of `user` for the given book keys of one library.
 pub fn user_marks(
     c: &Connection,
     user_id: i64,
     lib_id: i64,
     keys: &[String],
-) -> ApiResult<(HashMap<String, i64>, HashMap<String, Vec<i64>>)> {
+) -> ApiResult<UserMarks> {
     let mut ratings = HashMap::new();
     let mut shelves: HashMap<String, Vec<i64>> = HashMap::new();
     if keys.is_empty() {
@@ -307,7 +384,9 @@ pub fn user_marks(
     let mut st = c.prepare_cached(
         "SELECT book_key, rating FROM rating WHERE user_id=?1 AND library_id=?2 AND book_key IN rarray(?3)",
     )?;
-    for r in st.query_map(params![user_id, lib_id, arr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+    for r in st.query_map(params![user_id, lib_id, arr], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })? {
         let (k, v) = r?;
         ratings.insert(k, v);
     }
@@ -315,14 +394,22 @@ pub fn user_marks(
         "SELECT sb.book_key, sb.shelf_id FROM shelf_book sb JOIN shelf s ON s.id = sb.shelf_id \
          WHERE s.user_id=?1 AND sb.library_id=?2 AND sb.book_key IN rarray(?3) ORDER BY sb.shelf_id",
     )?;
-    for r in st.query_map(params![user_id, lib_id, arr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+    for r in st.query_map(params![user_id, lib_id, arr], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })? {
         let (k, v) = r?;
         shelves.entry(k).or_default().push(v);
     }
     Ok((ratings, shelves))
 }
 
-pub fn set_rating(c: &Connection, user_id: i64, lib_id: i64, key: &str, rating: i64) -> ApiResult<()> {
+pub fn set_rating(
+    c: &Connection,
+    user_id: i64,
+    lib_id: i64,
+    key: &str,
+    rating: i64,
+) -> ApiResult<()> {
     if rating == 0 {
         c.execute(
             "DELETE FROM rating WHERE user_id=?1 AND library_id=?2 AND book_key=?3",
@@ -346,31 +433,50 @@ pub struct Shelf {
     pub count: i64,
 }
 
-const SHELF_SELECT: &str =
-    "SELECT s.id, s.name, s.color, (SELECT count(*) FROM shelf_book b WHERE b.shelf_id = s.id) FROM shelf s";
+const SHELF_SELECT: &str = "SELECT s.id, s.name, s.color, (SELECT count(*) FROM shelf_book b WHERE b.shelf_id = s.id) FROM shelf s";
 
 fn shelf_row(r: &rusqlite::Row) -> rusqlite::Result<Shelf> {
-    Ok(Shelf { id: r.get(0)?, name: r.get(1)?, color: r.get(2)?, count: r.get(3)? })
+    Ok(Shelf {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        color: r.get(2)?,
+        count: r.get(3)?,
+    })
 }
 
 pub fn list_shelves(c: &Connection, user_id: i64) -> ApiResult<Vec<Shelf>> {
-    let mut st = c.prepare(&format!("{SHELF_SELECT} WHERE s.user_id=?1 ORDER BY s.name COLLATE NOCASE, s.id"))?;
+    let mut st = c.prepare(&format!(
+        "{SHELF_SELECT} WHERE s.user_id=?1 ORDER BY s.name COLLATE NOCASE, s.id"
+    ))?;
     let rows = st.query_map([user_id], shelf_row)?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
 pub fn get_shelf(c: &Connection, user_id: i64, id: i64) -> ApiResult<Shelf> {
-    c.query_row(&format!("{SHELF_SELECT} WHERE s.user_id=?1 AND s.id=?2"), params![user_id, id], shelf_row)
-        .optional()?
-        .ok_or_else(|| ApiError::not_found("shelf not found"))
+    c.query_row(
+        &format!("{SHELF_SELECT} WHERE s.user_id=?1 AND s.id=?2"),
+        params![user_id, id],
+        shelf_row,
+    )
+    .optional()?
+    .ok_or_else(|| ApiError::not_found("shelf not found"))
 }
 
 pub fn create_shelf(c: &Connection, user_id: i64, name: &str, color: &str) -> ApiResult<Shelf> {
-    c.execute("INSERT INTO shelf(user_id, name, color) VALUES (?1,?2,?3)", params![user_id, name, color])?;
+    c.execute(
+        "INSERT INTO shelf(user_id, name, color) VALUES (?1,?2,?3)",
+        params![user_id, name, color],
+    )?;
     get_shelf(c, user_id, c.last_insert_rowid())
 }
 
-pub fn update_shelf(c: &Connection, user_id: i64, id: i64, name: Option<&str>, color: Option<&str>) -> ApiResult<Shelf> {
+pub fn update_shelf(
+    c: &Connection,
+    user_id: i64,
+    id: i64,
+    name: Option<&str>,
+    color: Option<&str>,
+) -> ApiResult<Shelf> {
     get_shelf(c, user_id, id)?;
     if let Some(n) = name {
         c.execute("UPDATE shelf SET name=?1 WHERE id=?2", params![n, id])?;
@@ -389,19 +495,28 @@ pub fn delete_shelf(c: &Connection, user_id: i64, id: i64) -> ApiResult<()> {
 }
 
 pub fn shelf_keys(c: &Connection, shelf_id: i64, lib_id: i64) -> ApiResult<Vec<String>> {
-    let mut st = c.prepare("SELECT book_key FROM shelf_book WHERE shelf_id=?1 AND library_id=?2")?;
+    let mut st =
+        c.prepare("SELECT book_key FROM shelf_book WHERE shelf_id=?1 AND library_id=?2")?;
     let rows = st.query_map(params![shelf_id, lib_id], |r| r.get(0))?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
-pub fn shelf_modify(c: &mut Connection, shelf_id: i64, lib_id: i64, keys: &[String], add: bool) -> ApiResult<()> {
+pub fn shelf_modify(
+    c: &mut Connection,
+    shelf_id: i64,
+    lib_id: i64,
+    keys: &[String],
+    add: bool,
+) -> ApiResult<()> {
     let tx = c.transaction()?;
     {
         let now = now_rfc3339();
         let mut ins = tx.prepare(
             "INSERT OR IGNORE INTO shelf_book(shelf_id, library_id, book_key, added_at) VALUES (?1,?2,?3,?4)",
         )?;
-        let mut del = tx.prepare("DELETE FROM shelf_book WHERE shelf_id=?1 AND library_id=?2 AND book_key=?3")?;
+        let mut del = tx.prepare(
+            "DELETE FROM shelf_book WHERE shelf_id=?1 AND library_id=?2 AND book_key=?3",
+        )?;
         for k in keys {
             if add {
                 ins.execute(params![shelf_id, lib_id, k, now])?;
@@ -459,8 +574,9 @@ fn device_row(r: &rusqlite::Row) -> rusqlite::Result<Device> {
 const DEVICE_COLS: &str = "id, user_id, name, kind, format, target, file_name, options";
 
 pub fn list_devices(c: &Connection, user_id: i64) -> ApiResult<Vec<Device>> {
-    let mut st =
-        c.prepare(&format!("SELECT {DEVICE_COLS} FROM device WHERE user_id IS NULL OR user_id=?1 ORDER BY id"))?;
+    let mut st = c.prepare(&format!(
+        "SELECT {DEVICE_COLS} FROM device WHERE user_id IS NULL OR user_id=?1 ORDER BY id"
+    ))?;
     let rows = st.query_map([user_id], device_row)?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
@@ -468,7 +584,9 @@ pub fn list_devices(c: &Connection, user_id: i64) -> ApiResult<Vec<Device>> {
 /// A device visible to `user_id` (shared or own).
 pub fn get_device(c: &Connection, user_id: i64, id: i64) -> ApiResult<Device> {
     c.query_row(
-        &format!("SELECT {DEVICE_COLS} FROM device WHERE id=?1 AND (user_id IS NULL OR user_id=?2)"),
+        &format!(
+            "SELECT {DEVICE_COLS} FROM device WHERE id=?1 AND (user_id IS NULL OR user_id=?2)"
+        ),
         params![id, user_id],
         device_row,
     )
@@ -477,7 +595,8 @@ pub fn get_device(c: &Connection, user_id: i64, id: i64) -> ApiResult<Device> {
 }
 
 pub fn save_device(c: &Connection, d: &Device) -> ApiResult<i64> {
-    let options = serde_json::to_string(&d.options).map_err(|e| ApiError::internal(e.to_string()))?;
+    let options =
+        serde_json::to_string(&d.options).map_err(|e| ApiError::internal(e.to_string()))?;
     if d.id == 0 {
         c.execute(
             "INSERT INTO device(user_id, name, kind, format, target, file_name, options) VALUES (?1,?2,?3,?4,?5,?6,?7)",
@@ -532,7 +651,12 @@ pub fn seed_devices(c: &Connection) -> ApiResult<()> {
 // ---------------------------------------------------------------- settings
 
 pub fn get_setting_raw(c: &Connection, key: &str) -> ApiResult<Option<String>> {
-    Ok(c.query_row("SELECT value FROM setting WHERE key=?1", [key], |r| r.get(0)).optional()?)
+    Ok(
+        c.query_row("SELECT value FROM setting WHERE key=?1", [key], |r| {
+            r.get(0)
+        })
+        .optional()?,
+    )
 }
 
 pub fn put_setting_raw(c: &Connection, key: &str, value: &str) -> ApiResult<()> {
@@ -544,7 +668,9 @@ pub fn put_setting_raw(c: &Connection, key: &str, value: &str) -> ApiResult<()> 
 }
 
 pub fn get_setting<T: DeserializeOwned + Default>(c: &Connection, key: &str) -> ApiResult<T> {
-    Ok(get_setting_raw(c, key)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default())
+    Ok(get_setting_raw(c, key)?
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default())
 }
 
 pub fn put_setting<T: Serialize>(c: &Connection, key: &str, v: &T) -> ApiResult<()> {
@@ -588,6 +714,9 @@ pub struct OpdsConfig {
 
 impl Default for OpdsConfig {
     fn default() -> Self {
-        OpdsConfig { enabled: true, require_auth: true }
+        OpdsConfig {
+            enabled: true,
+            require_auth: true,
+        }
     }
 }

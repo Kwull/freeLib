@@ -41,6 +41,9 @@ Browser (Svelte 5 SPA) ──HTTP/JSON + SSE──▶ freelib-server (Rust, axum
 | `FREELIB_CALIBRE` | `ebook-convert` if on PATH | Calibre converter used for AZW3 / MOBI / PDF / other formats |
 | `FREELIB_WEB_DIR` | unset | Serve the SPA from this folder instead of the embedded copy (development) |
 | `FREELIB_WORKERS` | CPU cores | Conversion worker count |
+| `FREELIB_BIND` | `0.0.0.0` | Listen address |
+| `FREELIB_TRUST_PROXY` | unset | `1`: take the client address for login rate limiting from `X-Forwarded-For` / `X-Real-IP` (behind a reverse proxy) |
+| `FREELIB_CALIBRE_TIMEOUT` | `300` | Seconds before a Calibre conversion is killed (`FREELIB_CALIBRE=none` disables Calibre) |
 | `RUST_LOG` | `info` | Logging |
 
 ## Catalog database (`lib_<id>.db`)
@@ -210,7 +213,8 @@ paths are copied verbatim, the server should validate them against `FREELIB_BOOK
 ## Previews and conversions
 
 - Annotation + cover are extracted by `fb2conv::read_info` on first view and cached as
-  `cache/info/<lib>/<book_key-hash>.json` and `cache/covers/<lib>/<hash>-{thumb,full}.webp`.
+  `cache/info/<lib>/<book_key-hash>.json` and `cache/covers/<lib>/<hash>-thumb.webp` (240 px high, lossy WebP) +
+  `<hash>-full.{jpg,png,webp}` (JPEG/PNG covers kept as they are, other formats re-encoded to WebP).
 - Book bytes: seek to `arch_offset` if known, else open the zip (LRU of open archives).
 - Converted outputs cached at `cache/out/<lib>/<hash>-<profilehash>.<ext>`.
 - EPUB 3 from `fb2conv`. AZW3/MOBI/PDF via Calibre (`FREELIB_CALIBRE`) from that EPUB; 501 when Calibre is absent.
@@ -240,3 +244,29 @@ Reproduce: `cargo run --release -p freelib-import --bin bench` (generates `serve
 if missing). With archives and offset resolution:
 `gen-inpx --books 600000 --out bench-data/files600k/lib.inpx --with-files bench-data/files600k/lib`, then
 `bench --inpx bench-data/files600k/lib.inpx --lib-dir bench-data/files600k/lib --db bench-data/files_lib.db`.
+
+### Measured: HTTP server
+
+Release `freelib-server`, same 4-core / 15 GB VM, open mode, library `bench-data/files600k`
+(`lib.inpx` + 300 zip archives with real FB2 files; 600k records, 551,652 live books, 112,812 authors,
+56,347 series). Timings are `curl` wall-clock times on localhost, including HTTP.
+
+| Operation | Target | Measured |
+|---|---|---|
+| Auto-import at start (`FREELIB_AUTOIMPORT`, incl. zip offsets) | < 3 min | 16.1 s, then 0.8–1.2 s background warm-up (authors/series lists + Brotli, search attributes, gzip) |
+| `GET authors`, cold (first call right after a restart, list built, Brotli q5) | < 300 ms | 268 ms, 1,018,665 bytes br (6,743,259 bytes JSON) |
+| `GET authors`, cached (per catalog version) | | 1.3–2.3 ms; gzip 1,034,875 bytes; `?v=` → `immutable`; `If-None-Match` → 304 |
+| `GET series`, cold / cached | | 128 ms / 1.6 ms, 461,618 bytes br |
+| Books of an author (200 random authors) | < 50 ms p95 | p50 1.5 ms, p95 2.2 ms, max 8 ms; the biggest author (1621 books, 50 KB br): 33–41 ms |
+| Search (25 queries incl. 2-letter prefixes, with facets) | < 300 ms p95 | p50 22 ms, p95 64 ms, max 83 ms |
+| Book detail (50 random books) first call / cached | < 20 ms cached | first p50 2.2 ms, p95 2.9 ms (reads the FB2, extracts annotation + cover); then p50 1.7 ms |
+| Cover thumbnail (240 px WebP) first / cached | | 2.1 ms / 1.5 ms (synthetic covers are 60×90 PNG, so thumbnails are small) |
+| Original file (FB2 via `arch_offset`) | | 2 ms |
+| EPUB download first (conversion) / cached | | p50 36 ms, max 70 ms (a generated 336 KB cover dominates) / 3.9 ms |
+| KEPUB (from the cached EPUB) | | 3 ms |
+| Memory (RSS) after start + warm-up | | ≈ 250 MB; ≈ 880 MB right after the import (SQLite page cache and mmap of the new catalog) |
+
+The synthetic FB2 files are small (≈ 2 KB each), so first-call detail/EPUB times for real books (100 KB–5 MB)
+are dominated by reading and converting the book; see the fb2conv README for conversion speed.
+Web UI check: the built app (`web/dist`, embedded) loaded from the release server in headless Chromium
+without JavaScript errors (`web/test-results/screenshots/real-server-*.png`).

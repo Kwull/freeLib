@@ -16,18 +16,26 @@ use crate::error::{ApiError, ApiResult};
 use crate::output::{self, Produced};
 use crate::preview;
 use crate::state::AppState;
-use crate::util::{content_disposition, etag_matches, json_etag, mime_for_ext, not_modified, set_header};
+use crate::util::{
+    content_disposition, etag_matches, json_etag, mime_for_ext, not_modified, set_header,
+};
 
 /// Library folder of `lib`.
 pub async fn lib_dir(st: &AppState, lib: i64) -> ApiResult<PathBuf> {
-    let row = st.db.run(move |c| db::get_library(c, lib)).await?.ok_or_else(|| ApiError::not_found("library not found"))?;
+    let row = st
+        .db
+        .run(move |c| db::get_library(c, lib))
+        .await?
+        .ok_or_else(|| ApiError::not_found("library not found"))?;
     Ok(PathBuf::from(row.path))
 }
 
 pub async fn load_book(st: &AppState, lib: i64, id: i64) -> ApiResult<(Arc<Catalog>, BookDetail)> {
     let (_, cat) = st.catalog(lib)?;
     let c2 = cat.clone();
-    let d = tokio::task::spawn_blocking(move || c2.book(id)).await??.ok_or_else(|| ApiError::not_found("book not found"))?;
+    let d = tokio::task::spawn_blocking(move || c2.book(id))
+        .await??
+        .ok_or_else(|| ApiError::not_found("book not found"))?;
     Ok((cat, d))
 }
 
@@ -43,8 +51,11 @@ pub async fn detail(
     let formats = output::formats_for(&d.book.ext, st.calibre.is_some());
     let st2 = st.clone();
     let book = d.book.clone();
-    let mut marked = tokio::task::spawn_blocking(move || with_marks(&st2, u.id, lib, vec![book])).await??;
-    let b = marked.pop().ok_or_else(|| ApiError::internal("book lost"))?;
+    let mut marked =
+        tokio::task::spawn_blocking(move || with_marks(&st2, u.id, lib, vec![book])).await??;
+    let b = marked
+        .pop()
+        .ok_or_else(|| ApiError::internal("book lost"))?;
     let mut v = serde_json::to_value(&b).map_err(|e| ApiError::internal(e.to_string()))?;
     if let Some(o) = v.as_object_mut() {
         o.insert("annotation".into(), serde_json::json!(info.annotation));
@@ -78,7 +89,11 @@ pub async fn cover(
     let Some((path, mime)) = preview::cover(&st, lib, &dir, &d, thumb).await? else {
         return Err(ApiError::not_found("no cover"));
     };
-    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
     let etag = format!("\"{name}\"");
     let cache = "private, max-age=86400";
     if etag_matches(&headers, &etag) {
@@ -100,7 +115,12 @@ pub struct FileQuery {
 }
 
 /// Streams a produced file with `Content-Disposition`.
-pub async fn file_response(p: Produced, name: &str, ext: &str, inline: bool) -> ApiResult<Response> {
+pub async fn file_response(
+    p: Produced,
+    name: &str,
+    ext: &str,
+    inline: bool,
+) -> ApiResult<Response> {
     let mime = mime_for_ext(ext.rsplit('.').next().unwrap_or(ext));
     let mut r = match p {
         Produced::Bytes(b) => {
@@ -118,7 +138,11 @@ pub async fn file_response(p: Produced, name: &str, ext: &str, inline: bool) -> 
         }
     };
     set_header(&mut r, header::CONTENT_TYPE, mime);
-    set_header(&mut r, header::CONTENT_DISPOSITION, &content_disposition(inline, name));
+    set_header(
+        &mut r,
+        header::CONTENT_DISPOSITION,
+        &content_disposition(inline, name),
+    );
     set_header(&mut r, header::CACHE_CONTROL, "private, max-age=3600");
     Ok(r)
 }
@@ -130,8 +154,11 @@ pub async fn file(
     Query(q): Query<FileQuery>,
 ) -> ApiResult<Response> {
     let (_, d) = load_book(&st, lib, id).await?;
-    let (mut format, mut opts, mut template) =
-        (q.format.clone().unwrap_or_else(|| "original".into()), ConvertOptions::default(), db::default_file_name());
+    let (mut format, mut opts, mut template) = (
+        q.format.clone().unwrap_or_else(|| "original".into()),
+        ConvertOptions::default(),
+        db::default_file_name(),
+    );
     if let Some(dev) = q.device {
         let uid = u.id;
         let device = st.db.run(move |c| db::get_device(c, uid, dev)).await?;
@@ -149,4 +176,3 @@ pub async fn file(
     let ext = output::file_ext(&format, &d.book.ext);
     file_response(produced, &name, &ext, inline).await
 }
-

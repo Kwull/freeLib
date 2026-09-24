@@ -86,7 +86,12 @@ impl Hyphenator {
             }
             patterns.insert(h, levels.into_boxed_slice());
         }
-        Hyphenator { patterns, max_len, left_min: 2, right_min: 2 }
+        Hyphenator {
+            patterns,
+            max_len,
+            left_min: 2,
+            right_min: 2,
+        }
     }
 
     /// Returns the char indices (into `word`) before which a hyphen may be inserted.

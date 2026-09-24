@@ -11,12 +11,32 @@ use quick_xml::events::Event;
 use crate::epub::{deflated, stored, zip_err};
 use crate::{Error, Result};
 
-const KOBO_STYLE: &str = "<style type=\"text/css\">div#book-inner { margin-top: 0; margin-bottom: 0; }</style>";
+const KOBO_STYLE: &str =
+    "<style type=\"text/css\">div#book-inner { margin-top: 0; margin-bottom: 0; }</style>";
 
 fn is_block(name: &str) -> bool {
     matches!(
         name,
-        "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "div" | "li" | "td" | "th" | "blockquote" | "dt" | "dd" | "figcaption" | "pre" | "aside" | "section" | "tr" | "caption" | "nav"
+        "p" | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "div"
+            | "li"
+            | "td"
+            | "th"
+            | "blockquote"
+            | "dt"
+            | "dd"
+            | "figcaption"
+            | "pre"
+            | "aside"
+            | "section"
+            | "tr"
+            | "caption"
+            | "nav"
     )
 }
 
@@ -43,7 +63,10 @@ impl State {
             self.para = 1;
         }
         self.seg += 1;
-        out.push_str(&format!("<span class=\"koboSpan\" id=\"kobo.{}.{}\">", self.para, self.seg));
+        out.push_str(&format!(
+            "<span class=\"koboSpan\" id=\"kobo.{}.{}\">",
+            self.para, self.seg
+        ));
     }
 
     /// Emits buffered raw (escaped) text split into sentences.
@@ -83,7 +106,12 @@ fn split_sentences(s: &str) -> Vec<&str> {
         let c = chars[i].1;
         if matches!(c, '.' | '!' | '?' | '…') {
             let mut j = i + 1;
-            while j < chars.len() && matches!(chars[j].1, '.' | '!' | '?' | '…' | '»' | '"' | '\'' | ')' | ']' | '”' | '’') {
+            while j < chars.len()
+                && matches!(
+                    chars[j].1,
+                    '.' | '!' | '?' | '…' | '»' | '"' | '\'' | ')' | ']' | '”' | '’'
+                )
+            {
                 j += 1;
             }
             if j < chars.len() && chars[j].1.is_whitespace() {
@@ -120,7 +148,13 @@ pub fn kepubify_xhtml(src: &str) -> Option<String> {
         c.allow_dangling_amp = true;
     }
     let mut out = String::with_capacity(src.len() + src.len() / 3);
-    let mut st = State { para: 0, seg: 0, skip_depth: 0, in_body: false, pending: String::new() };
+    let mut st = State {
+        para: 0,
+        seg: 0,
+        skip_depth: 0,
+        in_body: false,
+        pending: String::new(),
+    };
     loop {
         let start = reader.buffer_position() as usize;
         let ev = match reader.read_event() {
@@ -150,7 +184,9 @@ pub fn kepubify_xhtml(src: &str) -> Option<String> {
                         st.in_body = true;
                         continue;
                     }
-                    "script" | "style" | "svg" | "math" | "pre" | "head" | "title" => st.skip_depth += 1,
+                    "script" | "style" | "svg" | "math" | "pre" | "head" | "title" => {
+                        st.skip_depth += 1
+                    }
                     n if is_block(n) => st.next_para(),
                     _ => {}
                 }
@@ -167,7 +203,9 @@ pub fn kepubify_xhtml(src: &str) -> Option<String> {
                         out.push_str(KOBO_STYLE);
                         st.skip_depth = st.skip_depth.saturating_sub(1);
                     }
-                    "script" | "style" | "svg" | "math" | "pre" | "title" => st.skip_depth = st.skip_depth.saturating_sub(1),
+                    "script" | "style" | "svg" | "math" | "pre" | "title" => {
+                        st.skip_depth = st.skip_depth.saturating_sub(1)
+                    }
                     _ => {}
                 }
                 out.push_str(raw);
@@ -229,7 +267,10 @@ mod tests {
 
     #[test]
     fn sentences() {
-        assert_eq!(split_sentences("Раз. Два! «Три?» Четыре"), vec!["Раз. ", "Два! ", "«Три?» ", "Четыре"]);
+        assert_eq!(
+            split_sentences("Раз. Два! «Три?» Четыре"),
+            vec!["Раз. ", "Два! ", "«Три?» ", "Четыре"]
+        );
         assert_eq!(split_sentences("т.е. всё"), vec!["т.е. ", "всё"]);
     }
 
@@ -240,7 +281,12 @@ mod tests {
         assert!(out.contains("<title>T. X</title>"));
         assert!(out.contains("<body><div id=\"book-columns\"><div id=\"book-inner\"><h2><span class=\"koboSpan\" id=\"kobo.1.1\">Глава</span></h2>"), "{out}");
         assert!(out.contains("<p><span class=\"koboSpan\" id=\"kobo.2.1\">Раз. </span><span class=\"koboSpan\" id=\"kobo.2.2\">Два &amp; три.</span></p>"), "{out}");
-        assert!(out.contains("<span class=\"koboSpan\" id=\"kobo.4.1\"><img src=\"a.jpg\" alt=\"\"/></span>"), "{out}");
+        assert!(
+            out.contains(
+                "<span class=\"koboSpan\" id=\"kobo.4.1\"><img src=\"a.jpg\" alt=\"\"/></span>"
+            ),
+            "{out}"
+        );
         assert!(out.contains("</div></div></body>"));
         assert!(kepubify_xhtml(&out).is_none());
     }

@@ -16,7 +16,11 @@ pub type ApiResult<T> = Result<T, ApiError>;
 
 impl ApiError {
     pub fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> ApiError {
-        ApiError { status, code, message: message.into() }
+        ApiError {
+            status,
+            code,
+            message: message.into(),
+        }
     }
     pub fn bad_request(m: impl Into<String>) -> ApiError {
         Self::new(StatusCode::BAD_REQUEST, "bad_request", m)
@@ -53,7 +57,11 @@ impl std::error::Error for ApiError {}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(serde_json::json!({"error": self.code, "message": self.message}))).into_response()
+        (
+            self.status,
+            Json(serde_json::json!({"error": self.code, "message": self.message})),
+        )
+            .into_response()
     }
 }
 
@@ -62,9 +70,11 @@ impl From<CatalogError> for ApiError {
         match e {
             CatalogError::BadCursor => ApiError::bad_request("invalid cursor"),
             CatalogError::NotFound(_) => ApiError::not_found("library not imported"),
-            CatalogError::SchemaVersion { .. } => {
-                ApiError::new(StatusCode::CONFLICT, "conflict", "catalog must be re-imported (schema version)")
-            }
+            CatalogError::SchemaVersion { .. } => ApiError::new(
+                StatusCode::CONFLICT,
+                "conflict",
+                "catalog must be re-imported (schema version)",
+            ),
             e => ApiError::internal(e.to_string()),
         }
     }

@@ -12,10 +12,12 @@ const INK: [u8; 3] = [0x26, 0x26, 0x2b];
 
 fn background(assets: &Assets) -> &'static RgbImage {
     static BG: OnceLock<RgbImage> = OnceLock::new();
-    BG.get_or_init(|| match image::load_from_memory(assets.cover_background()) {
-        Ok(img) => img.to_rgb8(),
-        Err(_) => RgbImage::from_pixel(800, 1280, Rgb([0xf2, 0xf2, 0xf2])),
-    })
+    BG.get_or_init(
+        || match image::load_from_memory(assets.cover_background()) {
+            Ok(img) => img.to_rgb8(),
+            Err(_) => RgbImage::from_pixel(800, 1280, Rgb([0xf2, 0xf2, 0xf2])),
+        },
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -33,7 +35,12 @@ struct Rect {
 }
 
 /// Word-wraps `text` (explicit `\n` respected) to `width` at `scale`.
-fn wrap_lines(font: &FontRef, scale: PxScale, text: &str, width: f32) -> Option<Vec<(String, f32)>> {
+fn wrap_lines(
+    font: &FontRef,
+    scale: PxScale,
+    text: &str,
+    width: f32,
+) -> Option<Vec<(String, f32)>> {
     let sf = font.as_scaled(scale);
     let measure = |s: &str| -> f32 {
         let mut w = 0.0;
@@ -55,7 +62,11 @@ fn wrap_lines(font: &FontRef, scale: PxScale, text: &str, width: f32) -> Option<
             if measure(word) > width {
                 return None;
             }
-            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            let candidate = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
             if measure(&candidate) <= width {
                 line = candidate;
             } else {
@@ -91,7 +102,14 @@ struct Layout<'f> {
 }
 
 /// Lays out text in `rect`, shrinking the font until it fits.
-fn layout_text<'f>(font_data: &'f [u8], text: &str, rect: &Rect, size: f32, valign: VAlign, right: bool) -> Option<Layout<'f>> {
+fn layout_text<'f>(
+    font_data: &'f [u8],
+    text: &str,
+    rect: &Rect,
+    size: f32,
+    valign: VAlign,
+    right: bool,
+) -> Option<Layout<'f>> {
     let font = FontRef::try_from_slice(font_data).ok()?;
     let text = text.trim();
     if text.is_empty() {
@@ -119,12 +137,32 @@ fn layout_text<'f>(font_data: &'f [u8], text: &str, rect: &Rect, size: f32, vali
         VAlign::Center => rect.y as f32 + (rect.h as f32 - total) / 2.0,
         VAlign::Bottom => rect.y as f32 + rect.h as f32 - total,
     };
-    let xpos = |w: f32| if right { rect.x as f32 + rect.w as f32 - w } else { rect.x as f32 + (rect.w as f32 - w) / 2.0 };
+    let xpos = |w: f32| {
+        if right {
+            rect.x as f32 + rect.w as f32 - w
+        } else {
+            rect.x as f32 + (rect.w as f32 - w) / 2.0
+        }
+    };
     let maxw = lines.iter().map(|l| l.1).fold(0.0f32, f32::max);
     let bx0 = xpos(maxw);
-    let bbox = (bx0 as i32, top as i32, (bx0 + maxw).ceil() as i32, (top + total).ceil() as i32);
-    let lines = lines.into_iter().enumerate().map(|(i, (t, w))| (t, xpos(w), top + i as f32 * lh + sf.ascent())).collect();
-    Some(Layout { font, scale, lines, bbox })
+    let bbox = (
+        bx0 as i32,
+        top as i32,
+        (bx0 + maxw).ceil() as i32,
+        (top + total).ceil() as i32,
+    );
+    let lines = lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, (t, w))| (t, xpos(w), top + i as f32 * lh + sf.ascent()))
+        .collect();
+    Some(Layout {
+        font,
+        scale,
+        lines,
+        bbox,
+    })
 }
 
 fn paint(img: &mut RgbImage, l: &Layout, color: [u8; 3]) {
@@ -142,13 +180,28 @@ fn paint(img: &mut RgbImage, l: &Layout, color: [u8; 3]) {
             prev = Some(id);
             if let Some(og) = l.font.outline_glyph(g) {
                 let b = og.px_bounds();
-                og.draw(|gx, gy, cov| blend(img, b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32, color, cov));
+                og.draw(|gx, gy, cov| {
+                    blend(
+                        img,
+                        b.min.x as i32 + gx as i32,
+                        b.min.y as i32 + gy as i32,
+                        color,
+                        cov,
+                    )
+                });
             }
         }
     }
 }
 
-fn draw_text(img: &mut RgbImage, font_data: &[u8], text: &str, rect: &Rect, size: f32, valign: VAlign) {
+fn draw_text(
+    img: &mut RgbImage,
+    font_data: &[u8],
+    text: &str,
+    rect: &Rect,
+    size: f32,
+    valign: VAlign,
+) {
     if let Some(l) = layout_text(font_data, text, rect, size, valign, false) {
         paint(img, &l, INK);
     }
@@ -184,16 +237,45 @@ pub fn generate_cover(assets: &Assets, author: &str, title: &str, bottom: &str) 
         }
     }
     let inner = delta * 2;
-    draw_text(&mut img, regular, author, &Rect { x: inner, y: inner, w: w - inner * 2, h: quarter - delta2 }, h as f32 / 15.0, VAlign::Top);
+    draw_text(
+        &mut img,
+        regular,
+        author,
+        &Rect {
+            x: inner,
+            y: inner,
+            w: w - inner * 2,
+            h: quarter - delta2,
+        },
+        h as f32 / 15.0,
+        VAlign::Top,
+    );
     draw_text(
         &mut img,
         bold,
         title,
-        &Rect { x: inner, y: delta + quarter + delta2, w: w - inner * 2, h: rh - quarter * 2 - delta2 * 2 },
+        &Rect {
+            x: inner,
+            y: delta + quarter + delta2,
+            w: w - inner * 2,
+            h: rh - quarter * 2 - delta2 * 2,
+        },
         h as f32 / 12.0,
         VAlign::Center,
     );
-    draw_text(&mut img, regular, bottom, &Rect { x: inner, y: delta + rh - quarter + delta2, w: w - inner * 2, h: quarter - delta2 - delta }, h as f32 / 17.0, VAlign::Bottom);
+    draw_text(
+        &mut img,
+        regular,
+        bottom,
+        &Rect {
+            x: inner,
+            y: delta + rh - quarter + delta2,
+            w: w - inner * 2,
+            h: quarter - delta2 - delta,
+        },
+        h as f32 / 17.0,
+        VAlign::Bottom,
+    );
     encode_jpeg(&img).unwrap_or_default()
 }
 
@@ -204,8 +286,20 @@ pub fn label_cover(assets: &Assets, cover: &[u8], label: &str) -> Option<Vec<u8>
     let mut img = img.to_rgb8();
     let (w, h) = (img.width() as i32, img.height() as i32);
     let pad = (h / 60).max(2);
-    let rect = Rect { x: w / 3, y: pad, w: w - w / 3 - pad, h: h / 6 };
-    let l = layout_text(assets.cover_font(true), label, &rect, h as f32 / 15.0, VAlign::Top, true)?;
+    let rect = Rect {
+        x: w / 3,
+        y: pad,
+        w: w - w / 3 - pad,
+        h: h / 6,
+    };
+    let l = layout_text(
+        assets.cover_font(true),
+        label,
+        &rect,
+        h as f32 / 15.0,
+        VAlign::Top,
+        true,
+    )?;
     let (x0, y0, x1, y1) = l.bbox;
     for y in (y0 - pad / 2).max(0)..(y1 + pad / 2).min(h) {
         for x in (x0 - pad).max(0)..(x1 + pad).min(w) {

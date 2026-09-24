@@ -19,8 +19,16 @@ pub const COOKIE: &str = "freelib_session";
 const SESSION_CACHE_TTL: Duration = Duration::from_secs(60);
 
 fn argon(fast: bool) -> Argon2<'static> {
-    let params = if fast { Params::new(64, 1, 1, None) } else { Params::new(19 * 1024, 2, 1, None) };
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, params.expect("valid argon2 params"))
+    let params = if fast {
+        Params::new(64, 1, 1, None)
+    } else {
+        Params::new(19 * 1024, 2, 1, None)
+    };
+    Argon2::new(
+        Algorithm::Argon2id,
+        Version::V0x13,
+        params.expect("valid argon2 params"),
+    )
 }
 
 pub fn hash_password(pw: &str, fast: bool) -> ApiResult<String> {
@@ -52,7 +60,9 @@ pub fn dummy_verify(pw: &str, fast: bool) {
 
 pub fn validate_password(pw: &str) -> ApiResult<()> {
     if pw.chars().count() < 4 {
-        return Err(ApiError::bad_request("password must have at least 4 characters"));
+        return Err(ApiError::bad_request(
+            "password must have at least 4 characters",
+        ));
     }
     if pw.len() > 1024 {
         return Err(ApiError::bad_request("password too long"));
@@ -93,7 +103,10 @@ pub fn clear_cookie() -> String {
 }
 
 pub fn is_https(headers: &HeaderMap) -> bool {
-    headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("https"))
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("https"))
 }
 
 /// Client address for rate limiting.
@@ -109,11 +122,15 @@ pub fn client_ip(parts_headers: &HeaderMap, peer: Option<SocketAddr>, trust_prox
             return ip;
         }
     }
-    peer.map(|p| p.ip()).unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
+    peer.map(|p| p.ip())
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
 }
 
 pub fn peer_addr(parts: &Parts) -> Option<SocketAddr> {
-    parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0)
+    parts
+        .extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0)
 }
 
 /// Current user from the session cookie (or the implicit admin in open mode).
@@ -121,12 +138,18 @@ pub async fn current_user(st: &AppState, headers: &HeaderMap) -> ApiResult<Optio
     if st.open_mode() {
         return Ok(Some(User::open_mode_admin()));
     }
-    let Some(token) = cookie_value(headers, COOKIE) else { return Ok(None) };
+    let Some(token) = cookie_value(headers, COOKIE) else {
+        return Ok(None);
+    };
     if token.len() > 256 {
         return Ok(None);
     }
     let key = sha256_hex(token.as_bytes());
-    if let Some((u, at)) = st.session_cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key)
+    if let Some((u, at)) = st
+        .session_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
         && at.elapsed() < SESSION_CACHE_TTL
     {
         return Ok(Some(u.clone()));
@@ -170,7 +193,12 @@ impl FromRequestParts<AppState> for Admin {
 }
 
 /// Verifies user name + password with rate limiting (login form and OPDS basic auth).
-pub async fn check_credentials(st: &AppState, ip: IpAddr, username: &str, password: &str) -> ApiResult<User> {
+pub async fn check_credentials(
+    st: &AppState,
+    ip: IpAddr,
+    username: &str,
+    password: &str,
+) -> ApiResult<User> {
     if let Some(wait) = st.login_limiter.check(ip) {
         return Err(ApiError::new(
             axum::http::StatusCode::TOO_MANY_REQUESTS,
