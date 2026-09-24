@@ -26,6 +26,10 @@ pub enum CatalogError {
     NotFound(PathBuf),
     #[error("invalid cursor")]
     BadCursor,
+    /// The file was replaced by a re-import while this `Catalog` was still in use and needed a
+    /// new connection; take a fresh `Arc<Catalog>` from the handle and retry.
+    #[error("catalog was replaced by a re-import")]
+    Stale,
 }
 
 pub type Result<T> = std::result::Result<T, CatalogError>;
@@ -65,7 +69,10 @@ pub struct Page {
 
 impl Default for Page {
     fn default() -> Self {
-        Page { cursor: None, limit: 2000 }
+        Page {
+            cursor: None,
+            limit: 2000,
+        }
     }
 }
 
@@ -74,7 +81,11 @@ pub(crate) fn id_array(ids: impl IntoIterator<Item = i64>) -> Rc<Vec<Value>> {
 }
 
 pub(crate) fn text_array<S: AsRef<str>>(v: impl IntoIterator<Item = S>) -> Rc<Vec<Value>> {
-    Rc::new(v.into_iter().map(|s| Value::Text(s.as_ref().to_string())).collect())
+    Rc::new(
+        v.into_iter()
+            .map(|s| Value::Text(s.as_ref().to_string()))
+            .collect(),
+    )
 }
 
 const MAX_IDLE: usize = 8;
@@ -130,7 +141,9 @@ impl Drop for PooledConn<'_> {
 pub fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_URI,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
     )?;
     conn.execute_batch(
         "PRAGMA query_only=1; PRAGMA cache_size=-65536; PRAGMA temp_store=MEMORY; PRAGMA mmap_size=1073741824;",
@@ -151,13 +164,21 @@ impl Catalog {
         let conn = open_read_only(&path)?;
         let meta: HashMap<String, String> = {
             let mut st = conn.prepare("SELECT key, value FROM meta")?;
-            st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default())))?
-                .collect::<rusqlite::Result<_>>()?
+            st.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?
         };
         let int = |k: &str| meta.get(k).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
         let found = int("schema_version");
         if found != CATALOG_SCHEMA_VERSION {
-            return Err(CatalogError::SchemaVersion { found, expected: CATALOG_SCHEMA_VERSION });
+            return Err(CatalogError::SchemaVersion {
+                found,
+                expected: CATALOG_SCHEMA_VERSION,
+            });
         }
         let opt = |k: &str| meta.get(k).filter(|v| !v.is_empty()).cloned();
         let stats = LibraryStats {
@@ -173,7 +194,13 @@ impl Catalog {
             first_author_only: int("first_author_only") != 0,
             skip_deleted: int("skip_deleted") != 0,
         };
-        Ok(Catalog { path, idle: Mutex::new(vec![conn]), stats, attrs: Mutex::new(None), big_genre: BIG_GENRE_MIN_BOOKS })
+        Ok(Catalog {
+            path,
+            idle: Mutex::new(vec![conn]),
+            stats,
+            attrs: Mutex::new(None),
+            big_genre: BIG_GENRE_MIN_BOOKS,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -191,9 +218,26 @@ impl Catalog {
         let pooled = self.idle.lock().unwrap_or_else(|e| e.into_inner()).pop();
         let conn = match pooled {
             Some(c) => c,
-            None => open_read_only(&self.path)?,
+            None => {
+                let c = open_read_only(&self.path)?;
+                // A re-import may have renamed a new file over ours: never mix two catalogs.
+                let v: Option<String> = c
+                    .query_row(
+                        "SELECT value FROM meta WHERE key='catalog_version'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if v.and_then(|v| v.parse::<i64>().ok()) != Some(self.stats.catalog_version) {
+                    return Err(CatalogError::Stale);
+                }
+                c
+            }
         };
-        Ok(PooledConn { cat: self, conn: Some(conn) })
+        Ok(PooledConn {
+            cat: self,
+            conn: Some(conn),
+        })
     }
 
     /// Counts and import metadata (cached at open).
@@ -207,12 +251,18 @@ impl Catalog {
 
     /// All authors ordered by `sort_key, id`, plus the letter index.
     pub fn authors(&self) -> Result<NameList> {
-        self.name_list("SELECT id, name, book_count FROM author ORDER BY sort_key, id", "author")
+        self.name_list(
+            "SELECT id, name, book_count FROM author ORDER BY sort_key, id",
+            "author",
+        )
     }
 
     /// All series ordered by `sort_key, id`, plus the letter index.
     pub fn series_list(&self) -> Result<NameList> {
-        self.name_list("SELECT id, name, book_count FROM series ORDER BY sort_key, id", "series")
+        self.name_list(
+            "SELECT id, name, book_count FROM series ORDER BY sort_key, id",
+            "series",
+        )
     }
 
     fn name_list(&self, sql: &str, kind: &str) -> Result<NameList> {
@@ -226,7 +276,9 @@ impl Catalog {
         while let Some(r) = q.next()? {
             rows.push((r.get(0)?, r.get(1)?, r.get(2)?));
         }
-        let mut st = conn.prepare_cached("SELECT letter, count, first_pos FROM letter_index WHERE kind=?1 ORDER BY first_pos")?;
+        let mut st = conn.prepare_cached(
+            "SELECT letter, count, first_pos FROM letter_index WHERE kind=?1 ORDER BY first_pos",
+        )?;
         let letters = st
             .query_map([kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -237,15 +289,31 @@ impl Catalog {
     pub fn author(&self, id: i64) -> Result<Option<NameCount>> {
         let conn = self.conn()?;
         let mut st = conn.prepare_cached("SELECT id, name, book_count FROM author WHERE id=?1")?;
-        Ok(st.query_row([id], |r| Ok(NameCount { id: r.get(0)?, name: r.get(1)?, count: r.get(2)? })).optional()?)
+        Ok(st
+            .query_row([id], |r| {
+                Ok(NameCount {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    count: r.get(2)?,
+                })
+            })
+            .optional()?)
     }
 
     /// One series by id (with its main authors string).
     pub fn series(&self, id: i64) -> Result<Option<SeriesHit>> {
         let conn = self.conn()?;
-        let mut st = conn.prepare_cached("SELECT id, name, book_count, authors FROM series WHERE id=?1")?;
+        let mut st =
+            conn.prepare_cached("SELECT id, name, book_count, authors FROM series WHERE id=?1")?;
         Ok(st
-            .query_row([id], |r| Ok(SeriesHit { id: r.get(0)?, name: r.get(1)?, count: r.get(2)?, authors: r.get(3)? }))
+            .query_row([id], |r| {
+                Ok(SeriesHit {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    count: r.get(2)?,
+                    authors: r.get(3)?,
+                })
+            })
             .optional()?)
     }
 
@@ -253,27 +321,38 @@ impl Catalog {
     pub fn genres(&self) -> Result<Vec<GenreCount>> {
         let conn = self.conn()?;
         let mut st = conn.prepare_cached("SELECT genre_id, count FROM genre_count")?;
-        let counts: HashMap<u16, i64> =
-            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        let counts: HashMap<u16, i64> = st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
         Ok(genres()
             .all()
             .iter()
-            .map(|g| GenreCount { id: g.id, name: g.name.clone(), parent: g.parent, count: counts.get(&g.id).copied().unwrap_or(0) })
+            .map(|g| GenreCount {
+                id: g.id,
+                name: g.name.clone(),
+                parent: g.parent,
+                count: counts.get(&g.id).copied().unwrap_or(0),
+            })
             .collect())
     }
 
     /// `[(lang, count)]` of non-deleted books, most frequent first.
     pub fn languages(&self) -> Result<Vec<(String, i64)>> {
         let conn = self.conn()?;
-        let mut st = conn.prepare_cached("SELECT lang, count FROM lang_count ORDER BY count DESC, lang")?;
-        Ok(st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        let mut st =
+            conn.prepare_cached("SELECT lang, count FROM lang_count ORDER BY count DESC, lang")?;
+        Ok(st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     /// Number of non-deleted books with `date > after` (for "new since last visit").
     /// `after` may be a date or an RFC 3339 timestamp (only the date part is used).
     /// Counted in memory over [`BookAttrs`] (loads them on first use).
     pub fn count_newer_than(&self, after: &str) -> Result<i64> {
-        Ok(self.attrs()?.count(&CountSel::Newer(after.to_string()), &BookFilter::default()))
+        Ok(self
+            .attrs()?
+            .count(&CountSel::Newer(after.to_string()), &BookFilter::default()))
     }
 
     /// A page of books for one selector, with filters and cursor pagination.
@@ -356,7 +435,8 @@ impl Catalog {
             let off = offset as i64;
             all.push(&lim);
             all.push(&off);
-            st.query_map(all.as_slice(), |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+            st.query_map(all.as_slice(), |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?
         };
         let has_more = ids.len() > limit;
         let ids = &ids[..ids.len().min(limit)];
@@ -370,7 +450,11 @@ impl Catalog {
             st.query_row(all.as_slice(), |r| r.get(0))?
         };
         let books = load_books(&conn, ids)?;
-        Ok(BookPage { books, next_cursor: has_more.then(|| (offset + limit).to_string()), total })
+        Ok(BookPage {
+            books,
+            next_cursor: has_more.then(|| (offset + limit).to_string()),
+            total,
+        })
     }
 
     /// Books by id, in the given order (unknown ids are skipped). No filters.
@@ -407,15 +491,22 @@ impl Catalog {
     /// Resolve `book_key`s to ids: `[(key, id)]` for the keys present in this catalog.
     pub fn ids_by_keys(&self, keys: &[String]) -> Result<Vec<(String, i64)>> {
         let conn = self.conn()?;
-        let mut st = conn.prepare_cached("SELECT book_key, id FROM book WHERE book_key IN rarray(?1)")?;
-        Ok(st.query_map([text_array(keys)], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        let mut st =
+            conn.prepare_cached("SELECT book_key, id FROM book WHERE book_key IN rarray(?1)")?;
+        Ok(st
+            .query_map([text_array(keys)], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     /// Book ids → `book_key`s: `[(id, key)]` for ids present.
     pub fn keys_by_ids(&self, ids: &[i64]) -> Result<Vec<(i64, String)>> {
         let conn = self.conn()?;
         let mut st = conn.prepare_cached("SELECT id, book_key FROM book WHERE id IN rarray(?1)")?;
-        Ok(st.query_map([id_array(ids.iter().copied())], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        Ok(st
+            .query_map([id_array(ids.iter().copied())], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     /// Per-book attributes used by search filtering/facets; loaded on first use
@@ -449,7 +540,10 @@ pub(crate) fn load_books(conn: &Connection, ids: &[i64]) -> Result<Vec<Book>> {
             let id: i64 = r.get(0)?;
             let series_id: Option<i64> = r.get(3)?;
             let series = match series_id {
-                Some(sid) => Some(SeriesRef { id: sid, name: r.get::<_, Option<String>>(4)?.unwrap_or_default() }),
+                Some(sid) => Some(SeriesRef {
+                    id: sid,
+                    name: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                }),
                 None => None,
             };
             by_id.insert(
@@ -479,12 +573,17 @@ pub(crate) fn load_books(conn: &Connection, ids: &[i64]) -> Result<Vec<Book>> {
         let mut q = st.query([arr.clone()])?;
         while let Some(r) = q.next()? {
             if let Some(b) = by_id.get_mut(&r.get::<_, i64>(0)?) {
-                b.authors.push(AuthorRef { id: r.get(1)?, name: r.get(2)? });
+                b.authors.push(AuthorRef {
+                    id: r.get(1)?,
+                    name: r.get(2)?,
+                });
             }
         }
     }
     {
-        let mut st = conn.prepare_cached("SELECT book_id, genre_id FROM book_genre WHERE book_id IN rarray(?1)")?;
+        let mut st = conn.prepare_cached(
+            "SELECT book_id, genre_id FROM book_genre WHERE book_id IN rarray(?1)",
+        )?;
         let mut q = st.query([arr])?;
         while let Some(r) = q.next()? {
             if let Some(b) = by_id.get_mut(&r.get::<_, i64>(0)?) {
@@ -510,7 +609,10 @@ impl CatalogHandle {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         let cat = Catalog::open(&path).ok().map(Arc::new);
-        CatalogHandle { path, current: RwLock::new(cat) }
+        CatalogHandle {
+            path,
+            current: RwLock::new(cat),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -519,7 +621,10 @@ impl CatalogHandle {
 
     /// The current catalog, `None` if never imported (or the file is unusable).
     pub fn get(&self) -> Option<Arc<Catalog>> {
-        self.current.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.current
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Re-open the file (after the importer renamed a new one into place) and swap it in.

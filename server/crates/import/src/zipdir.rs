@@ -114,7 +114,15 @@ pub fn read_central_directory(path: &Path) -> io::Result<HashMap<String, ZipEntr
         }
         let name = String::from_utf8_lossy(&cd[p + 46..name_end]).into_owned();
         if !name.ends_with('/') {
-            out.insert(name, ZipEntryLoc { offset, csize, usize: usize_, method });
+            out.insert(
+                name,
+                ZipEntryLoc {
+                    offset,
+                    csize,
+                    usize: usize_,
+                    method,
+                },
+            );
         }
         p = extra_end + comment_len;
     }
@@ -146,12 +154,14 @@ mod tests {
             let mut w = zip::ZipWriter::new(File::create(&p).unwrap());
             for i in 0..50 {
                 let opts = if i % 2 == 0 {
-                    SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated)
+                    SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated)
                 } else {
                     SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)
                 };
                 w.start_file(format!("{i}.fb2"), opts).unwrap();
-                w.write_all(format!("<book>{}</book>", "x".repeat(i * 10)).as_bytes()).unwrap();
+                w.write_all(format!("<book>{}</book>", "x".repeat(i * 10)).as_bytes())
+                    .unwrap();
             }
             w.finish().unwrap();
         }

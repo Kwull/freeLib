@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use freelib_import::synth::{generate, GenOptions};
+use freelib_import::synth::{GenOptions, generate};
 
 fn usage() -> ! {
     eprintln!(
@@ -17,7 +17,10 @@ fn usage() -> ! {
 }
 
 fn main() {
-    let mut opts = GenOptions { books: 10_000, ..Default::default() };
+    let mut opts = GenOptions {
+        books: 10_000,
+        ..Default::default()
+    };
     let mut out: Option<PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {

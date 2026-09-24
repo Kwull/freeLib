@@ -37,8 +37,8 @@ static GENRES: OnceLock<Genres> = OnceLock::new();
 /// The embedded genre table (parsed once).
 pub fn genres() -> &'static Genres {
     GENRES.get_or_init(|| {
-        let list: Vec<GenreDef> =
-            serde_json::from_str(include_str!("../data/genres.json")).expect("embedded genres.json is valid");
+        let list: Vec<GenreDef> = serde_json::from_str(include_str!("../data/genres.json"))
+            .expect("embedded genres.json is valid");
         Genres::new(list)
     })
 }
@@ -66,13 +66,21 @@ impl Genres {
         for g in &list {
             let top = top_of(&list, &by_id, g.id);
             for k in &g.keys {
-                *votes.entry(code_prefix(&canonical_code(k)).to_string()).or_default().entry(top).or_default() += 1;
+                *votes
+                    .entry(code_prefix(&canonical_code(k)).to_string())
+                    .or_default()
+                    .entry(top)
+                    .or_default() += 1;
             }
         }
         let group_by_prefix = votes
             .into_iter()
             .map(|(p, v)| {
-                let best = v.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0))).map(|x| x.0).unwrap();
+                let best = v
+                    .into_iter()
+                    .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+                    .map(|x| x.0)
+                    .unwrap();
                 (p, best)
             })
             .collect();
@@ -82,7 +90,13 @@ impl Genres {
                 other_of_group.insert(g.parent, g.id);
             }
         }
-        Genres { list, by_id, by_code, group_by_prefix, other_of_group }
+        Genres {
+            list,
+            by_id,
+            by_code,
+            group_by_prefix,
+            other_of_group,
+        }
     }
 
     /// All genres in file order (groups first, then leaves).
@@ -111,7 +125,11 @@ impl Genres {
             return Some(id);
         }
         let group = self.group_by_prefix.get(code_prefix(&c)).copied();
-        Some(group.and_then(|g| self.other_of_group.get(&g).copied()).unwrap_or(GENRE_OTHER))
+        Some(
+            group
+                .and_then(|g| self.other_of_group.get(&g).copied())
+                .unwrap_or(GENRE_OTHER),
+        )
     }
 
     /// Top-level groups (parent == 0), ordered by id.
@@ -121,7 +139,11 @@ impl Genres {
 
     /// Direct children of `id`, in display order.
     pub fn children(&self, id: u16) -> Vec<&GenreDef> {
-        let mut v: Vec<&GenreDef> = self.list.iter().filter(|g| g.parent == id && g.id != id).collect();
+        let mut v: Vec<&GenreDef> = self
+            .list
+            .iter()
+            .filter(|g| g.parent == id && g.id != id)
+            .collect();
         v.sort_by_key(|g| (g.sort.unwrap_or(i32::MAX), g.id));
         v
     }
@@ -132,7 +154,12 @@ impl Genres {
         let mut i = 0;
         while i < out.len() {
             let cur = out[i];
-            out.extend(self.list.iter().filter(|g| g.parent == cur && g.id != cur).map(|g| g.id));
+            out.extend(
+                self.list
+                    .iter()
+                    .filter(|g| g.parent == cur && g.id != cur)
+                    .map(|g| g.id),
+            );
             i += 1;
         }
         out

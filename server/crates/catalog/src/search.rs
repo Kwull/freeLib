@@ -11,7 +11,7 @@ use std::time::Instant;
 use rusqlite::Connection;
 use serde::Deserialize;
 
-use crate::catalog::{load_books, BookFilter, Catalog, CountSel, Result};
+use crate::catalog::{BookFilter, Catalog, CountSel, Result, load_books};
 use crate::genres::genres;
 use crate::model::*;
 use crate::normalize::search_tokens;
@@ -63,12 +63,17 @@ pub struct BookAttrs {
 
 fn date_num(s: &str) -> u32 {
     let d: String = s.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
-    if d.len() == 8 { d.parse().unwrap_or(0) } else { 0 }
+    if d.len() == 8 {
+        d.parse().unwrap_or(0)
+    } else {
+        0
+    }
 }
 
 impl BookAttrs {
     pub(crate) fn load(conn: &Connection) -> rusqlite::Result<BookAttrs> {
-        let max_id: i64 = conn.query_row("SELECT coalesce(max(id), 0) FROM book", [], |r| r.get(0))?;
+        let max_id: i64 =
+            conn.query_row("SELECT coalesce(max(id), 0) FROM book", [], |r| r.get(0))?;
         let n = max_id as usize + 1;
         let mut a = BookAttrs {
             flags: vec![0; n],
@@ -109,10 +114,17 @@ impl BookAttrs {
             a.lang[id] = li;
             a.ext[id] = ei;
             a.date[id] = date_num(r.get_ref(3)?.as_str().unwrap_or(""));
-            a.flags[id] = FLAG_EXISTS | if r.get::<_, i64>(4)? != 0 { FLAG_DELETED } else { 0 };
+            a.flags[id] = FLAG_EXISTS
+                | if r.get::<_, i64>(4)? != 0 {
+                    FLAG_DELETED
+                } else {
+                    0
+                };
         }
         // Genres in CSR form; the reverse index yields rows ordered by book_id.
-        let mut st = conn.prepare("SELECT book_id, genre_id FROM book_genre INDEXED BY book_bg_rev ORDER BY book_id")?;
+        let mut st = conn.prepare(
+            "SELECT book_id, genre_id FROM book_genre INDEXED BY book_bg_rev ORDER BY book_id",
+        )?;
         let mut q = st.query([])?;
         let mut counts = vec![0u32; n];
         let mut pairs: Vec<(u32, u16)> = Vec::new();
@@ -139,9 +151,16 @@ impl BookAttrs {
 
     /// Count books matching a genre set / date lower bound and the list filters.
     pub(crate) fn count(&self, sel: &CountSel, f: &BookFilter) -> i64 {
-        let lang_ok: Vec<bool> = self.langs.iter().map(|l| f.langs.is_empty() || f.langs.iter().any(|x| x == l)).collect();
-        let ext_ok: Vec<bool> =
-            self.exts.iter().map(|e| f.ext.as_ref().is_none_or(|x| x.eq_ignore_ascii_case(e))).collect();
+        let lang_ok: Vec<bool> = self
+            .langs
+            .iter()
+            .map(|l| f.langs.is_empty() || f.langs.iter().any(|x| x == l))
+            .collect();
+        let ext_ok: Vec<bool> = self
+            .exts
+            .iter()
+            .map(|e| f.ext.as_ref().is_none_or(|x| x.eq_ignore_ascii_case(e)))
+            .collect();
         let (mut gset, since) = match sel {
             CountSel::Genres(g) => (g.clone(), 0),
             CountSel::Since(d) => (Vec::new(), date_num(d).max(1)),
@@ -154,10 +173,18 @@ impl BookAttrs {
             if fl & FLAG_EXISTS == 0 || (!f.include_deleted && fl & FLAG_DELETED != 0) {
                 continue;
             }
-            if !lang_ok[self.lang[i] as usize] || !ext_ok[self.ext[i] as usize] || self.date[i] < since {
+            if !lang_ok[self.lang[i] as usize]
+                || !ext_ok[self.ext[i] as usize]
+                || self.date[i] < since
+            {
                 continue;
             }
-            if !gset.is_empty() && !self.genres_of(i).iter().any(|g| gset.binary_search(g).is_ok()) {
+            if !gset.is_empty()
+                && !self
+                    .genres_of(i)
+                    .iter()
+                    .any(|g| gset.binary_search(g).is_ok())
+            {
                 continue;
             }
             n += 1;
@@ -177,11 +204,20 @@ impl BookAttrs {
 pub fn fts_query(q: &str) -> Option<String> {
     let tokens = search_tokens(q);
     let long: Vec<&String> = tokens.iter().filter(|t| t.chars().count() >= 2).collect();
-    let used: Vec<&String> = if long.is_empty() { tokens.iter().collect() } else { long };
+    let used: Vec<&String> = if long.is_empty() {
+        tokens.iter().collect()
+    } else {
+        long
+    };
     if used.is_empty() {
         return None;
     }
-    Some(used.iter().map(|t| format!("\"{t}\"*")).collect::<Vec<_>>().join(" "))
+    Some(
+        used.iter()
+            .map(|t| format!("\"{t}\"*"))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 impl Catalog {
@@ -203,7 +239,13 @@ impl Catalog {
                  ORDER BY a.book_count DESC, a.sort_key LIMIT 20",
             )?;
             res.authors = st
-                .query_map([&fts], |r| Ok(NameCount { id: r.get(0)?, name: r.get(1)?, count: r.get(2)? }))?
+                .query_map([&fts], |r| {
+                    Ok(NameCount {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        count: r.get(2)?,
+                    })
+                })?
                 .collect::<rusqlite::Result<_>>()?;
         }
         if matches!(sq.kind, SearchKind::All | SearchKind::Series) {
@@ -214,7 +256,12 @@ impl Catalog {
             )?;
             res.series = st
                 .query_map([&fts], |r| {
-                    Ok(SeriesHit { id: r.get(0)?, name: r.get(1)?, count: r.get(2)?, authors: r.get(3)? })
+                    Ok(SeriesHit {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        count: r.get(2)?,
+                        authors: r.get(3)?,
+                    })
                 })?
                 .collect::<rusqlite::Result<_>>()?;
         }
@@ -225,7 +272,8 @@ impl Catalog {
                 let mut st = conn.prepare_cached(
                     "SELECT rowid, bm25(book_fts, 10.0, 4.0, 3.0, 1.0) FROM book_fts WHERE book_fts MATCH ?1",
                 )?;
-                st.query_map([&fts], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+                st.query_map([&fts], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<rusqlite::Result<_>>()?
             };
             let (ranked, total, facets) = filter_and_facet(&attrs, &hits, sq);
             let limit = sq.limit.clamp(1, 1000);
@@ -240,18 +288,38 @@ impl Catalog {
 }
 
 /// Apply filters; count disjunctive facets (each facet ignores its own filter).
-fn filter_and_facet(a: &BookAttrs, hits: &[(i64, f64)], sq: &SearchQuery) -> (Vec<(i64, f64)>, i64, Facets) {
+fn filter_and_facet(
+    a: &BookAttrs,
+    hits: &[(i64, f64)],
+    sq: &SearchQuery,
+) -> (Vec<(i64, f64)>, i64, Facets) {
     let gset: Vec<u16> = {
-        let mut v: Vec<u16> = sq.genres.iter().flat_map(|&g| genres().with_descendants(g)).collect();
+        let mut v: Vec<u16> = sq
+            .genres
+            .iter()
+            .flat_map(|&g| genres().with_descendants(g))
+            .collect();
         v.sort_unstable();
         v.dedup();
         v
     };
-    let lang_ok: Vec<bool> = a.langs.iter().map(|l| sq.langs.is_empty() || sq.langs.iter().any(|x| x == l)).collect();
-    let ext_ok: Vec<bool> =
-        a.exts.iter().map(|e| sq.ext.as_ref().is_none_or(|x| x.eq_ignore_ascii_case(e))).collect();
+    let lang_ok: Vec<bool> = a
+        .langs
+        .iter()
+        .map(|l| sq.langs.is_empty() || sq.langs.iter().any(|x| x == l))
+        .collect();
+    let ext_ok: Vec<bool> = a
+        .exts
+        .iter()
+        .map(|e| sq.ext.as_ref().is_none_or(|x| x.eq_ignore_ascii_case(e)))
+        .collect();
     let from = sq.from.as_deref().map(date_num).unwrap_or(0);
-    let to = sq.to.as_deref().map(date_num).filter(|&d| d > 0).unwrap_or(u32::MAX);
+    let to = sq
+        .to
+        .as_deref()
+        .map(date_num)
+        .filter(|&d| d > 0)
+        .unwrap_or(u32::MAX);
 
     let mut out = Vec::new();
     let mut g_counts: HashMap<u16, i64> = HashMap::new();
@@ -291,11 +359,19 @@ fn filter_and_facet(a: &BookAttrs, hits: &[(i64, f64)], sq: &SearchQuery) -> (Ve
     let total = out.len() as i64;
     let mut genre: Vec<(u16, i64)> = g_counts.into_iter().collect();
     genre.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(&y.0)));
-    let mut lang: Vec<(String, i64)> =
-        l_counts.iter().enumerate().filter(|(_, c)| **c > 0).map(|(i, c)| (a.langs[i].clone(), *c)).collect();
+    let mut lang: Vec<(String, i64)> = l_counts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| **c > 0)
+        .map(|(i, c)| (a.langs[i].clone(), *c))
+        .collect();
     lang.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(&y.0)));
-    let mut ext: Vec<(String, i64)> =
-        e_counts.iter().enumerate().filter(|(_, c)| **c > 0).map(|(i, c)| (a.exts[i].clone(), *c)).collect();
+    let mut ext: Vec<(String, i64)> = e_counts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| **c > 0)
+        .map(|(i, c)| (a.exts[i].clone(), *c))
+        .collect();
     ext.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(&y.0)));
     (out, total, Facets { genre, lang, ext })
 }
@@ -303,7 +379,9 @@ fn filter_and_facet(a: &BookAttrs, hits: &[(i64, f64)], sq: &SearchQuery) -> (Ve
 /// Best `n` hits: bm25 ascending (more relevant first), then newer first, then id.
 fn top_n(mut v: Vec<(i64, f64)>, n: usize, a: &BookAttrs) -> Vec<i64> {
     let cmp = |x: &(i64, f64), y: &(i64, f64)| {
-        x.1.total_cmp(&y.1).then_with(|| a.date[y.0 as usize].cmp(&a.date[x.0 as usize])).then(x.0.cmp(&y.0))
+        x.1.total_cmp(&y.1)
+            .then_with(|| a.date[y.0 as usize].cmp(&a.date[x.0 as usize]))
+            .then(x.0.cmp(&y.0))
     };
     if v.len() > n {
         v.select_nth_unstable_by(n, cmp);

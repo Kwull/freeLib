@@ -64,7 +64,8 @@ pub struct Structure {
 }
 
 /// Field order used when the INPX has no `structure.info`.
-pub const DEFAULT_STRUCTURE: &str = "AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;LANG;STARS;KEYWORDS;";
+pub const DEFAULT_STRUCTURE: &str =
+    "AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;LANG;STARS;KEYWORDS;";
 
 impl Default for Structure {
     fn default() -> Self {
@@ -76,7 +77,12 @@ impl Structure {
     /// Parse `structure.info` (`AUTHOR;GENRE;…;` on the first non-empty line).
     /// Returns the default structure when the text contains no known field.
     pub fn parse(text: &str) -> Structure {
-        let line = text.trim_start_matches('\u{feff}').lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+        let line = text
+            .trim_start_matches('\u{feff}')
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("");
         let mut idx = [None; 15];
         for (i, name) in line.split(';').enumerate() {
             let f = Field::from_name(name);
@@ -113,12 +119,19 @@ pub const UNKNOWN_AUTHOR: &str = "Автор неизвестен";
 
 impl RawAuthor {
     pub fn unknown() -> RawAuthor {
-        RawAuthor { last: UNKNOWN_AUTHOR.into(), first: String::new(), middle: String::new() }
+        RawAuthor {
+            last: UNKNOWN_AUTHOR.into(),
+            first: String::new(),
+            middle: String::new(),
+        }
     }
 
     /// Display name `Last First Middle`, single-spaced.
     pub fn display(&self) -> String {
-        freelib_catalog::normalize::collapse_ws(&format!("{} {} {}", self.last, self.first, self.middle))
+        freelib_catalog::normalize::collapse_ws(&format!(
+            "{} {} {}",
+            self.last, self.first, self.middle
+        ))
     }
 }
 
@@ -161,21 +174,37 @@ impl RawBook {
 
     /// The `file:` form of the key (also used when two records share a LIBID).
     pub fn file_key(&self) -> String {
-        let base = if self.archive.is_empty() { self.folder.as_str() } else { self.archive.as_str() };
+        let base = if self.archive.is_empty() {
+            self.folder.as_str()
+        } else {
+            self.archive.as_str()
+        };
         file_key(base, &self.file, &self.ext)
     }
 
     /// Entry name inside the archive: `<file>.<ext>`.
     pub fn entry_name(&self) -> String {
-        if self.ext.is_empty() { self.file.clone() } else { format!("{}.{}", self.file, self.ext) }
+        if self.ext.is_empty() {
+            self.file.clone()
+        } else {
+            format!("{}.{}", self.file, self.ext)
+        }
     }
 }
 
 /// `file:<base>/<file>.<ext>` (`file:<file>.<ext>` when `base` is empty).
 pub fn file_key(base: &str, file: &str, ext: &str) -> String {
-    let name = if ext.is_empty() { file.to_string() } else { format!("{file}.{ext}") };
+    let name = if ext.is_empty() {
+        file.to_string()
+    } else {
+        format!("{file}.{ext}")
+    };
     let base = base.trim_end_matches('/');
-    if base.is_empty() { format!("file:{name}") } else { format!("file:{base}/{name}") }
+    if base.is_empty() {
+        format!("file:{name}")
+    } else {
+        format!("file:{base}/{name}")
+    }
 }
 
 /// Options that change which records / authors are kept.
@@ -216,7 +245,9 @@ fn resolve_folder(raw: &str, part_name: &str) -> (String, String) {
 fn is_unknown_author(s: &str) -> bool {
     let l = s.to_lowercase();
     let l = l.trim_matches(|c: char| c == ',' || c.is_whitespace());
-    (l.contains("автор") && (l.contains("неизвестен") || l.contains("неизвестный"))) || l == "неизвестно" || l == "unknown"
+    (l.contains("автор") && (l.contains("неизвестен") || l.contains("неизвестный")))
+        || l == "неизвестно"
+        || l == "unknown"
 }
 
 /// Parse `Last,First,Middle:Last2,First2,:` (empty entries skipped, duplicates removed).
@@ -234,7 +265,11 @@ pub fn parse_authors(s: &str) -> Vec<RawAuthor> {
             let first = it.next().unwrap_or_default();
             let middle = it.next().unwrap_or_default();
             // "First,,": only a first name in the last-name slot is fine; nothing to fix.
-            RawAuthor { last, first, middle }
+            RawAuthor {
+                last,
+                first,
+                middle,
+            }
         };
         if !out.contains(&a) {
             out.push(a);
@@ -274,7 +309,12 @@ fn parse_int(s: &str) -> Option<i64> {
 
 /// Parse one record line. Returns `None` for empty/garbage lines and for deleted records
 /// when `skip_deleted` is set.
-pub fn parse_line(line: &str, part_name: &str, st: &Structure, opts: ParseOptions) -> Option<RawBook> {
+pub fn parse_line(
+    line: &str,
+    part_name: &str,
+    st: &Structure,
+    opts: ParseOptions,
+) -> Option<RawBook> {
     let line = line.trim_end_matches(['\r', '\n']);
     if line.is_empty() || !line.contains('\x04') {
         return None;
@@ -299,7 +339,12 @@ pub fn parse_line(line: &str, part_name: &str, st: &Structure, opts: ParseOption
     } else {
         (archive_for_part(part_name), String::new())
     };
-    let lang: String = get(Field::Lang).trim().to_lowercase().chars().take(2).collect();
+    let lang: String = get(Field::Lang)
+        .trim()
+        .to_lowercase()
+        .chars()
+        .take(2)
+        .collect();
     Some(RawBook {
         authors,
         genres: parse_genres(get(Field::Genre)),
@@ -310,7 +355,10 @@ pub fn parse_line(line: &str, part_name: &str, st: &Structure, opts: ParseOption
         size: parse_int(get(Field::Size)).unwrap_or(0).max(0),
         lib_id: parse_int(get(Field::LibId)).filter(|&n| n > 0),
         deleted,
-        ext: get(Field::Ext).trim().trim_start_matches('.').to_lowercase(),
+        ext: get(Field::Ext)
+            .trim()
+            .trim_start_matches('.')
+            .to_lowercase(),
         date: freelib_catalog::util::parse_date(get(Field::Date)),
         lang,
         stars: parse_int(get(Field::Stars)).unwrap_or(0).clamp(0, 5),
@@ -325,7 +373,9 @@ pub fn parse_line(line: &str, part_name: &str, st: &Structure, opts: ParseOption
 pub fn parse_inp(data: &[u8], part_name: &str, st: &Structure, opts: ParseOptions) -> Vec<RawBook> {
     let text = String::from_utf8_lossy(data);
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    text.split('\n').filter_map(|l| parse_line(l, part_name, st, opts)).collect()
+    text.split('\n')
+        .filter_map(|l| parse_line(l, part_name, st, opts))
+        .collect()
 }
 
 /// Metadata of an INPX file.
@@ -346,7 +396,9 @@ fn read_entry_text(za: &mut ZipArchive<File>, name: &str) -> Result<String, Impo
     let mut f = za.by_name(name)?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).trim_start_matches('\u{feff}').to_string())
+    Ok(String::from_utf8_lossy(&buf)
+        .trim_start_matches('\u{feff}')
+        .to_string())
 }
 
 /// Open an INPX and read its metadata files (names matched case-insensitively).
@@ -359,15 +411,25 @@ pub fn read_info(path: &Path) -> Result<InpxInfo, ImportError> {
         info.structure = Structure::parse(&read_entry_text(&mut za, &n)?);
     }
     if let Some(n) = find("version.info") {
-        let v = read_entry_text(&mut za, &n)?.split_whitespace().collect::<Vec<_>>().join(" ");
+        let v = read_entry_text(&mut za, &n)?
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         info.version = (!v.is_empty()).then_some(v);
     }
     if let Some(n) = find("collection.info") {
         let t = read_entry_text(&mut za, &n)?;
-        info.collection_name = t.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string);
+        info.collection_name = t
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .map(str::to_string);
         info.collection_info = Some(t);
     }
-    info.parts = names.into_iter().filter(|n| n.to_ascii_lowercase().ends_with(".inp")).collect();
+    info.parts = names
+        .into_iter()
+        .filter(|n| n.to_ascii_lowercase().ends_with(".inp"))
+        .collect();
     Ok(info)
 }
 
@@ -397,7 +459,9 @@ mod tests {
 
     #[test]
     fn custom_structure() {
-        let st = Structure::parse("\u{feff}AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;INSNO;FOLDER;LANG;LIBRATE;KEYWORDS;\r\n");
+        let st = Structure::parse(
+            "\u{feff}AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;INSNO;FOLDER;LANG;LIBRATE;KEYWORDS;\r\n",
+        );
         assert_eq!(st.pos(Field::Folder), Some(12));
         assert_eq!(st.pos(Field::Lang), Some(13));
         assert_eq!(st.pos(Field::Stars), Some(14));
@@ -453,7 +517,14 @@ mod tests {
         // Only author, genre, title, series, serno, file: everything else missing.
         let line = "Иванов,,:\x04\x04Книга\x04\x04\x04777";
         let b = parse_line(line, "x.inp", &st, ParseOptions::default()).unwrap();
-        assert_eq!(b.authors, vec![RawAuthor { last: "Иванов".into(), first: "".into(), middle: "".into() }]);
+        assert_eq!(
+            b.authors,
+            vec![RawAuthor {
+                last: "Иванов".into(),
+                first: "".into(),
+                middle: "".into()
+            }]
+        );
         assert!(b.genres.is_empty());
         assert_eq!(b.serno, None);
         assert_eq!(b.size, 0);
@@ -462,7 +533,22 @@ mod tests {
         assert_eq!(b.date, "");
         assert_eq!(b.book_key(), "file:x.zip/777");
         // CRLF, serno 0, bad numbers, bad date, stars out of range
-        let line = rec(&["A,B,C:", "SF Heroic:", "T", "S", "0", "f", "abc", "0", "1", ".FB2", "2009-99-01", "en-US", "9", ""]) + "\r";
+        let line = rec(&[
+            "A,B,C:",
+            "SF Heroic:",
+            "T",
+            "S",
+            "0",
+            "f",
+            "abc",
+            "0",
+            "1",
+            ".FB2",
+            "2009-99-01",
+            "en-US",
+            "9",
+            "",
+        ]) + "\r";
         let b = parse_line(&line, "x.inp", &st, ParseOptions::default()).unwrap();
         assert_eq!(b.genres, vec!["sf_heroic"]);
         assert_eq!(b.serno, None);
@@ -477,7 +563,15 @@ mod tests {
         assert!(parse_line("", "x.inp", &st, ParseOptions::default()).is_none());
         assert!(parse_line("no separators here", "x.inp", &st, ParseOptions::default()).is_none());
         // no FILE → skipped
-        assert!(parse_line(&rec(&["A,,:", "sf:", "T"]), "x.inp", &st, ParseOptions::default()).is_none());
+        assert!(
+            parse_line(
+                &rec(&["A,,:", "sf:", "T"]),
+                "x.inp",
+                &st,
+                ParseOptions::default()
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -485,33 +579,105 @@ mod tests {
         assert_eq!(parse_authors("").len(), 1);
         assert_eq!(parse_authors("")[0], RawAuthor::unknown());
         assert_eq!(parse_authors(",,:")[0], RawAuthor::unknown());
-        assert_eq!(parse_authors("Автор Неизвестен,,:")[0], RawAuthor::unknown());
+        assert_eq!(
+            parse_authors("Автор Неизвестен,,:")[0],
+            RawAuthor::unknown()
+        );
         assert_eq!(parse_authors("неизвестно")[0], RawAuthor::unknown());
         let a = parse_authors("Автор неизвестен:Иванов,Иван,Иванович:Иванов,Иван,Иванович:");
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].display(), "Иванов Иван Иванович");
         let a = parse_authors("  Толстой , Лев ,Николаевич,extra:Dumas,Alexandre");
-        assert_eq!(a[0], RawAuthor { last: "Толстой".into(), first: "Лев".into(), middle: "Николаевич".into() });
+        assert_eq!(
+            a[0],
+            RawAuthor {
+                last: "Толстой".into(),
+                first: "Лев".into(),
+                middle: "Николаевич".into()
+            }
+        );
         assert_eq!(a[1].display(), "Dumas Alexandre");
     }
 
     #[test]
     fn options() {
         let st = Structure::default();
-        let line = rec(&["A,,:B,,:", "sf:", "T", "", "", "1", "1", "1", "1", "fb2", "2020-01-01", "ru", "", ""]);
-        assert!(parse_line(&line, "x.inp", &st, ParseOptions { skip_deleted: true, first_author_only: false }).is_none());
-        let b = parse_line(&line, "x.inp", &st, ParseOptions { skip_deleted: false, first_author_only: true }).unwrap();
+        let line = rec(&[
+            "A,,:B,,:",
+            "sf:",
+            "T",
+            "",
+            "",
+            "1",
+            "1",
+            "1",
+            "1",
+            "fb2",
+            "2020-01-01",
+            "ru",
+            "",
+            "",
+        ]);
+        assert!(
+            parse_line(
+                &line,
+                "x.inp",
+                &st,
+                ParseOptions {
+                    skip_deleted: true,
+                    first_author_only: false
+                }
+            )
+            .is_none()
+        );
+        let b = parse_line(
+            &line,
+            "x.inp",
+            &st,
+            ParseOptions {
+                skip_deleted: false,
+                first_author_only: true,
+            },
+        )
+        .unwrap();
         assert_eq!(b.authors.len(), 1);
         assert_eq!(b.authors[0].last, "A");
     }
 
     #[test]
     fn folder_field() {
-        let st = Structure::parse("AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;LANG;FOLDER;");
-        let mk = |folder: &str| rec(&["A,,:", "sf:", "T", "", "", "10", "1", "", "0", "fb2", "2020-01-01", "ru", folder]);
+        let st = Structure::parse(
+            "AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;LANG;FOLDER;",
+        );
+        let mk = |folder: &str| {
+            rec(&[
+                "A,,:",
+                "sf:",
+                "T",
+                "",
+                "",
+                "10",
+                "1",
+                "",
+                "0",
+                "fb2",
+                "2020-01-01",
+                "ru",
+                folder,
+            ])
+        };
         let b = parse_line(&mk("usr-1.zip"), "all.inp", &st, ParseOptions::default()).unwrap();
-        assert_eq!((b.archive.as_str(), b.folder.as_str()), ("usr-1.zip", "usr-1.zip"));
-        let b = parse_line(&mk("sub\\old-2.inp"), "all.inp", &st, ParseOptions::default()).unwrap();
+        assert_eq!(
+            (b.archive.as_str(), b.folder.as_str()),
+            ("usr-1.zip", "usr-1.zip")
+        );
+        let b = parse_line(
+            &mk("sub\\old-2.inp"),
+            "all.inp",
+            &st,
+            ParseOptions::default(),
+        )
+        .unwrap();
         assert_eq!(b.archive, "sub/old-2.zip");
         let b = parse_line(&mk("books/plain"), "all.inp", &st, ParseOptions::default()).unwrap();
         assert_eq!((b.archive.as_str(), b.folder.as_str()), ("", "books/plain"));
@@ -522,7 +688,10 @@ mod tests {
 
     #[test]
     fn archives() {
-        assert_eq!(archive_for_part("fb2-000024-030559.inp"), "fb2-000024-030559.zip");
+        assert_eq!(
+            archive_for_part("fb2-000024-030559.inp"),
+            "fb2-000024-030559.zip"
+        );
         assert_eq!(archive_for_part("dir/a.b.INP"), "a.b.zip");
         assert_eq!(archive_for_part("noext"), "noext.zip");
     }
@@ -532,8 +701,38 @@ mod tests {
         let st = Structure::default();
         let data = format!(
             "\u{feff}{}\n\n{}\r\n",
-            rec(&["A,,:", "sf:", "One", "", "", "1", "1", "1", "0", "fb2", "2020-01-01", "ru", "", ""]),
-            rec(&["B,,:", "sf:", "Two", "", "", "2", "1", "2", "0", "fb2", "2020-01-01", "ru", "", ""])
+            rec(&[
+                "A,,:",
+                "sf:",
+                "One",
+                "",
+                "",
+                "1",
+                "1",
+                "1",
+                "0",
+                "fb2",
+                "2020-01-01",
+                "ru",
+                "",
+                ""
+            ]),
+            rec(&[
+                "B,,:",
+                "sf:",
+                "Two",
+                "",
+                "",
+                "2",
+                "1",
+                "2",
+                "0",
+                "fb2",
+                "2020-01-01",
+                "ru",
+                "",
+                ""
+            ])
         );
         let v = parse_inp(data.as_bytes(), "p.inp", &st, ParseOptions::default());
         assert_eq!(v.len(), 2);
@@ -541,6 +740,9 @@ mod tests {
         // invalid UTF-8 does not abort the part
         let mut bytes = data.into_bytes();
         bytes.insert(10, 0xff);
-        assert_eq!(parse_inp(&bytes, "p.inp", &st, ParseOptions::default()).len(), 2);
+        assert_eq!(
+            parse_inp(&bytes, "p.inp", &st, ParseOptions::default()).len(),
+            2
+        );
     }
 }

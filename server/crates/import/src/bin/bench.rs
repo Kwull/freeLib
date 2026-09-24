@@ -11,8 +11,8 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use freelib_catalog::{BookFilter, BookSelector, Catalog, Page, SearchKind, SearchQuery};
-use freelib_import::synth::{generate, GenOptions, Rng};
-use freelib_import::{import_inpx, ImportOptions};
+use freelib_import::synth::{GenOptions, Rng, generate};
+use freelib_import::{ImportOptions, import_inpx};
 
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
@@ -25,7 +25,10 @@ struct Series {
 
 impl Series {
     fn new(name: &str) -> Self {
-        Series { name: name.into(), samples: vec![] }
+        Series {
+            name: name.into(),
+            samples: vec![],
+        }
     }
     fn time<T>(&mut self, f: impl FnOnce() -> T) -> T {
         let t = Instant::now();
@@ -66,17 +69,31 @@ fn main() {
             "--skip-import" => skip_import = true,
             "--lib-dir" => lib_dir = args.next().map(PathBuf::from),
             _ => {
-                eprintln!("usage: bench [--books N] [--inpx FILE] [--db FILE] [--lib-dir DIR] [--skip-import]");
+                eprintln!(
+                    "usage: bench [--books N] [--inpx FILE] [--db FILE] [--lib-dir DIR] [--skip-import]"
+                );
                 std::process::exit(2);
             }
         }
     }
-    let inpx = inpx.unwrap_or_else(|| PathBuf::from(format!("bench-data/synthetic-{}k.inpx", books / 1000)));
+    let inpx = inpx
+        .unwrap_or_else(|| PathBuf::from(format!("bench-data/synthetic-{}k.inpx", books / 1000)));
     if !inpx.exists() {
         std::fs::create_dir_all(inpx.parent().unwrap()).unwrap();
         let t = Instant::now();
-        generate(&inpx, &GenOptions { books, ..Default::default() }).expect("generate");
-        println!("generated {} in {:.1}s", inpx.display(), t.elapsed().as_secs_f64());
+        generate(
+            &inpx,
+            &GenOptions {
+                books,
+                ..Default::default()
+            },
+        )
+        .expect("generate");
+        println!(
+            "generated {} in {:.1}s",
+            inpx.display(),
+            t.elapsed().as_secs_f64()
+        );
     }
 
     if !skip_import {
@@ -108,12 +125,21 @@ fn main() {
             stats.series
         );
         if lib_dir.is_some() {
-            println!("  offsets resolved: {}, missing archives: {}", stats.offsets_resolved, stats.missing_archives.len());
+            println!(
+                "  offsets resolved: {}, missing archives: {}",
+                stats.offsets_resolved,
+                stats.missing_archives.len()
+            );
         }
         for (phase, ms) in &stats.timings {
             println!("  {phase:<24} {:>8.1}s", *ms as f64 / 1000.0);
         }
-        println!("  db size: {} MB", std::fs::metadata(&db).map(|m| m.len() / 1_000_000).unwrap_or(0));
+        println!(
+            "  db size: {} MB",
+            std::fs::metadata(&db)
+                .map(|m| m.len() / 1_000_000)
+                .unwrap_or(0)
+        );
     }
 
     let t = Instant::now();
@@ -122,13 +148,22 @@ fn main() {
     let st = cat.stats().clone();
     let mut rng = Rng::new(7);
 
-    println!("\n| {:<44} | {:>5} | {:>8} | {:>8} | {:>8} |", "query", "n", "p50 ms", "p95 ms", "max ms");
-    println!("|{:-<46}|{:-<7}|{:-<10}|{:-<10}|{:-<10}|", "", "", "", "", "");
+    println!(
+        "\n| {:<44} | {:>5} | {:>8} | {:>8} | {:>8} |",
+        "query", "n", "p50 ms", "p95 ms", "max ms"
+    );
+    println!(
+        "|{:-<46}|{:-<7}|{:-<10}|{:-<10}|{:-<10}|",
+        "", "", "", "", ""
+    );
 
     let mut s = Series::new("search: attrs load (once per catalog)");
     s.time(|| cat.attrs().unwrap());
     s.report();
-    println!("|   (attrs memory: {} MB) | | | | |", cat.attrs().unwrap().memory_bytes() / 1_000_000);
+    println!(
+        "|   (attrs memory: {} MB) | | | | |",
+        cat.attrs().unwrap().memory_bytes() / 1_000_000
+    );
 
     let mut s = Series::new("authors list (first call)");
     let authors = s.time(|| cat.authors().unwrap());
@@ -144,7 +179,11 @@ fn main() {
     s.report();
     let mut s = Series::new("series list + JSON");
     for _ in 0..5 {
-        s.time(|| serde_json::to_vec(&cat.series_list().unwrap()).unwrap().len());
+        s.time(|| {
+            serde_json::to_vec(&cat.series_list().unwrap())
+                .unwrap()
+                .len()
+        });
     }
     s.report();
     let mut s = Series::new("genres with counts");
@@ -171,7 +210,11 @@ fn main() {
     }
     s.report();
     let mut s = Series::new("books by author, lang=ru ext=fb2");
-    let fr = BookFilter { langs: vec!["ru".into()], ext: Some("fb2".into()), include_deleted: false };
+    let fr = BookFilter {
+        langs: vec!["ru".into()],
+        ext: Some("fb2".into()),
+        include_deleted: false,
+    };
     for id in &ids {
         s.time(|| cat.books(&BookSelector::Author(*id), &fr, &page).unwrap());
     }
@@ -199,25 +242,45 @@ fn main() {
     }
     s.report();
     let mut s = Series::new("books by genre, page 5 (cursor 8000)");
-    let big = genres.iter().filter(|g| g.parent != 0).max_by_key(|g| g.count).unwrap();
+    let big = genres
+        .iter()
+        .filter(|g| g.parent != 0)
+        .max_by_key(|g| g.count)
+        .unwrap();
     for _ in 0..10 {
         s.time(|| {
-            cat.books(&BookSelector::Genre(big.id), &f, &Page { cursor: Some("8000".into()), limit: 2000 }).unwrap()
+            cat.books(
+                &BookSelector::Genre(big.id),
+                &f,
+                &Page {
+                    cursor: Some("8000".into()),
+                    limit: 2000,
+                },
+            )
+            .unwrap()
         });
     }
     s.report();
 
-    for (label, date) in [("since last 30 days", "2026-08-02"), ("since last year", "2025-09-01")] {
+    for (label, date) in [
+        ("since last 30 days", "2026-08-02"),
+        ("since last year", "2025-09-01"),
+    ] {
         let mut s = Series::new(&format!("books {label}"));
         for _ in 0..10 {
-            s.time(|| cat.books(&BookSelector::Since(date.into()), &f, &page).unwrap());
+            s.time(|| {
+                cat.books(&BookSelector::Since(date.into()), &f, &page)
+                    .unwrap()
+            });
         }
         s.report();
     }
 
     let mut s = Series::new("books by id list (shelf, 500 ids)");
     for _ in 0..20 {
-        let ids: Vec<i64> = (0..500).map(|_| 1 + rng.below(st.book_count as usize) as i64).collect();
+        let ids: Vec<i64> = (0..500)
+            .map(|_| 1 + rng.below(st.book_count as usize) as i64)
+            .collect();
         s.time(|| cat.books(&BookSelector::Ids(ids), &f, &page).unwrap());
     }
     s.report();
@@ -231,22 +294,53 @@ fn main() {
 
     let mut s = Series::new("ids by book_key (1000 keys)");
     for _ in 0..20 {
-        let keys: Vec<String> = (0..1000).map(|_| format!("lib:{}", 1000 + rng.below(st.book_count as usize))).collect();
+        let keys: Vec<String> = (0..1000)
+            .map(|_| format!("lib:{}", 1000 + rng.below(st.book_count as usize)))
+            .collect();
         s.time(|| cat.ids_by_keys(&keys).unwrap());
     }
     s.report();
 
     let queries = [
-        "иванов", "тёмный лес", "стругацкий", "звёздный", "мир", "ал", "ив", "по", "хроники", "лукьяненко дозор",
-        "последний рубеж", "king", "dark tower", "сергей", "петрова анна", "мёртвый", "огненный меч", "код", "шторм",
-        "дело", "магия", "книга 3", "замок", "морозов", "сага о",
+        "иванов",
+        "тёмный лес",
+        "стругацкий",
+        "звёздный",
+        "мир",
+        "ал",
+        "ив",
+        "по",
+        "хроники",
+        "лукьяненко дозор",
+        "последний рубеж",
+        "king",
+        "dark tower",
+        "сергей",
+        "петрова анна",
+        "мёртвый",
+        "огненный меч",
+        "код",
+        "шторм",
+        "дело",
+        "магия",
+        "книга 3",
+        "замок",
+        "морозов",
+        "сага о",
     ];
     let mut s = Series::new("search (kind=all, 25 queries × 3)");
     let mut sb = Series::new("search books only, lang=ru, genre=sf group");
     let mut max_total = 0;
     for q in queries {
         for _ in 0..3 {
-            let r = s.time(|| cat.search(&SearchQuery { q: q.into(), limit: 200, ..Default::default() }).unwrap());
+            let r = s.time(|| {
+                cat.search(&SearchQuery {
+                    q: q.into(),
+                    limit: 200,
+                    ..Default::default()
+                })
+                .unwrap()
+            });
             max_total = max_total.max(r.total);
             sb.time(|| {
                 cat.search(&SearchQuery {
@@ -264,5 +358,9 @@ fn main() {
     s.report();
     sb.report();
     println!("|   (largest match set: {max_total} books) | | | | |");
-    println!("\nauthors JSON: {} KB for {} rows", json_len / 1000, authors.rows.len());
+    println!(
+        "\nauthors JSON: {} KB for {} rows",
+        json_len / 1000,
+        authors.rows.len()
+    );
 }

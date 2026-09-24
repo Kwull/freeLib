@@ -12,12 +12,15 @@ pub mod schema;
 pub mod search;
 pub mod util;
 
-pub use catalog::{open_read_only, BookFilter, BookSelector, Catalog, CatalogError, CatalogHandle, Page, PooledConn};
-pub use genres::{genres, GenreDef, Genres, GENRE_OTHER};
+pub use catalog::{
+    BookFilter, BookSelector, Catalog, CatalogError, CatalogHandle, Page, PooledConn,
+    open_read_only,
+};
+pub use genres::{GENRE_OTHER, GenreDef, Genres, genres};
 pub use model::*;
 pub use normalize::{letter_of, normalize};
 pub use schema::{
-    create_catalog_indexes, create_catalog_tables, migrate_app_db, open_app_db, APP_SCHEMA_VERSION,
-    CATALOG_SCHEMA_VERSION,
+    APP_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION, create_catalog_indexes, create_catalog_tables,
+    migrate_app_db, open_app_db,
 };
 pub use search::{BookAttrs, SearchKind, SearchQuery};

@@ -2,14 +2,14 @@
 //! Qt `freeLib.sqlite`, and a synthetic INPX generator used by tests and benchmarks.
 
 pub mod builder;
-pub mod synth;
 pub mod inpx;
 pub mod migrate;
 pub mod offsets;
+pub mod synth;
 pub mod zipdir;
 
-pub use builder::{import_inpx, new_db_path, ImportOptions, ImportStats, Progress};
-pub use offsets::{resolve_offsets, OffsetStats};
+pub use builder::{ImportOptions, ImportStats, Progress, import_inpx, new_db_path};
+pub use offsets::{OffsetStats, resolve_offsets};
 
 /// Import errors.
 #[derive(Debug, thiserror::Error)]

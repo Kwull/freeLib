@@ -29,15 +29,26 @@ pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 
 /// Current UTC time as RFC 3339 (`2024-05-01T12:34:56Z`).
 pub fn now_rfc3339() -> String {
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
     let s = secs.rem_euclid(86_400);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", s / 3600, s / 60 % 60, s % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        s / 3600,
+        s / 60 % 60,
+        s % 60
+    )
 }
 
 /// Milliseconds since the Unix epoch.
 pub fn now_millis() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Validate / normalise an INPX date: returns `YYYY-MM-DD` or `""`.
@@ -50,7 +61,9 @@ pub fn parse_date(s: &str) -> String {
         return String::new();
     };
     match (y.parse::<u32>(), m.parse::<u32>(), d.parse::<u32>()) {
-        (Ok(y), Ok(m), Ok(d)) if (1000..=9999).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) => {
+        (Ok(y), Ok(m), Ok(d))
+            if (1000..=9999).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) =>
+        {
             format!("{y:04}-{m:02}-{d:02}")
         }
         _ => String::new(),

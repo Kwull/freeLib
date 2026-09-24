@@ -13,18 +13,20 @@ use std::sync::mpsc::sync_channel;
 use std::time::Instant;
 
 use rayon::prelude::*;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::Serialize;
 use zip::ZipArchive;
 
 use freelib_catalog::genres::genres;
 use freelib_catalog::normalize::{letter_of, normalize};
-use freelib_catalog::schema::{create_catalog_indexes, create_catalog_tables, CATALOG_SCHEMA_VERSION};
+use freelib_catalog::schema::{
+    CATALOG_SCHEMA_VERSION, create_catalog_indexes, create_catalog_tables,
+};
 use freelib_catalog::util::{now_millis, now_rfc3339};
 
-use crate::inpx::{self, InpxInfo, ParseOptions, RawAuthor, RawBook};
-use crate::zipdir::{read_central_directory, ZipEntryLoc};
 use crate::ImportError;
+use crate::inpx::{self, InpxInfo, ParseOptions, RawAuthor, RawBook};
+use crate::zipdir::{ZipEntryLoc, read_central_directory};
 
 /// Progress callback: `(done, total, message)`. Parts count as one step each, followed by
 /// [`FINISH_STEPS`] finishing steps.
@@ -76,7 +78,10 @@ pub struct ImportStats {
 
 /// `lib_3.db` → `lib_3.new.db`.
 pub fn new_db_path(db_path: &Path) -> PathBuf {
-    let stem = db_path.file_stem().and_then(|s| s.to_str()).unwrap_or("catalog");
+    let stem = db_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("catalog");
     db_path.with_file_name(format!("{stem}.new.db"))
 }
 
@@ -113,7 +118,12 @@ fn process_part(
             }
         }
     }
-    Ok(PartOut { idx, name: name.to_string(), books, missing })
+    Ok(PartOut {
+        idx,
+        name: name.to_string(),
+        books,
+        missing,
+    })
 }
 
 struct AuthorAgg {
@@ -151,7 +161,12 @@ impl Agg {
         if let Some(&id) = self.authors.get(&key) {
             return id;
         }
-        self.author_rows.push(AuthorAgg { a: a.clone(), name, sort_key: key.clone(), live: 0 });
+        self.author_rows.push(AuthorAgg {
+            a: a.clone(),
+            name,
+            sort_key: key.clone(),
+            live: 0,
+        });
         let id = self.author_rows.len() as i64;
         self.authors.insert(key, id);
         id
@@ -165,7 +180,12 @@ impl Agg {
         if let Some(&id) = self.series.get(&key) {
             return Some(id);
         }
-        self.series_rows.push(SeriesAgg { name: name.to_string(), sort_key: key.clone(), live: 0, authors: HashMap::new() });
+        self.series_rows.push(SeriesAgg {
+            name: name.to_string(),
+            sort_key: key.clone(),
+            live: 0,
+            authors: HashMap::new(),
+        });
         let id = self.series_rows.len() as i64;
         self.series.insert(key, id);
         Some(id)
@@ -174,7 +194,11 @@ impl Agg {
 
 /// Build the catalog for `opts` and swap it in. On error or cancellation the previous
 /// catalog is untouched and the partial `.new.db` is removed.
-pub fn import_inpx(opts: &ImportOptions, progress: Progress, cancel: &AtomicBool) -> Result<ImportStats, ImportError> {
+pub fn import_inpx(
+    opts: &ImportOptions,
+    progress: Progress,
+    cancel: &AtomicBool,
+) -> Result<ImportStats, ImportError> {
     let new_path = new_db_path(&opts.db_path);
     let r = build(opts, &new_path, progress, cancel);
     if r.is_err() {
@@ -185,18 +209,31 @@ pub fn import_inpx(opts: &ImportOptions, progress: Progress, cancel: &AtomicBool
 
 fn previous_version(db_path: &Path) -> i64 {
     freelib_catalog::open_read_only(db_path)
-        .and_then(|c| c.query_row("SELECT value FROM meta WHERE key='catalog_version'", [], |r| r.get::<_, String>(0)))
+        .and_then(|c| {
+            c.query_row(
+                "SELECT value FROM meta WHERE key='catalog_version'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+        })
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
 }
 
-fn build(opts: &ImportOptions, new_path: &Path, progress: Progress, cancel: &AtomicBool) -> Result<ImportStats, ImportError> {
+fn build(
+    opts: &ImportOptions,
+    new_path: &Path,
+    progress: Progress,
+    cancel: &AtomicBool,
+) -> Result<ImportStats, ImportError> {
     let started = Instant::now();
     let mut stats = ImportStats::default();
     let mut phase = Instant::now();
     let mut mark = |stats: &mut ImportStats, name: &str| {
-        stats.timings.push((name.to_string(), phase.elapsed().as_millis() as u64));
+        stats
+            .timings
+            .push((name.to_string(), phase.elapsed().as_millis() as u64));
         phase = Instant::now();
     };
 
@@ -214,16 +251,33 @@ fn build(opts: &ImportOptions, new_path: &Path, progress: Progress, cancel: &Ato
     )?;
     create_catalog_tables(&conn)?;
 
-    let popts = ParseOptions { skip_deleted: opts.skip_deleted, first_author_only: opts.first_author_only };
-    let lib_dir = if opts.resolve_offsets { opts.library_dir.as_deref() } else { None };
+    let popts = ParseOptions {
+        skip_deleted: opts.skip_deleted,
+        first_author_only: opts.first_author_only,
+    };
+    let lib_dir = if opts.resolve_offsets {
+        opts.library_dir.as_deref()
+    } else {
+        None
+    };
     let threads = if opts.threads > 0 {
         opts.threads
     } else {
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).saturating_sub(1).max(1)
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2)
+            .saturating_sub(1)
+            .max(1)
     };
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().map_err(|e| ImportError::Other(e.to_string()))?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .map_err(|e| ImportError::Other(e.to_string()))?;
 
-    let mut agg = Agg { next_book_id: 1, ..Default::default() };
+    let mut agg = Agg {
+        next_book_id: 1,
+        ..Default::default()
+    };
     let tx_conn = conn.transaction()?;
     let write_result: Result<(), ImportError> = std::thread::scope(|s| {
         let (tx, rx) = sync_channel::<Result<PartOut, ImportError>>(threads * 2);
@@ -270,7 +324,11 @@ fn build(opts: &ImportOptions, new_path: &Path, progress: Progress, cancel: &Ato
                 stats.missing_archives.extend(part.missing);
                 next += 1;
                 done += 1;
-                progress(done, total, &format!("{} ({} books)", part.name, stats.books));
+                progress(
+                    done,
+                    total,
+                    &format!("{} ({} books)", part.name, stats.books),
+                );
             }
         }
         if cancel.load(Ordering::Relaxed) {
@@ -316,11 +374,17 @@ fn build(opts: &ImportOptions, new_path: &Path, progress: Progress, cancel: &Ato
     let meta: Vec<(&str, String)> = vec![
         ("schema_version", CATALOG_SCHEMA_VERSION.to_string()),
         ("inpx_version", info.version.clone().unwrap_or_default()),
-        ("collection_name", info.collection_name.clone().unwrap_or_default()),
+        (
+            "collection_name",
+            info.collection_name.clone().unwrap_or_default(),
+        ),
         ("imported_at", now_rfc3339()),
         ("catalog_version", stats.catalog_version.to_string()),
         ("source_inpx", opts.inpx.to_string_lossy().into_owned()),
-        ("first_author_only", (opts.first_author_only as i32).to_string()),
+        (
+            "first_author_only",
+            (opts.first_author_only as i32).to_string(),
+        ),
         ("skip_deleted", (opts.skip_deleted as i32).to_string()),
         ("book_count", stats.books.to_string()),
         ("live_book_count", stats.live_books.to_string()),
@@ -353,7 +417,11 @@ fn build(opts: &ImportOptions, new_path: &Path, progress: Progress, cancel: &Ato
 }
 
 fn check_cancel(cancel: &AtomicBool) -> Result<(), ImportError> {
-    if cancel.load(Ordering::Relaxed) { Err(ImportError::Cancelled) } else { Ok(()) }
+    if cancel.load(Ordering::Relaxed) {
+        Err(ImportError::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 /// Prepared insert statements of the single writer.
@@ -380,7 +448,12 @@ impl<'c> Writer<'c> {
         })
     }
 
-    fn add(&mut self, agg: &mut Agg, b: &RawBook, stats: &mut ImportStats) -> Result<(), ImportError> {
+    fn add(
+        &mut self,
+        agg: &mut Agg,
+        b: &RawBook,
+        stats: &mut ImportStats,
+    ) -> Result<(), ImportError> {
         let mut key = b.book_key();
         if agg.keys.contains(&key) {
             if b.lib_id.is_none() {
@@ -400,7 +473,9 @@ impl<'c> Writer<'c> {
 
         let author_ids: Vec<i64> = b.authors.iter().map(|a| agg.author_id(a)).collect();
         let series_id = agg.series_id(&b.series);
-        let series_name = series_id.map(|s| agg.series_rows[(s - 1) as usize].name.clone()).unwrap_or_default();
+        let series_name = series_id
+            .map(|s| agg.series_rows[(s - 1) as usize].name.clone())
+            .unwrap_or_default();
 
         self.book.execute(params![
             id,
@@ -479,15 +554,23 @@ impl<'c> Writer<'c> {
             *agg.lang_counts.entry(b.lang.clone()).or_default() += 1;
         } else if let Some(sid) = series_id {
             // Deleted books still count for the "main authors" of a series without live books.
-            agg.series_rows[(sid - 1) as usize].authors.entry(author_ids[0]).or_default();
+            agg.series_rows[(sid - 1) as usize]
+                .authors
+                .entry(author_ids[0])
+                .or_default();
         }
         Ok(())
     }
 }
 
-fn write_letter_index(conn: &Connection, kind: &str, keys: &mut [(String, i64)]) -> rusqlite::Result<()> {
+fn write_letter_index(
+    conn: &Connection,
+    kind: &str,
+    keys: &mut [(String, i64)],
+) -> rusqlite::Result<()> {
     keys.sort();
-    let mut st = conn.prepare("INSERT INTO letter_index(kind, letter, count, first_pos) VALUES (?1,?2,?3,?4)")?;
+    let mut st = conn
+        .prepare("INSERT INTO letter_index(kind, letter, count, first_pos) VALUES (?1,?2,?3,?4)")?;
     let mut letters: Vec<(String, i64, i64)> = Vec::new();
     let mut pos_of: HashMap<String, usize> = HashMap::new();
     for (pos, (k, _)) in keys.iter().enumerate() {
@@ -514,19 +597,26 @@ fn write_aggregates(conn: &Connection, agg: &Agg) -> rusqlite::Result<()> {
         let mut fts = conn.prepare("INSERT INTO author_fts(rowid, name) VALUES (?1, ?2)")?;
         for (i, a) in agg.author_rows.iter().enumerate() {
             let id = i as i64 + 1;
-            st.execute(params![id, a.a.last, a.a.first, a.a.middle, a.name, a.sort_key, a.live])?;
+            st.execute(params![
+                id, a.a.last, a.a.first, a.a.middle, a.name, a.sort_key, a.live
+            ])?;
             fts.execute(params![id, a.sort_key])?;
         }
     }
     {
-        let mut st =
-            conn.prepare("INSERT INTO series(id, name, sort_key, book_count, authors) VALUES (?1,?2,?3,?4,?5)")?;
+        let mut st = conn.prepare(
+            "INSERT INTO series(id, name, sort_key, book_count, authors) VALUES (?1,?2,?3,?4,?5)",
+        )?;
         let mut fts = conn.prepare("INSERT INTO series_fts(rowid, name) VALUES (?1, ?2)")?;
         for (i, s) in agg.series_rows.iter().enumerate() {
             let id = i as i64 + 1;
             let mut top: Vec<(&i64, &u32)> = s.authors.iter().collect();
             top.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-            let names: Vec<&str> = top.iter().take(2).map(|(aid, _)| agg.author_rows[(**aid - 1) as usize].name.as_str()).collect();
+            let names: Vec<&str> = top
+                .iter()
+                .take(2)
+                .map(|(aid, _)| agg.author_rows[(**aid - 1) as usize].name.as_str())
+                .collect();
             st.execute(params![id, s.name, s.sort_key, s.live, names.join(", ")])?;
             fts.execute(params![id, s.sort_key])?;
         }
@@ -541,11 +631,19 @@ fn write_aggregates(conn: &Connection, agg: &Agg) -> rusqlite::Result<()> {
             st.execute(params![l, c])?;
         }
     }
-    let mut keys: Vec<(String, i64)> =
-        agg.author_rows.iter().enumerate().map(|(i, a)| (a.sort_key.clone(), i as i64 + 1)).collect();
+    let mut keys: Vec<(String, i64)> = agg
+        .author_rows
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.sort_key.clone(), i as i64 + 1))
+        .collect();
     write_letter_index(conn, "author", &mut keys)?;
-    let mut keys: Vec<(String, i64)> =
-        agg.series_rows.iter().enumerate().map(|(i, s)| (s.sort_key.clone(), i as i64 + 1)).collect();
+    let mut keys: Vec<(String, i64)> = agg
+        .series_rows
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.sort_key.clone(), i as i64 + 1))
+        .collect();
     write_letter_index(conn, "series", &mut keys)?;
     Ok(())
 }

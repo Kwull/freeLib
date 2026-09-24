@@ -11,11 +11,11 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::Serialize;
 
-use crate::inpx::file_key;
 use crate::ImportError;
+use crate::inpx::file_key;
 
 /// A library of the Qt app (`lib` table).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -56,17 +56,25 @@ pub struct QtMigration {
     pub skipped_series_tags: u64,
 }
 
-const PALETTE: &[&str] = &["#e5484d", "#f76b15", "#ffc53d", "#46a758", "#12a594", "#0090ff", "#8e4ec6", "#d6409f"];
+const PALETTE: &[&str] = &[
+    "#e5484d", "#f76b15", "#ffc53d", "#46a758", "#12a594", "#0090ff", "#8e4ec6", "#d6409f",
+];
 
 fn has_table(c: &Connection, t: &str) -> rusqlite::Result<bool> {
-    c.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [t], |_| Ok(()))
-        .optional()
-        .map(|r| r.is_some())
+    c.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+        [t],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|r| r.is_some())
 }
 
 fn has_column(c: &Connection, t: &str, col: &str) -> rusqlite::Result<bool> {
     let mut st = c.prepare(&format!("PRAGMA table_info(\"{t}\")"))?;
-    let cols: Vec<String> = st.query_map([], |r| r.get(1))?.collect::<rusqlite::Result<_>>()?;
+    let cols: Vec<String> = st
+        .query_map([], |r| r.get(1))?
+        .collect::<rusqlite::Result<_>>()?;
     Ok(cols.iter().any(|c| c.eq_ignore_ascii_case(col)))
 }
 
@@ -79,26 +87,49 @@ pub fn qt_book_key(id_inlib: Option<i64>, archive: &str, file: &str, format: &st
     if a.to_ascii_lowercase().ends_with(".inp") {
         a = format!("{}.zip", &a[..a.len() - 4]);
     }
-    file_key(&a, file.trim(), &format.trim().trim_start_matches('.').to_lowercase())
+    file_key(
+        &a,
+        file.trim(),
+        &format.trim().trim_start_matches('.').to_lowercase(),
+    )
 }
 
 /// Read libraries, book tags and ratings from a Qt `freeLib.sqlite` (opened read-only).
 pub fn read_qt_database(path: &Path) -> Result<QtMigration, ImportError> {
-    let c = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    let c = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
     let mut m = QtMigration::default();
 
     if has_table(&c, "lib")? {
-        let fa = if has_column(&c, "lib", "firstAuthor")? { "firstAuthor" } else { "0" };
-        let wd = if has_column(&c, "lib", "woDeleted")? { "woDeleted" } else { "0" };
-        let ver = if has_column(&c, "lib", "version")? { "version" } else { "NULL" };
-        let mut st = c.prepare(&format!("SELECT id, name, path, inpx, {fa}, {wd}, {ver} FROM lib ORDER BY id"))?;
+        let fa = if has_column(&c, "lib", "firstAuthor")? {
+            "firstAuthor"
+        } else {
+            "0"
+        };
+        let wd = if has_column(&c, "lib", "woDeleted")? {
+            "woDeleted"
+        } else {
+            "0"
+        };
+        let ver = if has_column(&c, "lib", "version")? {
+            "version"
+        } else {
+            "NULL"
+        };
+        let mut st = c.prepare(&format!(
+            "SELECT id, name, path, inpx, {fa}, {wd}, {ver} FROM lib ORDER BY id"
+        ))?;
         m.libraries = st
             .query_map([], |r| {
                 Ok(QtLibrary {
                     qt_id: r.get(0)?,
                     name: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     path: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    inpx: r.get::<_, Option<String>>(3)?.filter(|s| !s.trim().is_empty()),
+                    inpx: r
+                        .get::<_, Option<String>>(3)?
+                        .filter(|s| !s.trim().is_empty()),
                     first_author_only: r.get::<_, Option<i64>>(4)?.unwrap_or(0) != 0,
                     skip_deleted: r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0,
                     version: r.get::<_, Option<String>>(6)?,
@@ -109,16 +140,27 @@ pub fn read_qt_database(path: &Path) -> Result<QtMigration, ImportError> {
 
     let tag_names: HashMap<i64, String> = if has_table(&c, "tag")? {
         let mut st = c.prepare("SELECT id, name FROM tag")?;
-        st.query_map([], |r| Ok((r.get(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default())))?
-            .collect::<rusqlite::Result<_>>()?
+        st.query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?
     } else {
         HashMap::new()
     };
 
-    let book_cols = "b.id_lib, b.id_inlib, coalesce(b.archive,''), coalesce(b.file,''), coalesce(b.format,'')";
+    let book_cols =
+        "b.id_lib, b.id_inlib, coalesce(b.archive,''), coalesce(b.file,''), coalesce(b.format,'')";
     let key_of = |r: &rusqlite::Row| -> rusqlite::Result<(i64, String)> {
         let lib: i64 = r.get::<_, Option<i64>>(0)?.unwrap_or(0);
-        let key = qt_book_key(r.get(1)?, &r.get::<_, String>(2)?, &r.get::<_, String>(3)?, &r.get::<_, String>(4)?);
+        let key = qt_book_key(
+            r.get(1)?,
+            &r.get::<_, String>(2)?,
+            &r.get::<_, String>(3)?,
+            &r.get::<_, String>(4)?,
+        );
         Ok((lib, key))
     };
 
@@ -126,11 +168,17 @@ pub fn read_qt_database(path: &Path) -> Result<QtMigration, ImportError> {
     let mut by_tag: HashMap<i64, Vec<(i64, String)>> = HashMap::new();
     if has_table(&c, "book")? {
         let sql = if has_table(&c, "book_tag")? {
-            Some(format!("SELECT {book_cols}, t.id_tag FROM book_tag t JOIN book b ON b.id = t.id_book"))
+            Some(format!(
+                "SELECT {book_cols}, t.id_tag FROM book_tag t JOIN book b ON b.id = t.id_book"
+            ))
         } else if has_column(&c, "book", "id_tag")? {
-            Some(format!("SELECT {book_cols}, b.id_tag FROM book b WHERE b.id_tag > 0"))
+            Some(format!(
+                "SELECT {book_cols}, b.id_tag FROM book b WHERE b.id_tag > 0"
+            ))
         } else if has_column(&c, "book", "favorite")? {
-            Some(format!("SELECT {book_cols}, b.favorite FROM book b WHERE b.favorite > 0"))
+            Some(format!(
+                "SELECT {book_cols}, b.favorite FROM book b WHERE b.favorite > 0"
+            ))
         } else {
             None
         };
@@ -143,7 +191,9 @@ pub fn read_qt_database(path: &Path) -> Result<QtMigration, ImportError> {
             }
         }
         if has_column(&c, "book", "star")? {
-            let mut st = c.prepare(&format!("SELECT {book_cols}, b.star FROM book b WHERE b.star > 0"))?;
+            let mut st = c.prepare(&format!(
+                "SELECT {book_cols}, b.star FROM book b WHERE b.star > 0"
+            ))?;
             let mut q = st.query([])?;
             while let Some(r) = q.next()? {
                 let (lib, key) = key_of(r)?;
@@ -159,14 +209,23 @@ pub fn read_qt_database(path: &Path) -> Result<QtMigration, ImportError> {
         books.dedup();
         m.shelves.push(QtShelf {
             tag_id: t,
-            name: tag_names.get(&t).cloned().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("Tag {t}")),
+            name: tag_names
+                .get(&t)
+                .cloned()
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or_else(|| format!("Tag {t}")),
             color: PALETTE[(t.unsigned_abs() as usize) % PALETTE.len()].to_string(),
             books,
         });
     }
-    for (table, counter) in [("author_tag", &mut m.skipped_author_tags), ("seria_tag", &mut m.skipped_series_tags)] {
+    for (table, counter) in [
+        ("author_tag", &mut m.skipped_author_tags),
+        ("seria_tag", &mut m.skipped_series_tags),
+    ] {
         if has_table(&c, table)? {
-            *counter = c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get::<_, i64>(0))? as u64;
+            *counter = c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| {
+                r.get::<_, i64>(0)
+            })? as u64;
         }
     }
     Ok(m)
@@ -219,12 +278,19 @@ impl QtMigration {
         }
         for s in &self.shelves {
             let existing: Option<i64> = tx
-                .query_row("SELECT id FROM shelf WHERE user_id=?1 AND name=?2", params![user_id, s.name], |r| r.get(0))
+                .query_row(
+                    "SELECT id FROM shelf WHERE user_id=?1 AND name=?2",
+                    params![user_id, s.name],
+                    |r| r.get(0),
+                )
                 .optional()?;
             let shelf_id = match existing {
                 Some(id) => id,
                 None => {
-                    tx.execute("INSERT INTO shelf(user_id, name, color) VALUES (?1,?2,?3)", params![user_id, s.name, s.color])?;
+                    tx.execute(
+                        "INSERT INTO shelf(user_id, name, color) VALUES (?1,?2,?3)",
+                        params![user_id, s.name, s.color],
+                    )?;
                     stats.shelves_created += 1;
                     tx.last_insert_rowid()
                 }
@@ -260,9 +326,18 @@ mod tests {
     #[test]
     fn keys() {
         assert_eq!(qt_book_key(Some(123), "x.inp", "123", "fb2"), "lib:123");
-        assert_eq!(qt_book_key(Some(0), "fb2-01.inp", "77", "fb2"), "file:fb2-01.zip/77.fb2");
-        assert_eq!(qt_book_key(None, "sub\\a.zip", "77", "FB2"), "file:sub/a.zip/77.fb2");
-        assert_eq!(qt_book_key(None, "", "dir/book", "epub"), "file:dir/book.epub");
+        assert_eq!(
+            qt_book_key(Some(0), "fb2-01.inp", "77", "fb2"),
+            "file:fb2-01.zip/77.fb2"
+        );
+        assert_eq!(
+            qt_book_key(None, "sub\\a.zip", "77", "FB2"),
+            "file:sub/a.zip/77.fb2"
+        );
+        assert_eq!(
+            qt_book_key(None, "", "dir/book", "epub"),
+            "file:dir/book.epub"
+        );
     }
 
     #[test]
@@ -298,7 +373,13 @@ INSERT INTO author_tag VALUES (1, 1);
         assert_eq!(m.libraries[1].inpx, None);
         assert_eq!(m.shelves.len(), 2);
         assert_eq!(m.shelves[0].name, "Favorite");
-        assert_eq!(m.shelves[0].books, vec![(1, "file:fb2-000001.zip/101.fb2".to_string()), (1, "lib:100".to_string())]);
+        assert_eq!(
+            m.shelves[0].books,
+            vec![
+                (1, "file:fb2-000001.zip/101.fb2".to_string()),
+                (1, "lib:100".to_string())
+            ]
+        );
         assert_eq!(m.shelves[1].books, vec![(2, "file:x/y.epub".to_string())]);
         assert_eq!(m.ratings.len(), 2);
         assert_eq!(m.skipped_author_tags, 1);
@@ -314,7 +395,15 @@ INSERT INTO author_tag VALUES (1, 1);
         assert_eq!(s.ratings, 2);
         // idempotent
         let s2 = m.apply(&mut app, 1).unwrap();
-        assert_eq!((s2.libraries_created, s2.shelves_created, s2.shelf_books, s2.ratings), (0, 0, 0, 0));
+        assert_eq!(
+            (
+                s2.libraries_created,
+                s2.shelves_created,
+                s2.shelf_books,
+                s2.ratings
+            ),
+            (0, 0, 0, 0)
+        );
         assert_eq!(s2.library_ids, s.library_ids);
     }
 

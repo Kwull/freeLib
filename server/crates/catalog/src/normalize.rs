@@ -14,7 +14,23 @@ fn is_separator(c: char) -> bool {
         || c.is_control()
         || matches!(
             c,
-            '.' | ',' | ':' | ';' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '…' | '—' | '–' | '/' | '\\' | '|'
+            '.' | ','
+                | ':'
+                | ';'
+                | '!'
+                | '?'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '…'
+                | '—'
+                | '–'
+                | '/'
+                | '\\'
+                | '|'
         )
 }
 
@@ -114,7 +130,10 @@ mod tests {
 
     #[test]
     fn whitespace() {
-        assert_eq!(normalize("  Стругацкий\t Аркадий \u{a0} Натанович  "), "стругацкий аркадий натанович");
+        assert_eq!(
+            normalize("  Стругацкий\t Аркадий \u{a0} Натанович  "),
+            "стругацкий аркадий натанович"
+        );
         assert_eq!(normalize(""), "");
         assert_eq!(normalize("   "), "");
     }
@@ -129,7 +148,14 @@ mod tests {
 
     #[test]
     fn order_is_bytewise() {
-        let mut v = vec![normalize("Яков"), normalize("Абрамов"), normalize("Ёжиков"), normalize("Zeta"), normalize("1984"), normalize("Ежов")];
+        let mut v = vec![
+            normalize("Яков"),
+            normalize("Абрамов"),
+            normalize("Ёжиков"),
+            normalize("Zeta"),
+            normalize("1984"),
+            normalize("Ежов"),
+        ];
         v.sort();
         assert_eq!(v, vec!["1984", "zeta", "абрамов", "ежиков", "ежов", "яков"]);
     }
@@ -145,7 +171,10 @@ mod tests {
 
     #[test]
     fn tokens() {
-        assert_eq!(search_tokens("Стругацкий, Пикник!"), vec!["стругацкий", "пикник"]);
+        assert_eq!(
+            search_tokens("Стругацкий, Пикник!"),
+            vec!["стругацкий", "пикник"]
+        );
         assert_eq!(search_tokens("мамин-сибиряк"), vec!["мамин", "сибиряк"]);
         assert_eq!(search_tokens("  "), Vec::<String>::new());
         assert_eq!(search_tokens("ёж"), vec!["еж"]);

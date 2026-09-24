@@ -64,7 +64,11 @@ pub struct BookDetail {
 impl BookDetail {
     /// Entry name inside the archive (or file name on disk): `<file>.<ext>`.
     pub fn entry_name(&self) -> String {
-        if self.book.ext.is_empty() { self.file.clone() } else { format!("{}.{}", self.file, self.book.ext) }
+        if self.book.ext.is_empty() {
+            self.file.clone()
+        } else {
+            format!("{}.{}", self.file, self.book.ext)
+        }
     }
 
     /// Path relative to the library folder: `<archive>` for zipped books,
@@ -73,7 +77,11 @@ impl BookDetail {
         if !self.archive.is_empty() {
             self.archive.clone()
         } else if !self.folder.is_empty() {
-            format!("{}/{}", self.folder.trim_end_matches('/'), self.entry_name())
+            format!(
+                "{}/{}",
+                self.folder.trim_end_matches('/'),
+                self.entry_name()
+            )
         } else {
             self.entry_name()
         }
@@ -81,7 +89,11 @@ impl BookDetail {
 
     /// API display string `"<archive> / <file>.<ext>"` (just the file name for plain files).
     pub fn display_file(&self) -> String {
-        if self.archive.is_empty() { self.relative_path() } else { format!("{} / {}", self.archive, self.entry_name()) }
+        if self.archive.is_empty() {
+            self.relative_path()
+        } else {
+            format!("{} / {}", self.archive, self.entry_name())
+        }
     }
 }
 

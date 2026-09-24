@@ -9,12 +9,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::Serialize;
 
+use crate::ImportError;
 use crate::builder::Progress;
 use crate::zipdir::read_central_directory;
-use crate::ImportError;
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,17 +44,28 @@ pub fn resolve_offsets(
         while let Some(r) = q.next()? {
             let file: String = r.get(2)?;
             let ext: String = r.get(3)?;
-            let entry = if ext.is_empty() { file } else { format!("{file}.{ext}") };
-            by_archive.entry(r.get(1)?).or_default().push((r.get(0)?, entry));
+            let entry = if ext.is_empty() {
+                file
+            } else {
+                format!("{file}.{ext}")
+            };
+            by_archive
+                .entry(r.get(1)?)
+                .or_default()
+                .push((r.get(0)?, entry));
         }
     }
     let mut archives: Vec<String> = by_archive.keys().cloned().collect();
     archives.sort();
-    let mut stats = OffsetStats { archives: archives.len() as u64, ..Default::default() };
+    let mut stats = OffsetStats {
+        archives: archives.len() as u64,
+        ..Default::default()
+    };
     let total = archives.len() as u64;
     let tx = conn.transaction()?;
     {
-        let mut upd = tx.prepare("UPDATE book SET arch_offset=?2, arch_csize=?3, arch_method=?4 WHERE id=?1")?;
+        let mut upd = tx
+            .prepare("UPDATE book SET arch_offset=?2, arch_csize=?3, arch_method=?4 WHERE id=?1")?;
         for (i, arch) in archives.iter().enumerate() {
             if cancel.load(Ordering::Relaxed) {
                 return Err(ImportError::Cancelled);
@@ -66,7 +77,12 @@ pub fn resolve_offsets(
                     for (id, entry) in books {
                         match cd.get(entry) {
                             Some(l) => {
-                                upd.execute(params![id, l.offset as i64, l.csize as i64, l.method as i64])?;
+                                upd.execute(params![
+                                    id,
+                                    l.offset as i64,
+                                    l.csize as i64,
+                                    l.method as i64
+                                ])?;
                                 stats.resolved += 1;
                             }
                             None => stats.not_in_archive += 1,

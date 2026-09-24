@@ -31,7 +31,13 @@ pub struct GenOptions {
 
 impl Default for GenOptions {
     fn default() -> Self {
-        GenOptions { books: 1000, per_archive: 2000, seed: 42, files_dir: None, structure_info: true }
+        GenOptions {
+            books: 1000,
+            per_archive: 2000,
+            seed: 42,
+            files_dir: None,
+            structure_info: true,
+        }
     }
 }
 
@@ -76,53 +82,359 @@ impl Rng {
 }
 
 const SURNAMES: &[&str] = &[
-    "Иванов", "Петров", "Сидоров", "Смирнов", "Кузнецов", "Попов", "Васильев", "Соколов", "Михайлов", "Новиков",
-    "Фёдоров", "Морозов", "Волков", "Алексеев", "Лебедев", "Семёнов", "Егоров", "Павлов", "Козлов", "Степанов",
-    "Николаев", "Орлов", "Андреев", "Макаров", "Никитин", "Захаров", "Зайцев", "Соловьёв", "Борисов", "Яковлев",
-    "Григорьев", "Романов", "Воробьёв", "Сергеев", "Кузьмин", "Фролов", "Александров", "Дмитриев", "Королёв", "Гусев",
-    "Киселёв", "Ильин", "Максимов", "Поляков", "Сорокин", "Виноградов", "Ковалёв", "Белов", "Медведев", "Антонов",
-    "Тарасов", "Жуков", "Баранов", "Филиппов", "Комаров", "Давыдов", "Беляев", "Герасимов", "Богданов", "Осипов",
-    "Сидорчук", "Панов", "Ершов", "Громов", "Тихонов", "Лукин", "Шестаков", "Стругацкий", "Лукьяненко", "Булычёв",
-    "Беляков", "Муравьёв", "Шубин", "Ефремов", "Дьяченко", "Панкеев", "Злотников", "Круз", "Головачёв", "Перумов",
-    "Никонов", "Абрамов", "Ярославцев", "Щербаков", "Юрьев", "Ёлкин", "Чернов", "Цветков", "Шмелёв", "Эйдельман",
+    "Иванов",
+    "Петров",
+    "Сидоров",
+    "Смирнов",
+    "Кузнецов",
+    "Попов",
+    "Васильев",
+    "Соколов",
+    "Михайлов",
+    "Новиков",
+    "Фёдоров",
+    "Морозов",
+    "Волков",
+    "Алексеев",
+    "Лебедев",
+    "Семёнов",
+    "Егоров",
+    "Павлов",
+    "Козлов",
+    "Степанов",
+    "Николаев",
+    "Орлов",
+    "Андреев",
+    "Макаров",
+    "Никитин",
+    "Захаров",
+    "Зайцев",
+    "Соловьёв",
+    "Борисов",
+    "Яковлев",
+    "Григорьев",
+    "Романов",
+    "Воробьёв",
+    "Сергеев",
+    "Кузьмин",
+    "Фролов",
+    "Александров",
+    "Дмитриев",
+    "Королёв",
+    "Гусев",
+    "Киселёв",
+    "Ильин",
+    "Максимов",
+    "Поляков",
+    "Сорокин",
+    "Виноградов",
+    "Ковалёв",
+    "Белов",
+    "Медведев",
+    "Антонов",
+    "Тарасов",
+    "Жуков",
+    "Баранов",
+    "Филиппов",
+    "Комаров",
+    "Давыдов",
+    "Беляев",
+    "Герасимов",
+    "Богданов",
+    "Осипов",
+    "Сидорчук",
+    "Панов",
+    "Ершов",
+    "Громов",
+    "Тихонов",
+    "Лукин",
+    "Шестаков",
+    "Стругацкий",
+    "Лукьяненко",
+    "Булычёв",
+    "Беляков",
+    "Муравьёв",
+    "Шубин",
+    "Ефремов",
+    "Дьяченко",
+    "Панкеев",
+    "Злотников",
+    "Круз",
+    "Головачёв",
+    "Перумов",
+    "Никонов",
+    "Абрамов",
+    "Ярославцев",
+    "Щербаков",
+    "Юрьев",
+    "Ёлкин",
+    "Чернов",
+    "Цветков",
+    "Шмелёв",
+    "Эйдельман",
 ];
 const ROOTS: &[&str] = &[
-    "Бел", "Черн", "Сер", "Рыж", "Кудр", "Лис", "Бобр", "Ворон", "Галк", "Грач", "Дятл", "Журавл", "Карп", "Щук",
-    "Сом", "Окун", "Ерш", "Кот", "Пес", "Бык", "Козл", "Баран", "Конон", "Мельник", "Кузнец", "Гончар", "Плотник",
-    "Столяр", "Пекар", "Рыбак", "Охотник", "Пахом", "Прох", "Тимоф", "Селиван", "Агафон", "Евдоким", "Ермол", "Зот",
-    "Лаврент", "Мирон", "Нестер", "Остап", "Порфир", "Родион", "Савел", "Трофим", "Устин", "Фом", "Харитон", "Горб",
-    "Долгорук", "Толст", "Тонк", "Лыс", "Глух", "Хромц", "Весел", "Добр", "Мудр", "Смел", "Тих", "Шум", "Гром", "Мороз",
-    "Снеж", "Ветр", "Дожд", "Туман", "Рос", "Лес", "Бор", "Дуб", "Клён", "Берёз", "Осин", "Лип", "Ряб", "Калин",
+    "Бел",
+    "Черн",
+    "Сер",
+    "Рыж",
+    "Кудр",
+    "Лис",
+    "Бобр",
+    "Ворон",
+    "Галк",
+    "Грач",
+    "Дятл",
+    "Журавл",
+    "Карп",
+    "Щук",
+    "Сом",
+    "Окун",
+    "Ерш",
+    "Кот",
+    "Пес",
+    "Бык",
+    "Козл",
+    "Баран",
+    "Конон",
+    "Мельник",
+    "Кузнец",
+    "Гончар",
+    "Плотник",
+    "Столяр",
+    "Пекар",
+    "Рыбак",
+    "Охотник",
+    "Пахом",
+    "Прох",
+    "Тимоф",
+    "Селиван",
+    "Агафон",
+    "Евдоким",
+    "Ермол",
+    "Зот",
+    "Лаврент",
+    "Мирон",
+    "Нестер",
+    "Остап",
+    "Порфир",
+    "Родион",
+    "Савел",
+    "Трофим",
+    "Устин",
+    "Фом",
+    "Харитон",
+    "Горб",
+    "Долгорук",
+    "Толст",
+    "Тонк",
+    "Лыс",
+    "Глух",
+    "Хромц",
+    "Весел",
+    "Добр",
+    "Мудр",
+    "Смел",
+    "Тих",
+    "Шум",
+    "Гром",
+    "Мороз",
+    "Снеж",
+    "Ветр",
+    "Дожд",
+    "Туман",
+    "Рос",
+    "Лес",
+    "Бор",
+    "Дуб",
+    "Клён",
+    "Берёз",
+    "Осин",
+    "Лип",
+    "Ряб",
+    "Калин",
 ];
-const SUFFIXES: &[(&str, &str)] = &[("ов", "ова"), ("ин", "ина"), ("ский", "ская"), ("енко", "енко"), ("ович", "ович"), ("ев", "ева"), ("ицкий", "ицкая")];
+const SUFFIXES: &[(&str, &str)] = &[
+    ("ов", "ова"),
+    ("ин", "ина"),
+    ("ский", "ская"),
+    ("енко", "енко"),
+    ("ович", "ович"),
+    ("ев", "ева"),
+    ("ицкий", "ицкая"),
+];
 const SYLLABLES: &[&str] = &[
-    "ар", "ка", "мо", "ли", "тан", "гор", "эль", "ри", "до", "ва", "нор", "сет", "ам", "бер", "ви", "зан", "кир", "лон",
-    "мар", "ос", "пер", "ру", "стан", "тор", "ул", "фен", "хал", "цен", "ша", "эр", "юн", "яр",
+    "ар", "ка", "мо", "ли", "тан", "гор", "эль", "ри", "до", "ва", "нор", "сет", "ам", "бер", "ви",
+    "зан", "кир", "лон", "мар", "ос", "пер", "ру", "стан", "тор", "ул", "фен", "хал", "цен", "ша",
+    "эр", "юн", "яр",
 ];
 const MALE: &[&str] = &[
-    "Александр", "Алексей", "Андрей", "Борис", "Вадим", "Василий", "Виктор", "Владимир", "Геннадий", "Георгий",
-    "Дмитрий", "Евгений", "Иван", "Игорь", "Илья", "Кирилл", "Константин", "Леонид", "Максим", "Михаил",
-    "Николай", "Олег", "Павел", "Пётр", "Роман", "Сергей", "Станислав", "Юрий", "Ярослав", "Фёдор",
+    "Александр",
+    "Алексей",
+    "Андрей",
+    "Борис",
+    "Вадим",
+    "Василий",
+    "Виктор",
+    "Владимир",
+    "Геннадий",
+    "Георгий",
+    "Дмитрий",
+    "Евгений",
+    "Иван",
+    "Игорь",
+    "Илья",
+    "Кирилл",
+    "Константин",
+    "Леонид",
+    "Максим",
+    "Михаил",
+    "Николай",
+    "Олег",
+    "Павел",
+    "Пётр",
+    "Роман",
+    "Сергей",
+    "Станислав",
+    "Юрий",
+    "Ярослав",
+    "Фёдор",
 ];
 const FEMALE: &[&str] = &[
-    "Анна", "Алёна", "Валентина", "Вера", "Галина", "Дарья", "Екатерина", "Елена", "Ирина", "Ксения",
-    "Людмила", "Мария", "Наталья", "Нина", "Ольга", "Светлана", "Татьяна", "Юлия", "Яна", "Марина",
+    "Анна",
+    "Алёна",
+    "Валентина",
+    "Вера",
+    "Галина",
+    "Дарья",
+    "Екатерина",
+    "Елена",
+    "Ирина",
+    "Ксения",
+    "Людмила",
+    "Мария",
+    "Наталья",
+    "Нина",
+    "Ольга",
+    "Светлана",
+    "Татьяна",
+    "Юлия",
+    "Яна",
+    "Марина",
 ];
-const EN_LAST: &[&str] = &["Smith", "Brown", "Wilson", "Taylor", "Clarke", "Asimov", "Heinlein", "King", "O'Brien", "Pratchett"];
-const EN_FIRST: &[&str] = &["John", "Robert", "Arthur", "Isaac", "Terry", "Mary", "Stephen", "Ursula", "Neil", "Anne"];
+const EN_LAST: &[&str] = &[
+    "Smith",
+    "Brown",
+    "Wilson",
+    "Taylor",
+    "Clarke",
+    "Asimov",
+    "Heinlein",
+    "King",
+    "O'Brien",
+    "Pratchett",
+];
+const EN_FIRST: &[&str] = &[
+    "John", "Robert", "Arthur", "Isaac", "Terry", "Mary", "Stephen", "Ursula", "Neil", "Anne",
+];
 const ADJ: &[&str] = &[
-    "Тёмный", "Последний", "Звёздный", "Красный", "Забытый", "Вечный", "Чёрный", "Белый", "Тайный", "Далёкий",
-    "Холодный", "Огненный", "Мёртвый", "Живой", "Новый", "Старый", "Великий", "Маленький", "Золотой", "Серебряный",
-    "Железный", "Стеклянный", "Горький", "Сладкий", "Северный", "Южный", "Лунный", "Солнечный", "Ночной", "Утренний",
+    "Тёмный",
+    "Последний",
+    "Звёздный",
+    "Красный",
+    "Забытый",
+    "Вечный",
+    "Чёрный",
+    "Белый",
+    "Тайный",
+    "Далёкий",
+    "Холодный",
+    "Огненный",
+    "Мёртвый",
+    "Живой",
+    "Новый",
+    "Старый",
+    "Великий",
+    "Маленький",
+    "Золотой",
+    "Серебряный",
+    "Железный",
+    "Стеклянный",
+    "Горький",
+    "Сладкий",
+    "Северный",
+    "Южный",
+    "Лунный",
+    "Солнечный",
+    "Ночной",
+    "Утренний",
 ];
 const NOUN: &[&str] = &[
-    "лес", "город", "мир", "путь", "берег", "рубеж", "дозор", "замок", "океан", "ветер", "меч", "щит", "огонь",
-    "дом", "сад", "остров", "корабль", "камень", "король", "маг", "воин", "странник", "охотник", "след", "закат",
-    "рассвет", "horizon", "космос", "портал", "легион", "архив", "код", "шторм", "лабиринт", "гамбит", "ключ",
+    "лес",
+    "город",
+    "мир",
+    "путь",
+    "берег",
+    "рубеж",
+    "дозор",
+    "замок",
+    "океан",
+    "ветер",
+    "меч",
+    "щит",
+    "огонь",
+    "дом",
+    "сад",
+    "остров",
+    "корабль",
+    "камень",
+    "король",
+    "маг",
+    "воин",
+    "странник",
+    "охотник",
+    "след",
+    "закат",
+    "рассвет",
+    "horizon",
+    "космос",
+    "портал",
+    "легион",
+    "архив",
+    "код",
+    "шторм",
+    "лабиринт",
+    "гамбит",
+    "ключ",
 ];
-const SERIES_PREFIX: &[&str] = &["Хроники", "Сага о", "Мир", "Легенды", "Приключения", "Дело", "Цикл", "Тайны", "Летопись", "Эпоха"];
-const EN_WORDS: &[&str] = &["Dark", "Tower", "Last", "Star", "Road", "Night", "Empire", "Shadow", "River", "Dream", "Stone", "Fire"];
-const KEYWORDS: &[&str] = &["магия", "космос", "попаданцы", "любовь", "детектив", "война", "драконы", "история", "будущее", "юмор"];
+const SERIES_PREFIX: &[&str] = &[
+    "Хроники",
+    "Сага о",
+    "Мир",
+    "Легенды",
+    "Приключения",
+    "Дело",
+    "Цикл",
+    "Тайны",
+    "Летопись",
+    "Эпоха",
+];
+const EN_WORDS: &[&str] = &[
+    "Dark", "Tower", "Last", "Star", "Road", "Night", "Empire", "Shadow", "River", "Dream",
+    "Stone", "Fire",
+];
+const KEYWORDS: &[&str] = &[
+    "магия",
+    "космос",
+    "попаданцы",
+    "любовь",
+    "детектив",
+    "война",
+    "драконы",
+    "история",
+    "будущее",
+    "юмор",
+];
 const LOREM: &[&str] = &[
     "Ветер гнал по небу рваные облака, и город внизу казался игрушечным.",
     "Он долго молчал, глядя на огонь, а потом сказал, что утром они уходят.",
@@ -142,11 +454,18 @@ struct Author {
 /// Patronymic from a father's first name (simplified Russian rules).
 fn patronymic(father: &str, fem: bool) -> String {
     let base = match father {
-        "Илья" => return if fem { "Ильинична".into() } else { "Ильич".into() },
+        "Илья" => {
+            return if fem {
+                "Ильинична".into()
+            } else {
+                "Ильич".into()
+            };
+        }
         "Павел" => "Павл".to_string(),
         "Пётр" => "Петр".to_string(),
         "Фёдор" => "Федор".to_string(),
-        "Василий" | "Юрий" | "Геннадий" | "Георгий" | "Евгений" | "Дмитрий" => {
+        "Василий" | "Юрий" | "Геннадий" | "Георгий" | "Евгений" | "Дмитрий" =>
+        {
             let stem = &father[..father.len() - "ий".len()];
             return format!("{stem}{}", if fem { "ьевна" } else { "ьевич" });
         }
@@ -163,7 +482,11 @@ fn patronymic(father: &str, fem: bool) -> String {
 fn author(seed: u64, i: usize) -> Author {
     let mut r = Rng::new(seed ^ (i as u64).wrapping_mul(0x2545_F491_4F6C_DD1D));
     if r.chance(0.05) {
-        return Author { last: r.pick(EN_LAST).to_string(), first: r.pick(EN_FIRST).to_string(), middle: String::new() };
+        return Author {
+            last: r.pick(EN_LAST).to_string(),
+            first: r.pick(EN_FIRST).to_string(),
+            middle: String::new(),
+        };
     }
     let female = r.chance(0.3);
     // Half the authors share common surnames (skewed), the rest get root + suffix surnames.
@@ -174,23 +497,47 @@ fn author(seed: u64, i: usize) -> Author {
         let last = format!("{root}{}", if female { suffix.1 } else { suffix.0 });
         let first = if female { r.pick(FEMALE) } else { r.pick(MALE) };
         let father: &str = MALE[r.below(MALE.len())];
-        let middle = if r.chance(0.15) { String::new() } else { patronymic(father, female) };
-        return Author { last, first: first.to_string(), middle };
+        let middle = if r.chance(0.15) {
+            String::new()
+        } else {
+            patronymic(father, female)
+        };
+        return Author {
+            last,
+            first: first.to_string(),
+            middle,
+        };
     }
     let last = SURNAMES[si.min(SURNAMES.len() - 1)];
     let father = r.pick(MALE);
-    let middle = if r.chance(0.15) { String::new() } else { patronymic(father, female) };
+    let middle = if r.chance(0.15) {
+        String::new()
+    } else {
+        patronymic(father, female)
+    };
     if female {
-        let last = if last.ends_with("ов") || last.ends_with("ев") || last.ends_with("ёв") || last.ends_with("ин") {
+        let last = if last.ends_with("ов")
+            || last.ends_with("ев")
+            || last.ends_with("ёв")
+            || last.ends_with("ин")
+        {
             format!("{last}а")
         } else if let Some(stem) = last.strip_suffix("ий") {
             format!("{stem}ая")
         } else {
             last.to_string()
         };
-        Author { last, first: r.pick(FEMALE).to_string(), middle }
+        Author {
+            last,
+            first: r.pick(FEMALE).to_string(),
+            middle,
+        }
     } else {
-        Author { last: last.to_string(), first: r.pick(MALE).to_string(), middle }
+        Author {
+            last: last.to_string(),
+            first: r.pick(MALE).to_string(),
+            middle,
+        }
     }
 }
 
@@ -199,11 +546,19 @@ fn series_name(seed: u64, sid: usize) -> String {
     let n = 2 + r.below(2);
     let proper: String = (0..n).map(|_| *r.pick(SYLLABLES)).collect();
     let mut chars = proper.chars();
-    let proper: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
+    let proper: String = chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default();
     match r.below(4) {
         0 => format!("{} {}", r.pick(SERIES_PREFIX), proper),
         1 => format!("{} {}", r.pick(ADJ), r.pick(NOUN)),
-        2 => format!("{} {} {}", r.pick(SERIES_PREFIX), r.pick(ADJ).to_lowercase(), r.pick(NOUN)),
+        2 => format!(
+            "{} {} {}",
+            r.pick(SERIES_PREFIX),
+            r.pick(ADJ).to_lowercase(),
+            r.pick(NOUN)
+        ),
         _ => format!("{proper}: {}", r.pick(NOUN)),
     }
 }
@@ -211,7 +566,10 @@ fn series_name(seed: u64, sid: usize) -> String {
 fn title(r: &mut Rng, lang: &str) -> String {
     if lang == "en" {
         let n = 1 + r.below(3);
-        return (0..n).map(|_| *r.pick(EN_WORDS)).collect::<Vec<_>>().join(" ");
+        return (0..n)
+            .map(|_| *r.pick(EN_WORDS))
+            .collect::<Vec<_>>()
+            .join(" ");
     }
     let base = format!("{} {}", r.pick(ADJ), r.pick(NOUN));
     match r.below(10) {
@@ -224,7 +582,10 @@ fn title(r: &mut Rng, lang: &str) -> String {
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 struct GenBook {
@@ -260,7 +621,11 @@ fn make_book(seed: u64, i: usize, n: usize, pool: usize, codes: &[String]) -> Ge
     let mut authors = Vec::new();
     let a0 = pick_author(&mut r);
     if r.chance(0.003) {
-        authors.push(Author { last: "Автор неизвестен".into(), first: String::new(), middle: String::new() });
+        authors.push(Author {
+            last: "Автор неизвестен".into(),
+            first: String::new(),
+            middle: String::new(),
+        });
     } else {
         authors.push(author(seed, a0));
         if r.chance(0.08) {
@@ -284,7 +649,11 @@ fn make_book(seed: u64, i: usize, n: usize, pool: usize, codes: &[String]) -> Ge
     };
     let mut genres: Vec<String> = Vec::new();
     for _ in 0..ng {
-        let c = if r.chance(0.005) { "sf_brand_new".to_string() } else { r.pick(codes).clone() };
+        let c = if r.chance(0.005) {
+            "sf_brand_new".to_string()
+        } else {
+            r.pick(codes).clone()
+        };
         if !genres.contains(&c) {
             genres.push(c);
         }
@@ -312,7 +681,11 @@ fn make_book(seed: u64, i: usize, n: usize, pool: usize, codes: &[String]) -> Ge
         date: format!("{y:04}-{m:02}-{d:02}"),
         lang,
         stars: if r.chance(0.7) { 0 } else { 1 + r.below(5) },
-        keywords: if r.chance(0.1) { format!("{}, {}", r.pick(KEYWORDS), r.pick(KEYWORDS)) } else { String::new() },
+        keywords: if r.chance(0.1) {
+            format!("{}, {}", r.pick(KEYWORDS), r.pick(KEYWORDS))
+        } else {
+            String::new()
+        },
         cover: i % 3 == 0,
         size: 50_000 + r.below(2_000_000),
     }
@@ -349,7 +722,11 @@ fn fb2(b: &GenBook, cover_b64: &str) -> String {
     }
     s.push_str(&format!("<lang>{}</lang>", b.lang));
     if !b.series.is_empty() {
-        s.push_str(&format!("<sequence name=\"{}\" number=\"{}\"/>", esc(&b.series), b.serno.unwrap_or(0)));
+        s.push_str(&format!(
+            "<sequence name=\"{}\" number=\"{}\"/>",
+            esc(&b.series),
+            b.serno.unwrap_or(0)
+        ));
     }
     s.push_str(&format!(
         "</title-info><document-info><author><nickname>gen-inpx</nickname></author><date>{}</date><id>synthetic-{}</id><version>1.0</version></document-info></description>\n",
@@ -359,20 +736,29 @@ fn fb2(b: &GenBook, cover_b64: &str) -> String {
     for ch in 1..=2 {
         s.push_str(&format!("<section><title><p>Глава {ch}</p></title>"));
         for k in 0..3 {
-            s.push_str(&format!("<p>{}</p>", LOREM[(b.lib_id + ch * 3 + k) % LOREM.len()]));
+            s.push_str(&format!(
+                "<p>{}</p>",
+                LOREM[(b.lib_id + ch * 3 + k) % LOREM.len()]
+            ));
         }
         s.push_str("</section>\n");
     }
     s.push_str("</body>\n");
     if b.cover {
-        s.push_str(&format!("<binary id=\"cover.png\" content-type=\"image/png\">{cover_b64}</binary>\n"));
+        s.push_str(&format!(
+            "<binary id=\"cover.png\" content-type=\"image/png\">{cover_b64}</binary>\n"
+        ));
     }
     s.push_str("</FictionBook>\n");
     s
 }
 
 fn inp_line(b: &GenBook, size: usize) -> String {
-    let authors: String = b.authors.iter().map(|a| format!("{},{},{}:", a.last, a.first, a.middle)).collect();
+    let authors: String = b
+        .authors
+        .iter()
+        .map(|a| format!("{},{},{}:", a.last, a.first, a.middle))
+        .collect();
     let genres: String = b.genres.iter().map(|g| format!("{g}:")).collect();
     let f = [
         authors,
@@ -387,7 +773,11 @@ fn inp_line(b: &GenBook, size: usize) -> String {
         b.ext.to_string(),
         b.date.clone(),
         b.lang.to_string(),
-        if b.stars > 0 { b.stars.to_string() } else { String::new() },
+        if b.stars > 0 {
+            b.stars.to_string()
+        } else {
+            String::new()
+        },
         b.keywords.clone(),
     ];
     let mut s = f.join("\x04");
@@ -400,7 +790,11 @@ pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
     let n = opts.books;
     let per = opts.per_archive.max(1);
     let pool = (n / 4).max(20);
-    let codes: Vec<String> = genres().all().iter().flat_map(|g| g.keys.iter().cloned()).collect();
+    let codes: Vec<String> = genres()
+        .all()
+        .iter()
+        .flat_map(|g| g.keys.iter().cloned())
+        .collect();
     let parts = n.div_ceil(per);
     if let Some(dir) = &opts.files_dir {
         std::fs::create_dir_all(dir)?;
@@ -414,10 +808,14 @@ pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
             let mut text = String::with_capacity((hi - lo) * 160);
             let mut bytes = 0u64;
             let mut zw = match &opts.files_dir {
-                Some(dir) => Some(ZipWriter::new(BufWriter::new(File::create(dir.join(format!("{name}.zip")))?))),
+                Some(dir) => Some(ZipWriter::new(BufWriter::new(File::create(
+                    dir.join(format!("{name}.zip")),
+                )?))),
                 None => None,
             };
-            let zopts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated).compression_level(Some(1));
+            let zopts = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .compression_level(Some(1));
             for i in lo..hi {
                 let b = make_book(opts.seed, i, n, pool, &codes);
                 let size = if let Some(z) = zw.as_mut() {
@@ -426,7 +824,8 @@ pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
                     } else {
                         format!("synthetic {} file for book {}\n", b.ext, b.lib_id).into_bytes()
                     };
-                    z.start_file(format!("{}.{}", b.lib_id, b.ext), zopts).map_err(io::Error::other)?;
+                    z.start_file(format!("{}.{}", b.lib_id, b.ext), zopts)
+                        .map_err(io::Error::other)?;
                     z.write_all(&content)?;
                     bytes += content.len() as u64;
                     content.len()
@@ -444,15 +843,26 @@ pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
 
     let mut zw = ZipWriter::new(BufWriter::new(File::create(out)?));
     let zopts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    zw.start_file("collection.info", zopts).map_err(io::Error::other)?;
-    zw.write_all("Синтетическая библиотека (gen-inpx)\nsynthetic\n65536\nGenerated by freelib gen-inpx\n".as_bytes())?;
-    zw.start_file("version.info", zopts).map_err(io::Error::other)?;
+    zw.start_file("collection.info", zopts)
+        .map_err(io::Error::other)?;
+    zw.write_all(
+        "Синтетическая библиотека (gen-inpx)\nsynthetic\n65536\nGenerated by freelib gen-inpx\n"
+            .as_bytes(),
+    )?;
+    zw.start_file("version.info", zopts)
+        .map_err(io::Error::other)?;
     zw.write_all(b"20260901\r\n")?;
     if opts.structure_info {
-        zw.start_file("structure.info", zopts).map_err(io::Error::other)?;
+        zw.start_file("structure.info", zopts)
+            .map_err(io::Error::other)?;
         zw.write_all(crate::inpx::DEFAULT_STRUCTURE.as_bytes())?;
     }
-    let mut stats = GenStats { books: n, parts, author_pool: pool, file_bytes: 0 };
+    let mut stats = GenStats {
+        books: n,
+        parts,
+        author_pool: pool,
+        file_bytes: 0,
+    };
     for r in results {
         let (name, text, bytes) = r?;
         zw.start_file(name, zopts).map_err(io::Error::other)?;
@@ -476,7 +886,12 @@ mod tests {
             let a = author(7, i);
             if a.middle.ends_with("вна") {
                 female += 1;
-                assert!(FEMALE.contains(&a.first.as_str()) || a.middle == "Ильинична", "{} {}", a.first, a.middle);
+                assert!(
+                    FEMALE.contains(&a.first.as_str()) || a.middle == "Ильинична",
+                    "{} {}",
+                    a.first,
+                    a.middle
+                );
             }
         }
         assert!(female > 10);
