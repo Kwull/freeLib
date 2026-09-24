@@ -10,7 +10,7 @@
 
   let { lib, q }: { lib: number; q: string } = $props();
 
-  let query = $state(q);
+  let query = $state('');
   let result = $state<SearchResponse | null>(null);
   let genreFilter = $state<Set<number>>(new Set());
   let langFilter = $state<Set<string>>(new Set());

@@ -72,6 +72,7 @@
           <div class="seg">
             <button type="button" class:on={i18nState.lang === 'en'} onclick={() => setLang('en')}>EN</button>
             <button type="button" class:on={i18nState.lang === 'ru'} onclick={() => setLang('ru')}>RU</button>
+            <button type="button" class:on={i18nState.lang === 'uk'} onclick={() => setLang('uk')}>UK</button>
           </div>
           <button type="button" class="menu-item" onclick={() => navigate('/settings')}>
             <Icon name="settings" size={16} />{t('nav.settings')}

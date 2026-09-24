@@ -16,7 +16,7 @@
   let selectedBookId = $state<number | null>(null);
   let sendIds = $state<number[] | null>(null);
   let shelfIds = $state<number[] | null>(null);
-  let mobilePane = $state<'list' | 'books' | 'detail'>(id ? 'books' : 'list');
+  let mobilePane = $state<'list' | 'books' | 'detail'>('list');
 
   $effect(() => {
     const libObj = currentLibrary();

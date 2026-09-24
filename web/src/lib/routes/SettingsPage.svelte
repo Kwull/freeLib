@@ -100,6 +100,7 @@
         <div class="seg">
           <button type="button" class:on={i18nState.lang === 'en'} onclick={() => setLang('en')}>English</button>
           <button type="button" class:on={i18nState.lang === 'ru'} onclick={() => setLang('ru')}>Русский</button>
+          <button type="button" class:on={i18nState.lang === 'uk'} onclick={() => setLang('uk')}>Українська</button>
         </div>
       </label>
       <label class="field">{t('settings.general.defaultLibrary')}

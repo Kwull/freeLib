@@ -1,9 +1,10 @@
 import en from './en.json';
 import ru from './ru.json';
+import uk from './uk.json';
 import { createI18nState } from './state.svelte';
 
 type Dict = Record<string, string>;
-const dicts: Record<string, Dict> = { en, ru };
+const dicts: Record<string, Dict> = { en, ru, uk };
 
 export const i18nState = createI18nState((lang) => !!dicts[lang]);
 

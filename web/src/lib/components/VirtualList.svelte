@@ -10,6 +10,7 @@
     row,
     scrollToIndex = $bindable<number | null>(null),
     onRangeChange,
+    class: className = '',
   }: {
     items: T[];
     itemHeight: number;
@@ -17,6 +18,7 @@
     row: Snippet<[T, number]>;
     scrollToIndex?: number | null;
     onRangeChange?: (start: number, end: number) => void;
+    class?: string;
   } = $props();
 
   let viewport: HTMLDivElement | undefined = $state();
@@ -55,6 +57,7 @@
   bind:this={viewport}
   onscroll={onScroll}
   use:onResize
+  class="vlist {className}"
   style="overflow-y: auto; overflow-x: hidden; height: 100%; position: relative;"
 >
   <div style="height: {total}px; position: relative;">

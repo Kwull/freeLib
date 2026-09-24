@@ -87,7 +87,7 @@ fn main() {
             _ => break,
         }
     }
-    let data = input.unwrap_or_else(|| std::fs::read(&args.remove(0)).expect("input file"));
+    let data = input.unwrap_or_else(|| std::fs::read(args.remove(0)).expect("input file"));
     let out = args.first().cloned().unwrap_or_else(|| "out.epub".into());
     let assets = Assets::shared();
     // warm up (hyphenation dictionaries, cover background)

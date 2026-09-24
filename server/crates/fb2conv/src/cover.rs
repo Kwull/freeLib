@@ -78,8 +78,8 @@ fn blend(img: &mut RgbImage, x: i32, y: i32, color: [u8; 3], a: f32) {
     }
     let a = a.min(1.0);
     let p = img.get_pixel_mut(x as u32, y as u32);
-    for i in 0..3 {
-        p.0[i] = (p.0[i] as f32 * (1.0 - a) + color[i] as f32 * a).round() as u8;
+    for (ch, &col) in p.0.iter_mut().zip(color.iter()) {
+        *ch = (*ch as f32 * (1.0 - a) + col as f32 * a).round() as u8;
     }
 }
 

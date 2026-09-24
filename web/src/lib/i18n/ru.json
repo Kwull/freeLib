@@ -201,5 +201,20 @@
   "convertOptions.transliterate": "Транслитерировать имена файлов",
   "convertOptions.annotation": "Страница аннотации после обложки",
   "convertOptions.fontFamily": "Шрифт",
-  "convertOptions.userCss": "Свой CSS"
+  "convertOptions.userCss": "Свой CSS",
+  "reader.toc": "Содержание",
+  "reader.fontSize": "Размер шрифта",
+  "reader.theme": "Тема чтения",
+  "reader.theme.light": "Светлая",
+  "reader.theme.sepia": "Сепия",
+  "reader.theme.dark": "Тёмная",
+  "reader.progress": "Прогресс",
+  "reader.prev": "Предыдущая страница",
+  "reader.next": "Следующая страница",
+  "browse.authorsCrumb": "Авторы",
+  "browse.seriesCrumb": "Серии",
+  "browse.genresCrumb": "Жанры",
+  "browse.booksAndSeries": "{books} книг · {series} серий",
+  "browse.booksCount": "{count} книг",
+  "browse.addFilter": "+ Фильтр"
 }

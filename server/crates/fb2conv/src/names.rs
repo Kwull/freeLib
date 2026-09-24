@@ -128,8 +128,7 @@ fn collapse(component: &str) -> String {
     let mut s = component.to_string();
     if s.contains(MARK) {
         for (o, c) in [('(', ')'), ('[', ']'), ('{', '}'), ('«', '»'), ('"', '"'), ('<', '>')] {
-            loop {
-                let Some(start) = s.find(o) else { break };
+            while let Some(start) = s.find(o) {
                 let Some(rel) = s[start + o.len_utf8()..].find(c) else { break };
                 let end = start + o.len_utf8() + rel;
                 let inner = &s[start + o.len_utf8()..end];

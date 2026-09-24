@@ -6,7 +6,7 @@
     open, titleId, title, onClose, width = 640, children,
   }: { open: boolean; titleId: string; title: string; onClose: () => void; width?: number; children: Snippet } = $props();
 
-  let dialogEl: HTMLDivElement | undefined;
+  let dialogEl: HTMLDivElement | undefined = $state();
   let lastFocused: HTMLElement | null = null;
 
   $effect(() => {

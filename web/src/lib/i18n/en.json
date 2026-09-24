@@ -201,5 +201,20 @@
   "convertOptions.transliterate": "Transliterate file names",
   "convertOptions.annotation": "Annotation page after cover",
   "convertOptions.fontFamily": "Font",
-  "convertOptions.userCss": "Custom CSS"
+  "convertOptions.userCss": "Custom CSS",
+  "reader.toc": "Contents",
+  "reader.fontSize": "Font size",
+  "reader.theme": "Reading theme",
+  "reader.theme.light": "Light",
+  "reader.theme.sepia": "Sepia",
+  "reader.theme.dark": "Dark",
+  "reader.progress": "Progress",
+  "reader.prev": "Previous page",
+  "reader.next": "Next page",
+  "browse.authorsCrumb": "Authors",
+  "browse.seriesCrumb": "Series",
+  "browse.genresCrumb": "Genres",
+  "browse.booksAndSeries": "{books} books · {series} series",
+  "browse.booksCount": "{count} books",
+  "browse.addFilter": "+ Filter"
 }

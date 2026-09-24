@@ -108,7 +108,7 @@ pub(crate) struct Builder<'a> {
     assets: &'a Assets,
     labels: Labels,
     hyph: Option<&'a Hyphenator>,
-    hyph_cache: HashMap<String, Box<str>>,
+    hyph_cache: crate::hyph::WordCache,
     files: Vec<XhtmlFile>,
     cur: String,
     cur_name: String,
@@ -169,7 +169,7 @@ fn sanitize_file_stem(s: &str) -> String {
     };
     let mut out: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
     if out.is_empty() || !out.starts_with(|c: char| c.is_ascii_alphanumeric()) {
-        out.insert_str(0, "i");
+        out.insert(0, 'i');
     }
     out.truncate(60);
     out
@@ -186,7 +186,7 @@ impl<'a> Builder<'a> {
             assets,
             labels: labels(&lang),
             hyph,
-            hyph_cache: HashMap::new(),
+            hyph_cache: Default::default(),
             files: Vec::new(),
             cur: String::new(),
             cur_name: String::new(),
@@ -967,7 +967,6 @@ impl<'a> Builder<'a> {
         self.toc.push(TocEntry { level, title: toc_title, file: self.cur_index(), anchor: None });
         if let Some(a) = annotation {
             self.container_depth += 1;
-            self.no_hyph += 0;
             let mut buf = std::mem::take(&mut self.cur);
             self.container(a, "div class=\"annotation\"", "div", &mut buf);
             self.cur = buf;
@@ -1023,7 +1022,8 @@ impl<'a> Builder<'a> {
         self.books.push(BookCtx { prefix, binaries });
         self.book = book;
         let bodies: Vec<&'a Element> = fb.children_named("body").collect();
-        let (main_bodies, note_bodies): (Vec<(usize, &Element)>, Vec<(usize, &Element)>) =
+        type Bodies<'b> = Vec<(usize, &'b Element)>;
+        let (main_bodies, note_bodies): (Bodies, Bodies) =
             bodies.iter().copied().enumerate().partition(|(i, b)| *i == 0 || b.attr("name").is_none_or(|n| n.trim().is_empty()));
         self.notes_titles.push(None);
         for (_, nb) in &note_bodies {
@@ -1032,9 +1032,8 @@ impl<'a> Builder<'a> {
             }
             self.collect_notes(nb, book);
         }
-        // cover the text refers to may be the cover binary: reuse the cover resource
         let annotation_el = fb.path(&["description", "title-info", "annotation"]).filter(|a| a.has_text());
-        let level = if joined { 1 } else { 1 };
+        let level = 1;
         for (i, (_, body)) in main_bodies.iter().enumerate() {
             if i == 0 {
                 let name = if joined { format!("title{:02}.xhtml", book + 1) } else { "title.xhtml".into() };
@@ -1213,7 +1212,15 @@ fn prepare_cover(b: &mut Builder, doc: &Doc, info: &BookInfo, lang: &str, key_pr
     });
     let label = opts.cover_label.as_deref().map(|t| expand(t, &name_fields(info, lang))).filter(|l| !l.trim().is_empty());
     let generate = |b: &Builder| {
-        let authors = info.authors.iter().map(|a| a.natural_name()).collect::<Vec<_>>().join(", ");
+        let authors = info
+            .authors
+            .iter()
+            .map(|a| {
+                let short = [a.first.trim(), a.last.trim()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
+                if short.is_empty() { a.natural_name() } else { short }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         let bottom = label.clone().unwrap_or_else(|| match (&info.series, info.serno) {
             (Some(s), Some(n)) => format!("{s}\n{n}"),
             (Some(s), None) => s.clone(),

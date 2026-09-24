@@ -278,7 +278,9 @@ fn convert_full_default() {
     assert!(notes.contains("<div class=\"note\" epub:type=\"footnote\" id=\"n1\">"));
     assert!(notes.contains("<p class=\"note-title\"><a href=\"part0001.xhtml#ref"), "{notes}");
     assert!(notes.contains("Первое примечание с <em>выделением</em>."));
-    assert!(notes.contains(&format!("<a href=\"{chapter2_file}#chapter1\">главу</a>").replace(chapter2_file, &e.xhtml().into_iter().find(|(_, v)| v.contains("id=\"chapter1\"")).unwrap().0.trim_start_matches("OEBPS/").to_string())));
+    let chapter1_file = e.xhtml().into_iter().find(|(_, v)| v.contains("id=\"chapter1\"")).unwrap().0;
+    let chapter1_file = chapter1_file.trim_start_matches("OEBPS/");
+    assert!(notes.contains(&format!("<a href=\"{chapter1_file}#chapter1\">главу</a>")), "{notes}");
     // unreferenced note still present without a link
     assert!(notes.contains("<p class=\"note-title\">3</p>"));
     // nav & ncx
@@ -467,4 +469,35 @@ fn file_names_and_fonts() {
     let o: ConvertOptions = serde_json::from_str(r#"{"hyphenate":"soft","footnotes":"popup","dropCaps":true,"fontFamily":null}"#).unwrap();
     assert_eq!(o.hyphenate, Hyphenate::Soft);
     assert!(o.drop_caps && o.break_after_chapter);
+}
+
+#[test]
+fn splitting() {
+    // nested chapters stay in the part's file without breakAfterChapter
+    let opts = ConvertOptions { break_after_chapter: false, ..Default::default() };
+    let e = Epub::open(&fb2_to_epub(&fixture("full.fb2"), &opts, Assets::shared()).unwrap());
+    let part = e.xhtml().into_iter().find(|(_, v)| v.contains(">Часть первая</h2>")).unwrap().1;
+    assert!(part.contains("id=\"chapter1\"") && part.contains("id=\"chapter2\""));
+    let opts = ConvertOptions::default();
+    let e = Epub::open(&fb2_to_epub(&fixture("full.fb2"), &opts, Assets::shared()).unwrap());
+    let part = e.xhtml().into_iter().find(|(_, v)| v.contains(">Часть первая</h2>")).unwrap().1;
+    assert!(!part.contains("id=\"chapter1\""));
+
+    // one huge section without sub-sections is split by size between paragraphs
+    let mut body = String::from("<section><title><p>Big</p></title>");
+    for i in 0..6000 {
+        body.push_str(&format!("<p id=\"p{i}\">Paragraph number {i} with some text to make it long enough for the size limit.</p>"));
+    }
+    body.push_str("<p><a l:href=\"#p1\">back to the start</a></p></section>");
+    let fb2 = format!(
+        "<?xml version=\"1.0\"?><FictionBook xmlns:l=\"http://www.w3.org/1999/xlink\"><description><title-info><book-title>Big</book-title><lang>en</lang></title-info></description><body>{body}</body></FictionBook>"
+    );
+    let bytes = fb2_to_epub(fb2.as_bytes(), &ConvertOptions { create_cover: CreateCover::Never, ..Default::default() }, Assets::shared()).unwrap();
+    let e = Epub::open(&bytes);
+    check_epub_structure(&e);
+    let parts: Vec<_> = e.xhtml().into_iter().filter(|(k, _)| k.contains("part")).collect();
+    assert!(parts.len() >= 2, "{:?}", e.names);
+    assert!(parts.iter().all(|(_, v)| v.len() < 400 * 1024));
+    assert!(parts.last().unwrap().1.contains("<a href=\"part0001.xhtml#p1\">back to the start</a>"));
+    epubcheck("big.epub", &bytes);
 }
