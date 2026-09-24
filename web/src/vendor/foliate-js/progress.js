@@ -1,3 +1,5 @@
+// @ts-nocheck -- vendored from foliate-js upstream (MIT), unmodified; see README.md
+
 // assign a unique ID for each TOC item
 const assignIDs = toc => {
     let id = 0

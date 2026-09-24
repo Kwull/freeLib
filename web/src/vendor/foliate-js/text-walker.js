@@ -1,3 +1,5 @@
+// @ts-nocheck -- vendored from foliate-js upstream (MIT), unmodified; see README.md
+
 const walkRange = (range, walker) => {
     const nodes = []
     for (let node = walker.currentNode; node; node = walker.nextNode()) {

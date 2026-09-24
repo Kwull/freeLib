@@ -46,12 +46,21 @@
 
   let liveBooksCount = $state(0);
   let liveSeriesCount = $state(0);
+  let liveCoauthors = $state<{ id: number; name: string }[]>([]);
   $effect(() => {
     liveBooksCount = current ? current[2] : 0;
     liveSeriesCount = 0;
+    liveCoauthors = [];
   });
 
   const crumbLetter = $derived(current ? current[1].charAt(0).toUpperCase() : '');
+  // "also with" (prototype: Main.dc.html): authors this one co-wrote books
+  // with, i.e. who appear alongside them on at least one loaded book.
+  const alsoWith = $derived(
+    kind === 'authors' && liveCoauthors.length
+      ? liveCoauthors.map((a) => ({ id: a.id, name: a.name, href: `/l/${lib}/authors/${a.id}` }))
+      : undefined,
+  );
   const header = $derived(
     current
       ? {
@@ -59,6 +68,7 @@
           name: current[1],
           booksCount: liveBooksCount,
           seriesCount: kind === 'authors' ? liveSeriesCount : undefined,
+          alsoWith,
         }
       : undefined,
   );
@@ -77,7 +87,7 @@
       onOpenShelf={(ids) => (shelfIds = ids)}
       {header}
       onBack={() => (mobilePane = 'list')}
-      onCounts={(c) => { liveBooksCount = c.books; liveSeriesCount = c.series; }}
+      onCounts={(c) => { liveBooksCount = c.books; liveSeriesCount = c.series; liveCoauthors = c.coauthors; }}
     />
     <DetailsPane
       {lib}

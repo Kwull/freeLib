@@ -1,3 +1,5 @@
+// @ts-nocheck -- vendored from foliate-js upstream (MIT), unmodified; see README.md
+
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 const debounce = (f, wait, immediate) => {

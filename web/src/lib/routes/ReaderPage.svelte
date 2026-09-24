@@ -211,6 +211,7 @@
       <div
         bind:this={container}
         class="viewer"
+        role="presentation"
         ontouchstart={onTouchStart}
         ontouchend={onTouchEnd}
       ></div>

@@ -1,3 +1,5 @@
+// @ts-nocheck -- vendored from foliate-js upstream (MIT), unmodified; see README.md
+
 import * as CFI from './epubcfi.js'
 
 const NS = {

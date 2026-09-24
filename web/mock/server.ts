@@ -1,10 +1,23 @@
 import type { Connect } from 'vite';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { store, catalog, createJob, runJobProgress, broadcast } from './store';
 import { placeholderCover } from './covers';
 import { normalize } from './normalize';
 import type { Book, BookDetail, AuthorRef, SeriesRef } from '../src/lib/api/types';
 import type { MockBook, MockLibrary } from './gen';
+
+// A small, real two-chapter Russian EPUB (see fixtures/build-epub.mjs) served
+// for `format=epub` so the in-browser reader has actual content to render,
+// instead of the placeholder byte string used for other formats.
+const FIXTURES_DIR = path.dirname(fileURLToPath(import.meta.url)) + '/fixtures';
+let sampleEpub: Buffer | null = null;
+function getSampleEpub(): Buffer {
+  if (!sampleEpub) sampleEpub = readFileSync(path.join(FIXTURES_DIR, 'sample-ru.epub'));
+  return sampleEpub;
+}
 
 const COOKIE = 'freelib_session';
 
@@ -272,6 +285,14 @@ export function installMockApi(server: Connect.Server) {
         if (format === 'pdf' && !store.settings.calibre.available) return fail(res, 501, 'unsupported_format', 'Calibre not available');
         const inline = url.searchParams.get('inline') === '1';
         const ext = format === 'original' ? b.ext : format;
+        if (ext === 'epub') {
+          const buf = getSampleEpub();
+          res.setHeader('Content-Type', 'application/epub+zip');
+          if (!inline) res.setHeader('Content-Disposition', `attachment; filename="${b.title}.epub"`);
+          res.setHeader('Content-Length', String(buf.length));
+          res.end(buf);
+          return;
+        }
         res.setHeader('Content-Type', inline ? 'application/epub+zip' : 'application/octet-stream');
         if (!inline) res.setHeader('Content-Disposition', `attachment; filename="${b.title}.${ext}"`);
         res.end(`Mock file content for "${b.title}" (${ext})`);

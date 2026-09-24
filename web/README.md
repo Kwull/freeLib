@@ -91,15 +91,22 @@ screen).
   fixed-row-height virtualizer (`VirtualList.svelte`) rather than a third-party
   dependency, since `@tanstack/svelte-virtual`'s Svelte 5 support was not
   something I wanted to gamble the perf budget on within this pass.
-- Initial JS is ~62 KB gzipped; Settings and the reader are lazy-loaded
+- Initial JS is ~66 KB gzipped; Settings and the reader are lazy-loaded
   (dynamic `import()` from `App.svelte`).
+- The in-browser reader (`ReaderPage.svelte`) renders a real paginated EPUB
+  via `foliate-js`, vendored (MIT) under `src/vendor/foliate-js` — see that
+  folder's README for what was trimmed and why. Only the reader's own chunk
+  (`view`/`epub`/`paginator`/`zip`, ~39 KB gzipped total) is fetched when a
+  book is actually opened; it never touches the main bundle. The mock serves
+  a real two-chapter Russian EPUB fixture for `/file?format=epub` (built by
+  `web/mock/fixtures/build-epub.mjs`) so this is testable end to end.
 
 ## Known gaps / deviations
 
-See the handback report for the full list. The short version: the in-browser
-reader (`ReaderPage.svelte`) is a shell that points an `<iframe>` at
-`/file?format=epub&inline=1` rather than a full foliate-js integration; the
-mock's SMTP/OPDS/import behavior is simulated, not real; and a handful of
+See the handback report for the full list. The short version: the vendored
+reader only supports reflowable EPUB (no fixed-layout/CBZ/FB2/MOBI/PDF,
+in-book search or TTS — see `src/vendor/foliate-js/README.md`); the mock's
+SMTP/OPDS/import behavior is simulated, not real; and a handful of
 `docs/web/API.md` details were assumed where the doc doesn't spell them out
 (also listed in the handback report) — the mock implements those assumptions
 explicitly in `web/mock/server.ts` so the server team can compare.

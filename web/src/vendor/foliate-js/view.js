@@ -1,3 +1,8 @@
+// @ts-nocheck -- vendored from foliate-js upstream (MIT); see README.md.
+// Dynamic imports for formats freeLib doesn't vendor here (CBZ, FB2, MOBI,
+// PDF, fixed-layout, search, TTS) are marked /* @vite-ignore */ so the
+// bundler doesn't try to resolve them; freeLib only opens EPUB in-browser.
+
 import * as CFI from './epubcfi.js'
 import { TOCProgress, SectionProgress } from './progress.js'
 import { Overlayer } from './overlayer.js'
@@ -76,6 +81,11 @@ const fetchFile = async url => {
     return new File([await res.blob()], new URL(res.url).pathname)
 }
 
+// freeLib's in-browser reader only opens EPUB, so the CBZ/FB2/MOBI/PDF
+// branches of upstream foliate-js's makeBook() (and their dynamic imports of
+// modules not vendored here) were removed rather than kept behind
+// @vite-ignore, since this project's pinned Vite build doesn't reliably skip
+// resolving those at dev-transform time even with that comment.
 export const makeBook = async file => {
     if (typeof file === 'string') file = await fetchFile(file)
     let book
@@ -86,37 +96,10 @@ export const makeBook = async file => {
     }
     else if (!file.size) throw new NotFoundError('File not found')
     else if (await isZip(file)) {
+        if (isCBZ(file) || isFBZ(file)) throw new UnsupportedTypeError('Only EPUB is supported in this build')
         const loader = await makeZipLoader(file)
-        if (isCBZ(file)) {
-            const { makeComicBook } = await import('./comic-book.js')
-            book = makeComicBook(loader, file)
-        }
-        else if (isFBZ(file)) {
-            const { makeFB2 } = await import('./fb2.js')
-            const { entries } = loader
-            const entry = entries.find(entry => entry.filename.endsWith('.fb2'))
-            const blob = await loader.loadBlob((entry ?? entries[0]).filename)
-            book = await makeFB2(blob)
-        }
-        else {
-            const { EPUB } = await import('./epub.js')
-            book = await new EPUB(loader).init()
-        }
-    }
-    else if (await isPDF(file)) {
-        const { makePDF } = await import('./pdf.js')
-        book = await makePDF(file)
-    }
-    else {
-        const { isMOBI, MOBI } = await import('./mobi.js')
-        if (await isMOBI(file)) {
-            const fflate = await import('./vendor/fflate.js')
-            book = await new MOBI({ unzlib: fflate.unzlibSync }).open(file)
-        }
-        else if (isFB2(file)) {
-            const { makeFB2 } = await import('./fb2.js')
-            book = await makeFB2(file)
-        }
+        const { EPUB } = await import('./epub.js')
+        book = await new EPUB(loader).init()
     }
     if (!book) throw new UnsupportedTypeError('File type not supported')
     return book
@@ -250,14 +233,11 @@ export class View extends HTMLElement {
                 toc: book.pageList ?? [], ids, splitHref, getFragment })
         }
 
+        // freeLib's reader only vendors the reflowable paginator (see the
+        // README): fixed-layout (pre-paginated) EPUBs aren't supported here.
         this.isFixedLayout = this.book.rendition?.layout === 'pre-paginated'
-        if (this.isFixedLayout) {
-            await import('./fixed-layout.js')
-            this.renderer = document.createElement('foliate-fxl')
-        } else {
-            await import('./paginator.js')
-            this.renderer = document.createElement('foliate-paginator')
-        }
+        await import('./paginator.js')
+        this.renderer = document.createElement('foliate-paginator')
         this.renderer.setAttribute('exportparts', 'head,foot,filter')
         this.renderer.addEventListener('load', e => this.#onLoad(e.detail))
         this.renderer.addEventListener('relocate', e => this.#onRelocate(e.detail))
@@ -539,54 +519,20 @@ export class View extends HTMLElement {
             if (subitems.length) yield { index, subitems }
         }
     }
-    async * search(opts) {
-        this.clearSearch()
-        this.#searchDraw = opts.draw ?? Overlayer.outline
-        this.#searchDrawOptions = opts.drawOptions
-        const { searchMatcher } = await import('./search.js')
-        const { query, index } = opts
-        const matcher = searchMatcher(textWalker,
-            { defaultLocale: this.language, ...opts })
-        const iter = index != null
-            ? this.#searchSection(matcher, query, index)
-            : this.#searchBook(matcher, query)
-
-        const list = []
-        this.#searchResults.set(index, list)
-
-        for await (const result of iter) {
-            if (result.subitems){
-                const list = result.subitems
-                    .map(({ cfi }) => ({ value: SEARCH_PREFIX + cfi }))
-                this.#searchResults.set(result.index, list)
-                for (const item of list) this.addAnnotation(item)
-                yield {
-                    label: this.#tocProgress.getProgress(result.index)?.label ?? '',
-                    subitems: result.subitems,
-                }
-            }
-            else {
-                if (result.cfi) {
-                    const item = { value: SEARCH_PREFIX + result.cfi }
-                    list.push(item)
-                    this.addAnnotation(item)
-                }
-                yield result
-            }
-        }
-        yield 'done'
+    async * search() {
+        // In-book search isn't vendored (freeLib doesn't use it); search.js
+        // was intentionally left out, see this folder's README.
+        throw new Error('search() is not available in this build')
     }
     clearSearch() {
         for (const list of this.#searchResults.values())
             for (const item of list) this.deleteAnnotation(item)
         this.#searchResults.clear()
     }
-    async initTTS(granularity = 'word', highlight) {
-        const doc = this.renderer.getContents()[0].doc
-        if (this.tts && this.tts.doc === doc) return
-        const { TTS } = await import('./tts.js')
-        this.tts = new TTS(doc, textWalker, highlight || (range =>
-            this.renderer.scrollToAnchor(range, true)), granularity)
+    async initTTS() {
+        // Text-to-speech isn't vendored (freeLib doesn't use it); tts.js was
+        // intentionally left out, see this folder's README.
+        throw new Error('initTTS() is not available in this build')
     }
     startMediaOverlay() {
         const { index } = this.renderer.getContents()[0]

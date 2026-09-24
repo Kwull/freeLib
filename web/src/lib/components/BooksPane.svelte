@@ -39,7 +39,7 @@
     onOpenShelf: (ids: number[]) => void;
     header?: Header;
     onBack?: () => void;
-    onCounts?: (counts: { books: number; series: number }) => void;
+    onCounts?: (counts: { books: number; series: number; coauthors: { id: number; name: string }[] }) => void;
   } = $props();
 
   const ALL_COLUMNS = ['author', 'series', 'genre', 'language', 'format'] as const;
@@ -167,7 +167,13 @@
   $effect(() => {
     if (!onCounts) return;
     const seriesCount = scope.kind === 'author' ? groups.filter((g) => g.name).length : 0;
-    onCounts({ books: total ?? books.length, series: seriesCount });
+    let coauthors: { id: number; name: string }[] = [];
+    if (scope.kind === 'author') {
+      const map = new Map<number, string>();
+      for (const b of books) for (const a of b.authors) if (a.id !== scope.id) map.set(a.id, a.name);
+      coauthors = [...map.entries()].map(([id, name]) => ({ id, name }));
+    }
+    onCounts({ books: total ?? books.length, series: seriesCount, coauthors });
   });
 
   const availableLangs = $derived.by(() => [...new Set(books.map((b) => b.lang))].sort());
@@ -287,7 +293,13 @@
       <button type="button" class="back" aria-label={t('common.back')} onclick={onBack}><Icon name="chevronLeft" size={18} /></button>
       <div class="ph-info">
         <span class="ph-name">{header.name}</span>
-        <span class="ph-counts">{header.booksCount}{header.seriesCount ? ` · ${header.seriesCount}` : ''}</span>
+        <span class="ph-counts">
+          {#if header.seriesCount}
+            {t('browse.booksAndSeries', { books: header.booksCount, series: header.seriesCount })}
+          {:else}
+            {t('browse.booksCount', { count: header.booksCount })}
+          {/if}
+        </span>
       </div>
       <button type="button" class="filter-btn" aria-label={t('books.filter')} onclick={() => (filterMenuOpen = !filterMenuOpen)}><Icon name="filter" size={18} /></button>
       {#if filterMenuOpen}

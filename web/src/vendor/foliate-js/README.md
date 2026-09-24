@@ -9,9 +9,16 @@ loaded by Vite as-is): `view.js`, `epub.js`, `epubcfi.js`, `overlayer.js`,
 `vendor/zip.js` (a build of `@zip.js/zip.js`, BSD-3-Clause, license in
 `vendor/zip.js.LICENSE`) that `epub.js` uses to read the EPUB's zip archive.
 
-Formats other than EPUB (`comic-book.js`, `fb2.js`, `mobi.js`, `pdf.js`, …)
-were intentionally left out — freeLib only needs EPUB in the browser reader.
+Formats other than EPUB (`comic-book.js`, `fb2.js`, `mobi.js`, `pdf.js`,
+fixed-layout, in-book search, TTS, …) were intentionally left out — freeLib
+only needs a paginated EPUB reader in the browser. `view.js` is lightly
+patched (each change is commented in place) so its `makeBook()`, `open()`,
+`search()` and `initTTS()` no longer reference those unvendored modules —
+Vite's dev transform doesn't reliably skip resolving a dynamic `import()`
+just because it's marked `/* @vite-ignore */`, so the dead branches were
+removed instead of ignored.
 
-To refresh: re-copy the same files from the upstream repo at a pinned commit
-and re-check `view.js`'s dynamic `import()` list hasn't grown new
-dependencies for the EPUB path.
+To refresh: re-copy the same files from the upstream repo at a pinned commit,
+re-apply the same trims to `view.js` (diff against upstream's `open()`,
+`makeBook()`, `search()`, `initTTS()`), and re-check its dynamic `import()`
+list only points at files still vendored here.
