@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="windows-1251"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
+<description>
+ <title-info>
+  <genre>prose_classic</genre>
+  <author><first-name>Лев</first-name><last-name>Толстой</last-name></author>
+  <book-title>Хаджи-Мурат</book-title>
+  <annotation><p>Повесть о «Хаджи-Мурате».</p></annotation>
+  <coverpage><image l:href="#cover"/></coverpage>
+  <lang>ru</lang>
+ </title-info>
+</description>
+<body>
+ <section>
+  <title><p>I</p></title>
+  <p>Я возвращался домой полями. Была самая середина лета.</p>
+  <p>«Ёлки-палки», — подумал я.</p>
+ </section>
+ <section>
+  <title><p>II</p></title>
+  <p>Вторая глава.</p>
+ </section>
+</body>
+<binary id="cover" content-type="image/jpeg">/9j/4AAQSkZJRgABAQEAYABgAAD/brokenbroken</binary>
+</FictionBook>

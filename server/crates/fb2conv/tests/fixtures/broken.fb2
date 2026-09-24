@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FictionBook xmlns:l="http://www.w3.org/1999/xlink">
+<description><title-info><author><last-name>Broken</last-name></author><book-title>Broken &amp; Markup</book-title><lang>en</lang></title-info></description>
+<body>
+<section><title><p>Chapter&nbsp;One</p></title>
+<p>Text with nbsp&nbsp;and a stray & ampersand and &unknown; entity.
+<p>Unclosed paragraph with <emphasis>unclosed emphasis
+<p>Another paragraph</strong> with a stray end tag.</p>
+</section>
+<section><title><p>Chapter Two</title>
+<p>Hyphenation of extraordinary representations.</p>
