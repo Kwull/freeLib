@@ -39,8 +39,18 @@ pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
         ),
         None => tracing::info!("Calibre not found: AZW3/MOBI/PDF disabled"),
     }
-    let st = AppState::new(cfg, db, calibre);
+    let oidc = match &cfg.oidc {
+        Some(o) => Some(
+            crate::oidc::Provider::new(o.clone(), cfg.public_url.as_deref())
+                .map_err(|e| anyhow::anyhow!("single sign-on: {e}"))?,
+        ),
+        None => None,
+    };
+    let st = AppState::new(cfg, db, calibre, oidc);
     bootstrap_users(&st)?;
+    if let Some(p) = st.oidc.clone() {
+        tokio::spawn(async move { p.probe().await });
+    }
     {
         let c = st.db.lock();
         db::seed_devices(&c)?;
@@ -83,11 +93,18 @@ fn bootstrap_users(st: &AppState) -> anyhow::Result<()> {
             }
         }
     }
-    let open = db::count_admins(&c)? == 0;
+    let no_admin = db::count_admins(&c)? == 0;
+    // with single sign-on configured the server always requires a login
+    let open = no_admin && st.oidc.is_none();
     st.open_mode.store(open, Ordering::Relaxed);
     if open {
         tracing::warn!(
             "no users and no FREELIB_ADMIN_PASSWORD: running in OPEN MODE (no login, everyone is admin)"
+        );
+    } else if no_admin {
+        tracing::warn!(
+            "no administrator yet: set FREELIB_ADMIN_PASSWORD, or FREELIB_OIDC_ADMIN_GROUP to make \
+             members of that group administrators"
         );
     }
     Ok(())
@@ -123,7 +140,7 @@ async fn reimport_outdated(st: &AppState, rows: &[LibraryRow]) {
             r.id
         );
         let owner = system_user(st);
-        if let Err(e) = importer::start(st, r.id, &owner).await {
+        if let Err(e) = importer::start_with_reason(st, r.id, &owner, Some("upgrade")).await {
             tracing::warn!("re-import of library {} failed to start: {e}", r.id);
         }
     }
@@ -180,7 +197,7 @@ async fn autoimport(st: &AppState) {
             }
         };
         tracing::info!("auto-importing {inpx_s} as library {id}");
-        if let Err(e) = importer::start(st, id, &owner).await {
+        if let Err(e) = importer::start_with_reason(st, id, &owner, Some("autoimport")).await {
             tracing::warn!("auto-import of {inpx_s} failed to start: {e}");
         }
     }
@@ -307,7 +324,12 @@ pub fn router(st: AppState) -> Router {
             security::host_guard,
         ))
         .layer(middleware::from_fn(security::security_headers))
-        .layer(TraceLayer::new_for_http())
+        // spans carry the path only: query strings may hold sign-in codes
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |req: &axum::http::Request<axum::body::Body>| {
+                tracing::debug_span!("request", method = %req.method(), path = %req.uri().path())
+            },
+        ))
         .with_state(st)
 }
 

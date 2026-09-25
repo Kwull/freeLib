@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { api, errorText } from '../api/client';
-  import type { Device, Settings, User } from '../api/types';
+  import type { Account, Device, Settings, UserRow } from '../api/types';
+  import { routerState } from '../router.svelte';
   import { navigate } from '../router.svelte';
   import { t, i18nState, setLang } from '../i18n';
   import { themeState, setTheme } from '../stores/theme.svelte';
@@ -15,12 +17,12 @@
   let { section }: { section: string | null } = $props();
   const sec = $derived(section ?? 'general');
 
-  const sections = ['general', 'devices', 'mail', 'server', 'users', 'about'] as const;
+  const sections = ['general', 'account', 'devices', 'mail', 'server', 'users', 'about'] as const;
   const isAdmin = $derived(sessionState.openMode || sessionState.user?.role === 'admin');
 
   let settings = $state<Settings | null>(null);
   let fonts = $state<string[]>([]);
-  let users = $state<User[]>([]);
+  let users = $state<UserRow[]>([]);
   let editingDevice = $state<Device | null>(null);
   let testTo = $state('');
   let recipientsText = $state('');
@@ -125,13 +127,77 @@
     if (!newUsername.trim() || !newPassword) return;
     try {
       const u = await api.createUser({ username: newUsername.trim(), password: newPassword, role: newRole });
-      users.push(u);
+      users.push({ ...u, hasPassword: true, sso: null });
       newUsername = ''; newPassword = '';
     } catch (e) {
       showToast(errorText(e), 'error');
     }
   }
-  async function deleteUser(u: User) {
+  // ---- Account: single sign-on link, own password (for OPDS apps)
+  let account = $state<Account | null>(null);
+  let accountError = $state<string | null>(null);
+  let pwCurrent = $state(''), pwNew = $state(''), pwConfirm = $state('');
+  let accountBusy = $state(false);
+  const accountParams = $derived(new URLSearchParams(routerState.search));
+  const linkError = $derived(sec === 'account' ? accountParams.get('ssoError') : null);
+  function loadAccount() {
+    api.account().then((a) => { account = a; accountError = null; }).catch((e) => (accountError = errorText(e)));
+  }
+  $effect(() => {
+    if (sec !== 'account' || sessionState.openMode) return;
+    const linked = accountParams.get('sso') === 'linked';
+    untrack(() => {
+      loadAccount();
+      if (linked) {
+        showToast(t('account.sso.linkedToast'));
+        navigate('/settings/account', { replace: true });
+      }
+    });
+  });
+  function ssoMessage(code: string): string {
+    const key = `login.sso.error.${code}`;
+    const m = t(key);
+    return m === key ? t('login.sso.error.generic') : m;
+  }
+  async function linkSso() {
+    accountBusy = true;
+    try {
+      const { url } = await api.oidcLink();
+      location.href = url;
+    } catch (e) {
+      showToast(errorText(e), 'error');
+      accountBusy = false;
+    }
+  }
+  async function unlinkSso() {
+    if (!confirm(t('account.sso.unlinkConfirm'))) return;
+    accountBusy = true;
+    try {
+      await api.oidcUnlink();
+      loadAccount();
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    } finally {
+      accountBusy = false;
+    }
+  }
+  async function savePassword(e: Event) {
+    e.preventDefault();
+    if (pwNew !== pwConfirm) { showToast(t('account.password.mismatch'), 'error'); return; }
+    accountBusy = true;
+    try {
+      await api.setPassword(pwNew, account?.hasPassword ? pwCurrent : undefined);
+      pwCurrent = ''; pwNew = ''; pwConfirm = '';
+      showToast(t('account.password.saved'));
+      loadAccount();
+    } catch (err) {
+      showToast(errorText(err), 'error');
+    } finally {
+      accountBusy = false;
+    }
+  }
+
+  async function deleteUser(u: UserRow) {
     if (!confirm(t('settings.users.deleteConfirm', { name: u.username }))) return;
     try {
       await api.deleteUser(u.id);
@@ -145,7 +211,7 @@
 <main class="settings-page">
   <nav class="tabs" aria-label={t('settings.title')}>
     {#each sections as s (s)}
-      {#if s !== 'users' && s !== 'mail' && s !== 'server' || isAdmin}
+      {#if (s !== 'users' && s !== 'mail' && s !== 'server' || isAdmin) && (s !== 'account' || !sessionState.openMode)}
         <button type="button" class:active={sec === s} onclick={() => navigate(`/settings/${s}`)}>{t(`settings.${s}`)}</button>
       {/if}
     {/each}
@@ -173,6 +239,43 @@
           {#each librariesState.items as l (l.id)}<option value={l.id} selected={l.isDefault}>{l.name}</option>{/each}
         </select>
       </label>
+    {:else if sec === 'account'}
+      <h2>{t('settings.account')}</h2>
+      {#if accountError}
+        <p class="warn">{accountError}</p>
+      {:else if account}
+        <p class="muted" data-testid="account-user">{t('account.signedInAs', { name: account.user.username })} · {t(`settings.users.role.${account.user.role}`)}</p>
+        {#if account.sso}
+          <section class="acc-block" data-testid="account-sso">
+            <h3><Icon name="key" size={16} />{t('account.sso.title')}</h3>
+            {#if linkError}<p class="warn" role="alert">{ssoMessage(linkError)}</p>{/if}
+            {#if account.sso.linked}
+              <p>{t('account.sso.linked')}{#if account.sso.email}{': '}<b>{account.sso.email}</b>{/if}</p>
+              <div class="row">
+                <button type="button" class="btn" disabled={accountBusy || !account.hasPassword || !account.passwordLogin} onclick={unlinkSso}>{t('account.sso.unlink')}</button>
+              </div>
+              {#if !account.hasPassword}<p class="muted hint">{t('account.sso.unlinkNeedsPassword')}</p>
+              {:else if !account.passwordLogin}<p class="muted hint">{t('account.sso.unlinkPasswordOff')}</p>{/if}
+            {:else}
+              <p class="muted">{t('account.sso.notLinked', { label: account.sso.label })}</p>
+              <div class="row"><button type="button" class="primary" disabled={accountBusy} onclick={linkSso}><Icon name="link" size={16} />{t('account.sso.link')}</button></div>
+            {/if}
+          </section>
+        {/if}
+        <section class="acc-block" data-testid="account-password">
+          <h3><Icon name="user" size={16} />{account.hasPassword ? t('account.password.title') : t('account.password.setTitle')}</h3>
+          <p class="muted hint">{account.hasPassword ? t('account.password.hint') : t('account.password.ssoHint')}</p>
+          <form class="pw-form" onsubmit={savePassword}>
+            <input type="text" autocomplete="username" value={account.user.username} hidden readonly />
+            {#if account.hasPassword}
+              <label class="field">{t('account.password.current')}<input type="password" autocomplete="current-password" bind:value={pwCurrent} required /></label>
+            {/if}
+            <label class="field">{t('account.password.new')}<input type="password" autocomplete="new-password" minlength="4" bind:value={pwNew} required /></label>
+            <label class="field">{t('account.password.confirm')}<input type="password" autocomplete="new-password" minlength="4" bind:value={pwConfirm} required /></label>
+            <button type="submit" class="primary" disabled={accountBusy}>{account.hasPassword ? t('account.password.change') : t('account.password.set')}</button>
+          </form>
+        </section>
+      {/if}
     {:else if sec === 'devices'}
       <h2>{t('settings.devices')}</h2>
       <div class="device-list">
@@ -252,6 +355,9 @@
         {#each users as u (u.id)}
           <div class="device-row">
             <span class="name">{u.username}</span>
+            {#if u.sso}<span class="badge" title={u.sso.email ?? ''}>{t('settings.users.sso')}{u.sso.email ? ` · ${u.sso.email}` : ''}</span>{/if}
+            {#if !u.hasPassword}<span class="badge muted-badge" title={t('settings.users.noPasswordHint')}>{t('settings.users.noPassword')}</span>{/if}
+            <span class="grow"></span>
             <select bind:value={u.role} onchange={() => api.updateUser(u.id, { role: u.role })}>
               <option value="admin">{t('settings.users.role.admin')}</option>
               <option value="reader">{t('settings.users.role.reader')}</option>
@@ -360,4 +466,11 @@
   .footer button { height: 38px; padding: 0 16px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); font-size: 14px; }
   .footer .primary { border: none; background: var(--accent); color: #fff; }
   .muted { color: var(--muted); }
+  .grow { flex-grow: 1; }
+  .muted-badge { background: var(--surface-hover); color: var(--muted-2); }
+  .acc-block { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
+  .acc-block h3 { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; }
+  .acc-block p { margin: 0; font-size: 14px; }
+  .pw-form { display: flex; flex-direction: column; gap: 10px; }
+  h2 + .muted { margin: -8px 0 0; }
 </style>

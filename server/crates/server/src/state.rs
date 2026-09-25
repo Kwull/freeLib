@@ -54,10 +54,17 @@ pub struct Inner {
     pub basic_cache: Mutex<HashMap<String, (User, Instant)>>,
     /// Background tasks stop when this is set.
     pub shutdown: AtomicBool,
+    /// OpenID Connect sign-in, when configured.
+    pub oidc: Option<Arc<crate::oidc::Provider>>,
 }
 
 impl AppState {
-    pub fn new(cfg: Config, db: AppDb, calibre: Option<Calibre>) -> AppState {
+    pub fn new(
+        cfg: Config,
+        db: AppDb,
+        calibre: Option<Calibre>,
+        oidc: Option<crate::oidc::Provider>,
+    ) -> AppState {
         let (tx, _) = broadcast::channel(1024);
         let workers = Arc::new(Semaphore::new(cfg.workers.max(1)));
         let preview_permits = cfg.workers.max(1) * 2;
@@ -78,11 +85,27 @@ impl AppState {
             session_cache: Mutex::new(HashMap::new()),
             basic_cache: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
+            oidc: oidc.map(Arc::new),
         }))
     }
 
     pub fn open_mode(&self) -> bool {
         self.open_mode.load(Ordering::Relaxed)
+    }
+
+    /// Whether cookies set for this request need `Secure` (HTTPS behind a proxy, or an
+    /// `https://` `FREELIB_PUBLIC_URL`).
+    pub fn secure_cookies(&self, headers: &axum::http::HeaderMap) -> bool {
+        self.cfg.public_https() || crate::auth::is_https(headers)
+    }
+
+    /// Password sign-in is refused for `username` (`FREELIB_OIDC_DISABLE_PASSWORD`; the
+    /// `FREELIB_ADMIN_USER` account keeps it while `FREELIB_ADMIN_PASSWORD` is set).
+    pub fn password_login_refused(&self, username: &str) -> bool {
+        let disabled = self.cfg.oidc.as_ref().is_some_and(|o| o.disable_password);
+        disabled
+            && !(self.cfg.admin_password.is_some()
+                && username.trim().eq_ignore_ascii_case(&self.cfg.admin_user))
     }
 
     pub fn events(&self) -> &broadcast::Sender<Event> {
@@ -293,6 +316,11 @@ pub struct LibraryStatus {
     pub progress: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Why an import runs when the server started it by itself: `"upgrade"` (the catalog was
+    /// written by another schema version and is rebuilt; the library cannot be browsed until
+    /// it finishes) or `"autoimport"` (`FREELIB_AUTOIMPORT`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl Default for LibraryStatus {
@@ -301,6 +329,7 @@ impl Default for LibraryStatus {
             state: "idle".into(),
             progress: None,
             message: None,
+            reason: None,
         }
     }
 }

@@ -15,6 +15,9 @@
     selectedId,
     onSelect,
     width,
+    loading = false,
+    progressText = null,
+    progress = null,
   }: {
     title: string;
     filterLabel: string;
@@ -23,6 +26,10 @@
     selectedId: number | null;
     onSelect: (id: number) => void;
     width?: number;
+    /** The list is still downloading: skeleton rows (and how far it got). */
+    loading?: boolean;
+    progressText?: string | null;
+    progress?: number | null;
   } = $props();
 
   const ROW = 36;
@@ -164,6 +171,19 @@
   </div>
   <div class="body">
     <div class="list" onwheel={userScrolled} ontouchmove={userScrolled} onkeydown={userScrolled} onpointerdown={userScrolled} role="presentation">
+      {#if loading && !rows.length}
+        <div class="loading" aria-busy="true">
+          {#if progressText}
+            <div class="load-progress">
+              <div class="load-bar"><div style:width="{(progress ?? 0) * 100}%"></div></div>
+              <span>{progressText}</span>
+            </div>
+          {/if}
+          {#each [62, 48, 71, 55, 66, 43, 58, 69, 51, 64, 46, 60] as w, i (i)}
+            <div class="sk-row" aria-hidden="true"><span class="sk" style:width="{w}%"></span><span class="sk n"></span></div>
+          {/each}
+        </div>
+      {/if}
       {#if rows.length && !filtered.length}
         <div class="nothing">{t('search.noResults')}</div>
       {/if}
@@ -227,6 +247,14 @@
   .clear { display: flex; border: none; background: none; color: var(--muted); padding: 4px; border-radius: 4px; }
   .clear:hover { background: var(--surface-hover); }
   .match-count { font-size: 12px; color: var(--muted); margin-top: -4px; }
+  .loading { position: absolute; inset: 0; padding: 0 2px 0 0; overflow: hidden; }
+  .sk-row { display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 10px; gap: 12px; }
+  .sk { display: block; height: 10px; border-radius: 5px; background: var(--surface-hover); animation: pulse 1.2s ease-in-out infinite; }
+  .sk.n { width: 22px; flex-shrink: 0; }
+  .load-progress { display: flex; flex-direction: column; gap: 4px; padding: 4px 10px 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .load-bar { height: 4px; border-radius: 2px; background: var(--surface-hover); overflow: hidden; }
+  .load-bar div { height: 100%; background: var(--accent); transition: width .3s; }
+  @keyframes pulse { 50% { opacity: .45; } }
   .nothing { padding: 16px; color: var(--muted); font-size: 14px; }
   .body { flex-grow: 1; display: flex; min-height: 0; }
   .list { flex-grow: 1; min-width: 0; padding: 0 2px 0 8px; position: relative; }

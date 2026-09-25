@@ -44,6 +44,10 @@ brotli = "8"
 percent-encoding = "2"
 num_cpus = "1"
 libc = "0.2"
+openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
+rsa = { version = "0.9", features = ["sha2", "getrandom"] }
 tempfile.workspace = true

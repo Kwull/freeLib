@@ -5,7 +5,8 @@
   import ActivityPanel from './ActivityPanel.svelte';
   import PhoneNav from './PhoneNav.svelte';
   import { t, i18nState, setLang } from '../i18n';
-  import { librariesState, currentLibrary, setCurrentLibrary } from '../stores/libraries.svelte';
+  import { librariesState, currentLibrary, setCurrentLibrary, isBrowsable } from '../stores/libraries.svelte';
+  import type { Library } from '../api/types';
   import { jobsState, toggleActivity, runningCount } from '../stores/jobs.svelte';
   import { sessionState, logout } from '../stores/session.svelte';
   import { themeState, setTheme } from '../stores/theme.svelte';
@@ -24,6 +25,13 @@
   let liveNav = $state<number | null>(null);
   const navWidth = $derived(liveNav ?? paneWidth('nav'));
 
+  function statusClass(l: Library | null): string {
+    if (!l) return '';
+    if (l.status.state === 'importing') return 'importing';
+    if (l.status.state === 'error' || !isBrowsable(l)) return 'error';
+    return 'ok';
+  }
+
   function isActive(name: string): boolean {
     return route.name === name;
   }
@@ -35,10 +43,13 @@
       <Icon name="library" size={24} strokeWidth={1.8} />
       <span>{t('app.name')}</span>
     </a>
+    {#if !librariesState.loaded && !librariesState.error}
+      <span class="sk sk-pill" aria-hidden="true"></span>
+    {/if}
     {#if librariesState.items.length}
       <div class="lib-switch">
         <button type="button" onclick={() => (libMenuOpen = !libMenuOpen)} aria-haspopup="true" aria-expanded={libMenuOpen}>
-          <span class="dot" style="background:#2E7D4F"></span>
+          <span class="dot {statusClass(lib)}" title={lib ? t(`libraries.status.${lib.status.state}`) : ''}></span>
           <span class="lib-name">{lib?.name ?? ''}</span>
           <Icon name="chevronDown" size={16} />
         </button>
@@ -49,13 +60,14 @@
                 type="button"
                 role="menuitem"
                 onclick={() => { setCurrentLibrary(l.id); libMenuOpen = false; navigate(`/l/${l.id}/authors`); }}
-              >{l.name}</button>
+              ><span class="dot {statusClass(l)}"></span>{l.name}</button>
             {/each}
           </div>
         {/if}
       </div>
     {/if}
-    {#if lib}<GlobalSearch lib={lib.id} />{/if}
+    {#if lib && isBrowsable(lib)}<GlobalSearch lib={lib.id} />
+    {:else if !librariesState.loaded && !librariesState.error}<span class="sk sk-search" aria-hidden="true"></span>{/if}
     <div class="grow"></div>
     <button type="button" class="icon-btn" aria-label="Activity" onclick={() => toggleActivity()}>
       <Icon name="activity" size={20} strokeWidth={1.8} />
@@ -79,7 +91,12 @@
             <button type="button" class:on={i18nState.lang === 'ru'} onclick={() => setLang('ru')}>RU</button>
             <button type="button" class:on={i18nState.lang === 'uk'} onclick={() => setLang('uk')}>UK</button>
           </div>
-          <button type="button" class="menu-item" onclick={() => navigate('/settings')}>
+          {#if !sessionState.openMode}
+            <button type="button" class="menu-item" onclick={() => { accountMenuOpen = false; navigate('/settings/account'); }}>
+              <Icon name="user" size={16} />{t('account.menu')}
+            </button>
+          {/if}
+          <button type="button" class="menu-item" onclick={() => { accountMenuOpen = false; navigate('/settings'); }}>
             <Icon name="settings" size={16} />{t('nav.settings')}
           </button>
           {#if !sessionState.openMode}
@@ -137,6 +154,22 @@
         onCommit={(v) => { setPaneWidth('nav', v); liveNav = null; }}
         onReset={() => { setPaneWidth('nav', null); liveNav = null; }}
       />
+    {:else if !librariesState.loaded && !librariesState.error}
+      <nav aria-label="Main" class="sidenav" style:--w="{navWidth}px" aria-busy="true">
+        {#each [70, 55, 50, 58, 62] as w, i (i)}
+          <div class="nav sk-row" aria-hidden="true"><span class="sk sk-icon"></span><span class="sk" style:width="{w}%"></span></div>
+        {/each}
+      </nav>
+    {:else}
+      <nav aria-label="Main" class="sidenav" style:--w="{navWidth}px">
+        <div class="grow"></div>
+        <a class="nav" href="/libraries" data-link aria-current={isActive('libraries') ? 'page' : undefined} class:active={isActive('libraries')}>
+          <Icon name="library" size={18} /><span class="label">{t('nav.libraries')}</span>
+        </a>
+        <a class="nav" href="/settings" data-link aria-current={isActive('settings') ? 'page' : undefined} class:active={isActive('settings')}>
+          <Icon name="settings" size={18} /><span class="label">{t('nav.settings')}</span>
+        </a>
+      </nav>
     {/if}
     <div class="content">
       {@render children()}
@@ -165,6 +198,17 @@
   }
   .lib-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 4px; flex-shrink: 0; }
+  .dot.ok { background: #2E7D4F; }
+  .dot.importing { background: var(--amber); animation: pulse 1.2s ease-in-out infinite; }
+  .dot.error { background: var(--danger); }
+  .lib-switch .menu button { display: flex; align-items: center; gap: 8px; }
+  .sk { display: block; height: 10px; border-radius: 5px; background: var(--surface-hover); animation: pulse 1.2s ease-in-out infinite; }
+  .sk-pill { width: 150px; height: 36px; border-radius: 8px; flex-shrink: 0; }
+  .sk-search { width: min(420px, 30vw); height: 36px; border-radius: 8px; }
+  .sk-icon { width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0; }
+  .sk-row { gap: 12px; }
+  .sk-row:hover { background: none; }
+  @keyframes pulse { 50% { opacity: .45; } }
   .grow { flex-grow: 1; }
   .icon-btn {
     position: relative; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px;
@@ -208,6 +252,6 @@
     .topbar { gap: 8px; padding: 0 8px 0 12px; }
     .lib-name { max-width: 42vw; }
     .lib-switch button { padding: 0 8px; }
-    .topbar :global(.wrap) { display: none; }
+    .topbar :global(.wrap), .sk-search { display: none; }
   }
 </style>

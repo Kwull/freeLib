@@ -19,6 +19,7 @@ A self-hosted web catalog for large e-book libraries described by INPX files (Fl
 - **Read in the browser** — a built-in EPUB reader with table of contents, themes and remembered position.
 - **OPDS catalog** — use KOReader, Moon+ Reader, KyBook or FBReader directly with the server (`/opds`).
 - **Multi-user** — accounts with admin and reader roles, personal shelves, ratings and devices.
+- **Single sign-on** — optional OpenID Connect login (Pocket ID, Authelia, Authentik, Keycloak, Google…) next to local accounts, with admin rights from a provider group.
 - **Works on phones** — responsive layout with a bottom tab bar; light and dark themes; English, Russian and Ukrainian.
 
 <p>
@@ -65,6 +66,8 @@ See **[docs/web/DOCKER.md](docs/web/DOCKER.md)** for all settings, reverse proxy
 | `FREELIB_TRUST_PROXY` | Set to `1` when running behind a reverse proxy |
 | `FREELIB_AUTOIMPORT` | Comma-separated INPX files to import on start |
 | `FREELIB_CACHE_MAX_MB` | Cache size limit (default 2048) |
+| `FREELIB_PUBLIC_URL` | External URL, e.g. `https://books.example.com` (needed for single sign-on) |
+| `FREELIB_OIDC_ISSUER`, `FREELIB_OIDC_CLIENT_ID`, `FREELIB_OIDC_CLIENT_SECRET` | Single sign-on with an OpenID Connect provider; more options (`FREELIB_OIDC_SCOPES`, `_BUTTON`, `_ADMIN_GROUP`, `_AUTO_CREATE`, `_DISABLE_PASSWORD`) and a Pocket ID walkthrough in [DOCKER.md](docs/web/DOCKER.md#single-sign-on-openid-connect) |
 
 Send to Kindle needs SMTP settings (**Settings → Mail**). By default mail may only go to `*@kindle.com` and `*@free.kindle.com`; add your own patterns there. Remember to add the sender address to your Amazon approved senders list.
 

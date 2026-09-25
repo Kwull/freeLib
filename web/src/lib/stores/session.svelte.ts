@@ -1,16 +1,18 @@
 import { api } from '../api/client';
-import type { Session, User } from '../api/types';
+import type { AuthMethods, Session, User } from '../api/types';
 
-export const sessionState = $state<{ loaded: boolean; user: User | null; openMode: boolean }>({
+export const sessionState = $state<{ loaded: boolean; user: User | null; openMode: boolean; auth: AuthMethods }>({
   loaded: false,
   user: null,
   openMode: false,
+  auth: { password: true, oidc: null },
 });
 
 export async function loadSession(): Promise<Session> {
   const s = await api.session();
   sessionState.user = s.user;
   sessionState.openMode = s.openMode;
+  sessionState.auth = s.auth ?? { password: true, oidc: null };
   sessionState.loaded = true;
   return s;
 }

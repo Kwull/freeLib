@@ -2,9 +2,23 @@ import { ApiError } from './types';
 import type {
   Library, Book, BookDetail, Genre, Shelf, Device, Job, Session, NameListResponse,
   BooksResponse, SearchResponse, Settings, User, ConvertOptions, AuthorSummary, CoauthorsResponse,
+  Account, UserRow,
 } from './types';
 
 const BASE = '/api/v1';
+
+async function failure(res: Response): Promise<ApiError> {
+  const isJson = res.headers.get('content-type')?.includes('application/json');
+  let code = 'internal', message = res.statusText || `HTTP ${res.status}`;
+  if (isJson) {
+    try {
+      const body = await res.json();
+      code = body.error ?? code;
+      message = body.message ?? message;
+    } catch { /* ignore */ }
+  }
+  return new ApiError(res.status, code as any, message);
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
@@ -13,20 +27,41 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (res.status === 204) return undefined as T;
+  if (!res.ok) throw await failure(res);
   const isJson = res.headers.get('content-type')?.includes('application/json');
-  if (!res.ok) {
-    let code = 'internal', message = res.statusText;
-    if (isJson) {
-      try {
-        const body = await res.json();
-        code = body.error ?? code;
-        message = body.message ?? message;
-      } catch { /* ignore */ }
-    }
-    throw new ApiError(res.status, code as any, message);
-  }
   if (isJson) return (await res.json()) as T;
   return undefined as T;
+}
+
+export type StreamProgress = { bytes: number; rows: number };
+
+/**
+ * GET of a JSON body read as a stream, reporting bytes received and the rows of a
+ * `[[…],[…],…]` array seen so far (a count of `],[`), for big lists on slow links.
+ */
+async function requestStreamed<T>(path: string, onProgress: (p: StreamProgress) => void): Promise<T> {
+  const res = await fetch(BASE + path, { credentials: 'include' });
+  if (!res.ok) throw await failure(res);
+  if (!res.body) return (await res.json()) as T;
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0, rows = 0, prev1 = 0, prev2 = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    bytes += value.length;
+    for (let i = 0; i < value.length; i++) {
+      const b = value[i];
+      if (b === 91 /* [ */ && prev1 === 44 /* , */ && prev2 === 93 /* ] */) rows++;
+      prev2 = prev1; prev1 = b;
+    }
+    onProgress({ bytes, rows });
+  }
+  const all = new Uint8Array(bytes);
+  let off = 0;
+  for (const c of chunks) { all.set(c, off); off += c.length; }
+  return JSON.parse(new TextDecoder().decode(all)) as T;
 }
 
 /** Human-readable text of a failed request (the server's message for API errors). */
@@ -49,6 +84,13 @@ export const api = {
   login: (username: string, password: string) =>
     request<{ user: User }>('/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   logout: () => request<void>('/logout', { method: 'POST' }),
+  /** Single sign-on: where the browser goes to sign in (a full page navigation). */
+  oidcLoginUrl: (returnTo: string) => `${BASE}/auth/oidc/login${qs({ return: returnTo })}`,
+  oidcLink: () => request<{ url: string }>('/auth/oidc/link', { method: 'POST' }),
+  oidcUnlink: () => request<void>('/me/oidc', { method: 'DELETE' }),
+  account: () => request<Account>('/me/account'),
+  setPassword: (password: string, current?: string) =>
+    request<void>('/me/password', { method: 'PUT', body: JSON.stringify({ password, current }) }),
 
   // Libraries
   libraries: () => request<Library[]>('/libraries'),
@@ -66,6 +108,9 @@ export const api = {
   // Browsing
   authors: (lib: number, v?: number) => request<NameListResponse>(`/libraries/${lib}/authors${qs({ v })}`),
   series: (lib: number, v?: number) => request<NameListResponse>(`/libraries/${lib}/series${qs({ v })}`),
+  /** Authors or series list, streamed with progress. */
+  nameList: (lib: number, kind: 'authors' | 'series', v: number | undefined, onProgress: (p: StreamProgress) => void) =>
+    requestStreamed<NameListResponse>(`/libraries/${lib}/${kind}${qs({ v })}`, onProgress),
   genres: (lib: number, lang?: string) => request<Genre[]>(`/libraries/${lib}/genres${qs({ lang })}`),
   books: (lib: number, params: {
     author?: number; series?: number; genre?: number; shelf?: number; since?: string;
@@ -117,7 +162,7 @@ export const api = {
   settings: () => request<Settings>('/settings'),
   updateSettings: (s: Settings) => request<Settings>('/settings', { method: 'PUT', body: JSON.stringify(s) }),
   testSmtp: (to: string) => request<void>('/settings/smtp/test', { method: 'POST', body: JSON.stringify({ to }) }),
-  users: () => request<User[]>('/users'),
+  users: () => request<UserRow[]>('/users'),
   createUser: (u: { username: string; password: string; role: string }) =>
     request<User>('/users', { method: 'POST', body: JSON.stringify(u) }),
   updateUser: (id: number, u: { password?: string; role?: string }) =>

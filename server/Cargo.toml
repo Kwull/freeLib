@@ -28,6 +28,13 @@ opt-level = 3
 [profile.dev.package.miniz_oxide]
 opt-level = 3
 
+# RSA signature checks (single sign-on) and test key generation.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

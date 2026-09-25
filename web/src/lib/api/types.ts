@@ -1,6 +1,10 @@
 // Types mirrored from docs/web/API.md — keep in sync with the server contract.
 
-export type LibraryStatus = { state: 'idle' | 'importing' | 'error'; progress?: number; message?: string };
+export type LibraryStatus = {
+  state: 'idle' | 'importing' | 'error'; progress?: number; message?: string;
+  /** An import the server started by itself: `upgrade` = catalog rebuilt after an update. */
+  reason?: 'upgrade' | 'autoimport';
+};
 
 export type Library = {
   id: number; name: string; path: string; inpx: string | null;
@@ -83,7 +87,28 @@ export type Job = {
 };
 
 export type User = { id: number; username: string; role: 'admin' | 'reader' };
-export type Session = { user: User | null; openMode: boolean };
+export type AuthMethods = {
+  /** Password sign-in offered in the web app (`FREELIB_OIDC_DISABLE_PASSWORD` turns it off). */
+  password: boolean;
+  /** Single sign-on (OpenID Connect), when configured. */
+  oidc: { enabled: boolean; label: string } | null;
+};
+export type Session = { user: User | null; openMode: boolean; auth?: AuthMethods };
+
+/** A user in the admin's list: how they sign in. */
+export type UserRow = User & {
+  hasPassword: boolean;
+  sso: { issuer: string; email: string | null; createdAt: string; lastLogin: string | null } | null;
+};
+
+/** GET /me/account */
+export type Account = {
+  user: User;
+  hasPassword: boolean;
+  /** Whether password sign-in is allowed for this user in the web app. */
+  passwordLogin: boolean;
+  sso: { label: string; linked: boolean; email: string | null; lastLogin: string | null } | null;
+};
 
 export type NameListResponse = {
   version: number;

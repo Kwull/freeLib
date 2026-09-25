@@ -15,6 +15,7 @@ pub mod error;
 pub mod importer;
 pub mod jobs;
 pub mod mail;
+pub mod oidc;
 pub mod opds;
 pub mod output;
 pub mod placeholder;

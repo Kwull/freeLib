@@ -15,6 +15,16 @@ use crate::state::{AppState, ImportRun, LibRuntime, LibraryStatus};
 
 /// Starts an import of library `lib_id`; 409 when one is already running.
 pub async fn start(st: &AppState, lib_id: i64, owner: &User) -> ApiResult<Job> {
+    start_with_reason(st, lib_id, owner, None).await
+}
+
+/// [`start`] with the `status.reason` of an import the server started by itself.
+pub async fn start_with_reason(
+    st: &AppState,
+    lib_id: i64,
+    owner: &User,
+    reason: Option<&'static str>,
+) -> ApiResult<Job> {
     let rt = st.lib(lib_id)?;
     let row = st
         .db
@@ -46,6 +56,7 @@ pub async fn start(st: &AppState, lib_id: i64, owner: &User) -> ApiResult<Job> {
         state: "importing".into(),
         progress: Some(0.0),
         message: None,
+        reason: reason.map(String::from),
     });
     st.emit_library(lib_id);
     let opts = ImportOptions {
@@ -59,7 +70,7 @@ pub async fn start(st: &AppState, lib_id: i64, owner: &User) -> ApiResult<Job> {
     };
     let st2 = st.clone();
     let job_id = job.id.clone();
-    tokio::spawn(async move { run(st2, rt, job_id, opts, cancel).await });
+    tokio::spawn(async move { run(st2, rt, job_id, opts, cancel, reason).await });
     Ok(job)
 }
 
@@ -69,6 +80,7 @@ async fn run(
     job_id: String,
     opts: ImportOptions,
     cancel: Arc<AtomicBool>,
+    reason: Option<&'static str>,
 ) {
     st.jobs.running(&job_id, 0.0, "Starting");
     st.jobs
@@ -97,6 +109,7 @@ async fn run(
                 state: "importing".into(),
                 progress: Some(p),
                 message: Some(msg.into()),
+                reason: reason.map(String::from),
             });
             if done >= total && !rt2.is_deleted() {
                 // the new file was just renamed into place: switch to it at once, so requests
@@ -168,6 +181,7 @@ fn finish(
                         state: "error".into(),
                         progress: None,
                         message: Some(m.clone()),
+                        reason: None,
                     });
                     st.jobs.fail(&job_id, &m);
                     st.emit_library(rt.id);
@@ -186,6 +200,7 @@ fn finish(
                 state: "error".into(),
                 progress: None,
                 message: Some(m.clone()),
+                reason: None,
             });
             st.jobs.log(&job_id, &m);
             st.jobs.fail(&job_id, &m);
@@ -197,6 +212,7 @@ fn finish(
                 state: "error".into(),
                 progress: None,
                 message: Some(m.clone()),
+                reason: None,
             });
             st.jobs.fail(&job_id, &m);
             st.emit_library(rt.id);

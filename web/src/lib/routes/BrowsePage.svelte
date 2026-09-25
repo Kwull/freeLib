@@ -9,15 +9,20 @@
   import { currentLibrary } from '../stores/libraries.svelte';
   import { PANE_LIMITS, paneWidth, setPaneWidth } from '../stores/layout.svelte';
   import { navigate, routerState } from '../router.svelte';
-  import { api } from '../api/client';
-  import { t, tn } from '../i18n';
+  import { api, errorText } from '../api/client';
+  import StateCard from '../components/StateCard.svelte';
+  import Spinner from '../components/Spinner.svelte';
+  import Icon from '../components/Icon.svelte';
+  import { t, tn, i18nState } from '../i18n';
   import { normalize, letterOf } from '../utils/normalize';
   import type { AuthorSummary, NameListResponse } from '../api/types';
 
   let { kind, lib, id }: { kind: 'authors' | 'series'; lib: number; id: number | null } = $props();
 
   let list = $state<NameListResponse | null>(null);
-  let listError = $state(false);
+  let listError = $state<string | null>(null);
+  let listProgress = $state<{ bytes: number; rows: number } | null>(null);
+  let reloadTick = $state(0);
   let selectedBookId = $state<number | null>(null);
   let send = $state<{ ids: number[]; device?: number } | null>(null);
   let shelfIds = $state<number[] | null>(null);
@@ -25,11 +30,38 @@
   let summary = $state<AuthorSummary | null>(null);
   let liveListWidth = $state<number | null>(null);
 
+  // only a new catalog version reloads the list (not every library status update)
+  const catalogVersion = $derived(currentLibrary()?.catalogVersion ?? null);
   $effect(() => {
+    const version = catalogVersion;
+    reloadTick;
+    if (version === null) return;
+    let cancelled = false;
+    listError = null;
+    listProgress = null;
+    list = null;
+    loadNameList(lib, kind, version, (p) => { if (!cancelled) listProgress = p; })
+      .then((res) => { if (!cancelled) list = res; })
+      .catch((e) => { if (!cancelled) listError = errorText(e); });
+    return () => { cancelled = true; };
+  });
+
+  /** "12,345 of 200,000 authors · 4.2 MB" while a big list downloads. */
+  const progressText = $derived.by(() => {
+    if (list || !listProgress) return null;
     const libObj = currentLibrary();
-    if (!libObj) return;
-    listError = false;
-    loadNameList(lib, kind, libObj.catalogVersion).then((res) => { list = res; }).catch(() => { listError = true; });
+    const expected = libObj ? (kind === 'authors' ? libObj.authorCount : libObj.seriesCount) : 0;
+    const fmt = new Intl.NumberFormat(i18nState.lang);
+    const mb = (listProgress.bytes / 1048576).toFixed(1);
+    return expected > 0
+      ? t('browse.loadingRows', { rows: fmt.format(Math.min(listProgress.rows, expected)), total: fmt.format(expected), mb })
+      : t('browse.loadingBytes', { mb });
+  });
+  const progressValue = $derived.by(() => {
+    const libObj = currentLibrary();
+    const expected = libObj ? (kind === 'authors' ? libObj.authorCount : libObj.seriesCount) : 0;
+    if (!listProgress || !expected) return null;
+    return Math.min(0.99, listProgress.rows / expected);
   });
 
   // `?book=<id>` (from the search box) preselects a book of this author/series
@@ -82,7 +114,8 @@
 </script>
 
 <div class="browse" class:show-list={mobilePane === 'list'} class:show-books={mobilePane === 'books'}>
-  <NameBrowser {title} {filterLabel} {rows} {letters} selectedId={id} onSelect={selectName} width={listWidth} />
+  <NameBrowser {title} {filterLabel} {rows} {letters} selectedId={id} onSelect={selectName} width={listWidth}
+    loading={!list && !listError} {progressText} progress={progressValue} />
   <Splitter
     value={listWidth}
     min={PANE_LIMITS.list.min}
@@ -111,17 +144,23 @@
       onSend={(ids, device) => (send = { ids, device })}
       onAddShelf={(ids) => (shelfIds = ids)}
     />
+  {:else if listError}
+    <StateCard tone="error" icon="alert" title={kind === 'authors' ? t('browse.authorsError') : t('browse.seriesError')} detail={listError} testid="list-error">
+      {#snippet actions()}
+        <button type="button" class="primary" onclick={() => reloadTick++}><Icon name="refresh" size={16} />{t('common.retry')}</button>
+      {/snippet}
+    </StateCard>
   {:else}
     <div class="placeholder">
-      {#if listError}
-        <p>{t('common.error')}</p>
-      {:else if id !== null && list}
+      {#if id !== null && list}
         <p>{kind === 'authors' ? t('browse.noSuchAuthor') : t('browse.noSuchSeries')}</p>
       {:else if list}
         <p class="big">{kind === 'authors' ? tn('browse.authorsTotal', rows.length) : tn('browse.seriesTotal', rows.length)}</p>
         <p>{kind === 'authors' ? t('browse.pickAuthor') : t('browse.pickSeries')}</p>
       {:else}
-        <p>{t('common.loading')}</p>
+        <Spinner size={32} />
+        <p class="loading-label">{kind === 'authors' ? t('browse.loadingAuthors') : t('browse.loadingSeries')}</p>
+        {#if progressText}<p class="loading-detail" data-testid="list-progress">{progressText}</p>{/if}
       {/if}
     </div>
   {/if}
@@ -141,6 +180,8 @@
     color: var(--muted); background: var(--surface); padding: 24px; text-align: center;
   }
   .placeholder p { margin: 0; max-width: 420px; }
+  .placeholder .loading-label { margin-top: 8px; color: var(--muted-2); font-size: 15px; }
+  .placeholder .loading-detail { font-size: 13px; font-variant-numeric: tabular-nums; }
   .placeholder .big { font-family: var(--font-display); font-size: 22px; color: var(--ink); }
 
   @media (max-width: 900px) {

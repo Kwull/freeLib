@@ -920,7 +920,10 @@ async fn login_mode_and_permissions() {
     })
     .await;
     let s = app.get("/api/v1/session").await.json();
-    assert_eq!(s, json!({"user": null, "openMode": false}));
+    assert_eq!(
+        s,
+        json!({"user": null, "openMode": false, "auth": {"password": true, "oidc": null}})
+    );
     assert_eq!(
         app.get("/api/v1/libraries").await.status,
         StatusCode::UNAUTHORIZED
@@ -1562,6 +1565,13 @@ async fn outdated_catalog_is_reimported_on_start() {
             .unwrap();
     }
     let app = app.restart().await;
+    // while it runs, the web app can tell a rebuild after an update from other imports, and
+    // that there is nothing to browse yet
+    let first = app.get("/api/v1/libraries").await.json()[0].clone();
+    if first["status"]["state"] == "importing" {
+        assert_eq!(first["status"]["reason"], "upgrade", "{first}");
+        assert!(first["importedAt"].is_null(), "{first}");
+    }
     let mut last = Value::Null;
     for _ in 0..600 {
         last = app.get("/api/v1/libraries").await.json()[0].clone();
@@ -1571,6 +1581,7 @@ async fn outdated_catalog_is_reimported_on_start() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(last["bookCount"], books, "{last}");
+    assert!(last["status"].get("reason").is_none(), "{last}");
     let jobs = app.get("/api/v1/jobs").await.json();
     assert!(
         jobs.as_array()

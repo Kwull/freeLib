@@ -11,6 +11,7 @@ pub mod browse;
 pub mod devices;
 pub mod jobs;
 pub mod libraries;
+pub mod oidc;
 pub mod session;
 pub mod settings;
 pub mod shelves;
@@ -23,6 +24,12 @@ pub fn router() -> Router<AppState> {
         .route("/session", get(session::get_session))
         .route("/login", post(session::login))
         .route("/logout", post(session::logout))
+        .route("/auth/oidc/login", get(oidc::login))
+        .route("/auth/oidc/callback", get(oidc::callback))
+        .route("/auth/oidc/link", post(oidc::link))
+        .route("/me/account", get(oidc::account))
+        .route("/me/password", put(oidc::set_password))
+        .route("/me/oidc", axum::routing::delete(oidc::unlink))
         .route("/libraries", get(libraries::list).post(libraries::create))
         .route(
             "/libraries/{lib}",

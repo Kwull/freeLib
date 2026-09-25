@@ -35,6 +35,92 @@ pub struct Config {
     pub allowed_hosts: Vec<String>,
     /// Queued + running send/export/download jobs per user.
     pub max_jobs_per_user: usize,
+    /// External base URL (`FREELIB_PUBLIC_URL`, no trailing slash), e.g.
+    /// `https://books.example.org`. Needed for single sign-on (the redirect URI).
+    pub public_url: Option<String>,
+    /// OpenID Connect sign-in (`FREELIB_OIDC_*`), when configured.
+    pub oidc: Option<OidcConfig>,
+}
+
+/// `FREELIB_OIDC_*` (see docs/web/DOCKER.md "Single sign-on").
+#[derive(Debug, Clone)]
+pub struct OidcConfig {
+    pub issuer: String,
+    pub client_id: String,
+    /// Empty for public clients (PKCE only).
+    pub client_secret: Option<String>,
+    pub scopes: Vec<String>,
+    /// Text of the sign-in button.
+    pub button: String,
+    /// Members of this group (`groups` claim) are administrators, everybody else a reader.
+    pub admin_group: Option<String>,
+    /// Create a reader account on the first sign-in of an unknown identity.
+    pub auto_create: bool,
+    /// Refuse password sign-in in the web app, except for the `FREELIB_ADMIN_USER` account
+    /// while `FREELIB_ADMIN_PASSWORD` is set.
+    pub disable_password: bool,
+}
+
+impl OidcConfig {
+    pub fn new(issuer: &str, client_id: &str) -> OidcConfig {
+        OidcConfig {
+            issuer: issuer.to_string(),
+            client_id: client_id.to_string(),
+            client_secret: None,
+            scopes: default_scopes(),
+            button: "Sign in with SSO".into(),
+            admin_group: None,
+            auto_create: true,
+            disable_password: false,
+        }
+    }
+}
+
+fn default_scopes() -> Vec<String> {
+    ["openid", "profile", "email"].map(String::from).to_vec()
+}
+
+fn flag(name: &str, default: bool) -> bool {
+    match env(name) {
+        Some(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        None => default,
+    }
+}
+
+/// Reads `FREELIB_OIDC_*`. `Err` for a half-done configuration (the server refuses to start
+/// rather than silently running without the sign-in the operator asked for).
+fn oidc_from_env() -> Result<Option<OidcConfig>, String> {
+    let issuer = env("FREELIB_OIDC_ISSUER");
+    let client = env("FREELIB_OIDC_CLIENT_ID");
+    let (issuer, client) = match (issuer, client) {
+        (None, None) => return Ok(None),
+        (Some(i), Some(c)) => (i, c),
+        _ => {
+            return Err(
+                "FREELIB_OIDC_ISSUER and FREELIB_OIDC_CLIENT_ID must be set together".into(),
+            );
+        }
+    };
+    let mut o = OidcConfig::new(&issuer, &client);
+    o.client_secret = env("FREELIB_OIDC_CLIENT_SECRET");
+    if let Some(s) = env("FREELIB_OIDC_SCOPES") {
+        o.scopes = s
+            .split([' ', ','])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+    }
+    if !o.scopes.iter().any(|s| s == "openid") {
+        o.scopes.insert(0, "openid".into());
+    }
+    if let Some(b) = env("FREELIB_OIDC_BUTTON") {
+        o.button = b;
+    }
+    o.admin_group = env("FREELIB_OIDC_ADMIN_GROUP");
+    o.auto_create = flag("FREELIB_OIDC_AUTO_CREATE", true);
+    o.disable_password = flag("FREELIB_OIDC_DISABLE_PASSWORD", false);
+    Ok(Some(o))
 }
 
 /// Parses `FREELIB_ALLOWED_HOSTS` (`a.example.org, *.example.net:8080`): lower-case host names,
@@ -79,14 +165,33 @@ pub fn which(name: &str) -> Option<PathBuf> {
 }
 
 impl Config {
+    /// Whether cookies get the `Secure` flag regardless of the request (`FREELIB_PUBLIC_URL`
+    /// is `https://…`).
+    pub fn public_https(&self) -> bool {
+        self.public_url
+            .as_deref()
+            .is_some_and(|u| u.to_ascii_lowercase().starts_with("https://"))
+    }
+
+    /// Reads the configuration; exits the process on a broken single sign-on setup.
     pub fn from_env() -> Config {
+        match Self::try_from_env() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("configuration error: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    pub fn try_from_env() -> Result<Config, String> {
         let calibre = match env("FREELIB_CALIBRE") {
             // explicit "none"/"off" disables Calibre
             Some(v) if v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("off") => None,
             Some(v) => which(&v).or(Some(PathBuf::from(v))),
             None => which("ebook-convert"),
         };
-        Config {
+        Ok(Config {
             bind: env("FREELIB_BIND")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
@@ -138,7 +243,9 @@ impl Config {
                 .map(|s| parse_hosts(&s))
                 .unwrap_or_default(),
             max_jobs_per_user: 5,
-        }
+            public_url: env("FREELIB_PUBLIC_URL").map(|u| u.trim_end_matches('/').to_string()),
+            oidc: oidc_from_env()?,
+        })
     }
 
     /// A configuration rooted in one directory (tests, tools).
@@ -164,6 +271,8 @@ impl Config {
             cache_max_bytes: 2048 * 1024 * 1024,
             allowed_hosts: Vec::new(),
             max_jobs_per_user: 5,
+            public_url: None,
+            oidc: None,
         }
     }
 }
