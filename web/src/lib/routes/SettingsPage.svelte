@@ -24,6 +24,8 @@
   let editingDevice = $state<Device | null>(null);
   let testTo = $state('');
   let recipientsText = $state('');
+  // The SMTP password is write-only: the server only says whether one is set.
+  let smtpPassword = $state('');
 
   $effect(() => { loadDevices(); api.fonts().then((f) => (fonts = f)); });
   $effect(() => {
@@ -69,22 +71,36 @@
     devicesState.items = devicesState.items.filter((d) => d.id !== id);
   }
 
-  async function saveSettings() {
-    if (!settings) return;
+  async function saveSettings(opts: { clearPassword?: boolean; quiet?: boolean } = {}): Promise<boolean> {
+    if (!settings) return false;
     settings.smtp.allowedRecipients = recipientsText
       .split(/[\n,]/)
       .map((p) => p.trim())
       .filter((p) => p !== '');
+    const smtp = { ...settings.smtp };
+    delete smtp.password;
+    if (opts.clearPassword) smtp.password = '';
+    else if (smtpPassword !== '') smtp.password = smtpPassword;
     try {
-      settings = await api.updateSettings(settings);
+      settings = await api.updateSettings({ ...settings, smtp });
       recipientsText = settings.smtp.allowedRecipients.join('\n');
-      showToast(t('common.save'));
+      smtpPassword = '';
+      if (!opts.quiet) showToast(t('settings.saved'));
+      return true;
     } catch (e) {
       showToast(errorText(e), 'error');
+      return false;
     }
   }
   async function testSmtp() {
-    try { await api.testSmtp(testTo); showToast('OK'); } catch (e) { showToast(errorText(e), 'error'); }
+    // the test uses the stored settings, so save what is on screen first
+    if (!(await saveSettings({ quiet: true }))) return;
+    try {
+      await api.testSmtp(testTo);
+      showToast(t('settings.mail.testSent', { to: testTo }));
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    }
   }
 
   let newUsername = $state(''), newPassword = $state(''), newRole = $state('reader');
@@ -154,17 +170,34 @@
             <option value="none">none</option><option value="starttls">starttls</option><option value="tls">tls</option>
           </select>
         </label>
-        <label class="field">{t('settings.mail.username')}<input type="text" bind:value={settings.smtp.username} /></label>
+        <label class="field">{t('settings.mail.username')}<input type="text" autocomplete="off" bind:value={settings.smtp.username} /></label>
+        <label class="field">{t('settings.mail.password')}
+          <input
+            type="password"
+            autocomplete="new-password"
+            placeholder={settings.smtp.passwordSet ? t('settings.mail.passwordKeep') : ''}
+            bind:value={smtpPassword}
+          />
+          {#if settings.smtp.passwordSet}
+            <span class="muted hint">{t('settings.mail.passwordSet')}
+              <button type="button" class="link" onclick={() => saveSettings({ clearPassword: true })}>{t('settings.mail.passwordClear')}</button>
+            </span>
+          {/if}
+        </label>
         <label class="field">{t('settings.mail.from')}<input type="text" bind:value={settings.smtp.from} /></label>
         <label class="field">{t('settings.mail.pause')}<input type="number" bind:value={settings.smtp.pauseSeconds} /></label>
         <label class="field">{t('settings.mail.dailyLimit')}<input type="number" min="0" bind:value={settings.smtp.dailyLimitPerUser} /></label>
+        <label class="field">{t('settings.mail.subject')}
+          <input type="text" placeholder="%b" bind:value={settings.smtp.subject} />
+          <span class="muted hint">{t('settings.mail.subjectHint')}</span>
+        </label>
       </div>
       <label class="field recipients">{t('settings.mail.allowedRecipients')}
         <textarea rows="4" spellcheck="false" placeholder="*@kindle.com" bind:value={recipientsText}></textarea>
         <span class="muted hint">{t('settings.mail.allowedRecipientsHint')}</span>
       </label>
       <div class="row">
-        <button type="button" class="primary" onclick={saveSettings}>{t('common.save')}</button>
+        <button type="button" class="primary" onclick={() => saveSettings()}>{t('common.save')}</button>
       </div>
       <div class="test-row">
         <input type="text" placeholder={t('settings.mail.testTo')} bind:value={testTo} />
@@ -178,7 +211,7 @@
         <span>{t('settings.server.calibre')}:</span>
         <span>{settings.calibre.available ? `${t('settings.server.calibreAvailable')} (${settings.calibre.version})` : t('settings.server.calibreMissing')}</span>
       </div>
-      <div class="row"><button type="button" class="primary" onclick={saveSettings}>{t('common.save')}</button></div>
+      <div class="row"><button type="button" class="primary" onclick={() => saveSettings()}>{t('common.save')}</button></div>
     {:else if sec === 'users'}
       <h2>{t('settings.users')}</h2>
       <div class="device-list">
@@ -251,6 +284,7 @@
   .field.recipients { max-width: 520px; margin-top: 12px; }
   .field.recipients textarea { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font: inherit; font-size: 14px; color: var(--ink); resize: vertical; }
   .field .hint { font-size: 12px; }
+  .link { border: 0; background: none; padding: 0 0 0 4px; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
   .fields-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px 16px; }
   select, input[type='text'], input[type='number'], input[type='password'] { height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font: inherit; font-size: 14px; color: var(--ink); }
   .seg { display: flex; gap: 6px; }

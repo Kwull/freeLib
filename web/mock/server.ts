@@ -486,7 +486,7 @@ export function installMockApi(server: Connect.Server) {
         const body = await readBody(req);
         store.settings = {
           ...body,
-          smtp: { ...store.settings.smtp, ...body.smtp, passwordSet: body.smtp?.password ? true : store.settings.smtp.passwordSet },
+          smtp: (({ password: _pw, ...rest }) => rest)({ ...store.settings.smtp, ...body.smtp, passwordSet: body.smtp?.password === undefined ? store.settings.smtp.passwordSet : body.smtp.password !== '' }),
         };
         return send(res, 200, store.settings);
       }

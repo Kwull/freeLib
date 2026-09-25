@@ -109,6 +109,10 @@ export type SmtpSettings = {
   /** Recipient patterns (`*` = any characters) that sending by e-mail is limited to. */
   allowedRecipients: string[];
   dailyLimitPerUser: number;
+  /** Mail subject template: `%b` = book title, `%a` = author(s). */
+  subject: string;
+  /** Write-only: send to change the SMTP password, `''` clears it, omit to keep it. */
+  password?: string;
 };
 export type Settings = {
   smtp: SmtpSettings;

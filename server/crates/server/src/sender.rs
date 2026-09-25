@@ -279,10 +279,17 @@ async fn run(
                 let data = data.into_bytes().await?;
                 let day = local_today();
                 st.db.run(move |c| db::add_mail(c, user_id, &day)).await?;
+                let authors = book
+                    .authors
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let subject = smtp.subject_for(&book.title, &authors);
                 match crate::mail::send(
                     smtp,
                     &to,
-                    &book.title,
+                    &subject,
                     "Sent by freeLib",
                     Some((&name, mime, data)),
                 )

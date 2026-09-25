@@ -20,6 +20,7 @@ fn settings_json(st: &AppState, smtp: &SmtpConfig, opds: &OpdsConfig) -> Value {
             "pauseSeconds": smtp.pause_seconds,
             "allowedRecipients": smtp.allowed_recipients,
             "dailyLimitPerUser": smtp.daily_limit_per_user,
+            "subject": smtp.subject,
         },
         "opds": opds,
         "calibre": {
@@ -54,6 +55,7 @@ pub struct SmtpIn {
     pause_seconds: Option<u64>,
     allowed_recipients: Option<Vec<String>>,
     daily_limit_per_user: Option<u32>,
+    subject: Option<String>,
 }
 
 /// Recipient patterns: at most 100, each `*` or containing `@`, no spaces or control characters.
@@ -145,6 +147,14 @@ pub async fn put(
                 }
                 if let Some(v) = s.daily_limit_per_user {
                     smtp.daily_limit_per_user = v.min(100_000);
+                }
+                if let Some(v) = s.subject {
+                    smtp.subject = v
+                        .trim()
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .take(250)
+                        .collect();
                 }
             }
             if let Some(o) = b.opds {

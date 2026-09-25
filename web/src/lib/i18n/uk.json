@@ -249,5 +249,12 @@
   "browse.seriesCount.few": "{count} серії",
   "browse.seriesCount.many": "{count} серій",
   "browse.seriesCount.other": "{count} серій",
-  "browse.addFilter": "+ Фільтр"
+  "browse.addFilter": "+ Фільтр",
+  "settings.saved": "Налаштування збережено",
+  "settings.mail.passwordKeep": "Збережено — залиште порожнім, щоб не змінювати",
+  "settings.mail.passwordSet": "Пароль збережено.",
+  "settings.mail.passwordClear": "Видалити",
+  "settings.mail.subject": "Тема листа",
+  "settings.mail.subjectHint": "%b — назва книги, %a — автор. Порожньо — назва книги.",
+  "settings.mail.testSent": "Тестовий лист надіслано на {to}"
 }
