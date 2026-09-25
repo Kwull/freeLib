@@ -73,6 +73,25 @@ impl TestApp {
         }
     }
 
+    /// Stops this app and starts a fresh one over the same directories (default config),
+    /// like a server restart.
+    pub async fn restart(self) -> TestApp {
+        let TestApp {
+            dir, state, router, ..
+        } = self;
+        drop(router);
+        drop(state);
+        let cfg = Config::for_dir(dir.path());
+        let state = freelib_server::init(cfg).await.unwrap();
+        let router = freelib_server::router(state.clone());
+        TestApp {
+            dir,
+            state,
+            router,
+            cookie: None,
+        }
+    }
+
     pub fn root(&self) -> &Path {
         self.dir.path()
     }

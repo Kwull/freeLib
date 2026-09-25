@@ -4,7 +4,7 @@
   import { navigate } from '../router.svelte';
   import { t, i18nState, setLang } from '../i18n';
   import { themeState, setTheme } from '../stores/theme.svelte';
-  import { librariesState } from '../stores/libraries.svelte';
+  import { librariesState, loadLibraries, setCurrentLibrary } from '../stores/libraries.svelte';
   import { devicesState, loadDevices } from '../stores/devices.svelte';
   import { sessionState } from '../stores/session.svelte';
   import Icon from '../components/Icon.svelte';
@@ -66,10 +66,27 @@
       showToast(errorText(e), 'error');
     }
   }
-  async function deleteDevice(id: number) {
-    await api.deleteDevice(id);
-    devicesState.items = devicesState.items.filter((d) => d.id !== id);
+  async function deleteDevice(d: Device) {
+    if (!confirm(t('settings.devices.deleteConfirm', { name: d.name }))) return;
+    try {
+      await api.deleteDevice(d.id);
+      devicesState.items = devicesState.items.filter((x) => x.id !== d.id);
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    }
   }
+  async function setDefaultLibrary(id: number) {
+    setCurrentLibrary(id);
+    if (!isAdmin) return;
+    try {
+      await api.updateLibrary(id, { isDefault: true });
+      await loadLibraries();
+      showToast(t('settings.saved'));
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    }
+  }
+  const kindLabel = (k: string) => t(`settings.devices.kind.${k}`);
 
   async function saveSettings(opts: { clearPassword?: boolean; quiet?: boolean } = {}): Promise<boolean> {
     if (!settings) return false;
@@ -105,13 +122,23 @@
 
   let newUsername = $state(''), newPassword = $state(''), newRole = $state('reader');
   async function addUser() {
-    const u = await api.createUser({ username: newUsername, password: newPassword, role: newRole });
-    users.push(u);
-    newUsername = ''; newPassword = '';
+    if (!newUsername.trim() || !newPassword) return;
+    try {
+      const u = await api.createUser({ username: newUsername.trim(), password: newPassword, role: newRole });
+      users.push(u);
+      newUsername = ''; newPassword = '';
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    }
   }
-  async function deleteUser(id: number) {
-    await api.deleteUser(id);
-    users = users.filter((u) => u.id !== id);
+  async function deleteUser(u: User) {
+    if (!confirm(t('settings.users.deleteConfirm', { name: u.username }))) return;
+    try {
+      await api.deleteUser(u.id);
+      users = users.filter((x) => x.id !== u.id);
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    }
   }
 </script>
 
@@ -142,7 +169,7 @@
         </div>
       </label>
       <label class="field">{t('settings.general.defaultLibrary')}
-        <select>
+        <select onchange={(e) => setDefaultLibrary(Number((e.currentTarget as HTMLSelectElement).value))} disabled={!isAdmin && librariesState.items.length < 2}>
           {#each librariesState.items as l (l.id)}<option value={l.id} selected={l.isDefault}>{l.name}</option>{/each}
         </select>
       </label>
@@ -150,12 +177,19 @@
       <h2>{t('settings.devices')}</h2>
       <div class="device-list">
         {#each devicesState.items as d (d.id)}
+          {@const canEdit = isAdmin || (!d.shared && d.kind !== 'folder')}
           <div class="device-row">
-            <span class="name">{d.name}</span>
-            <span class="muted">{d.kind} · {d.format}</span>
-            {#if d.shared}<span class="badge">{t('settings.devices.shared')}</span>{/if}
-            <button type="button" onclick={() => (editingDevice = { ...d, options: { ...d.options } })}>{t('common.edit')}</button>
-            <button type="button" class="danger" onclick={() => deleteDevice(d.id)}>{t('common.delete')}</button>
+            <div class="dinfo">
+              <span class="name">{d.name}</span>
+              <span class="muted">
+                {kindLabel(d.kind)} · {d.format.toUpperCase()}{#if d.kind !== 'download'}{' · '}{#if d.target}<span class="target">{d.target}</span>{:else}<span class="warn">{d.kind === 'email' ? t('settings.devices.noAddress') : t('settings.devices.noFolder')}</span>{/if}{/if}
+              </span>
+            </div>
+            {#if d.shared}<span class="badge" title={t('settings.devices.shared')}>{t('settings.devices.sharedShort')}</span>{/if}
+            {#if canEdit}
+              <button type="button" class="btn" onclick={() => (editingDevice = { ...d, options: { ...d.options } })}>{t('common.edit')}</button>
+              <button type="button" class="danger" onclick={() => deleteDevice(d)}>{t('common.delete')}</button>
+            {/if}
           </div>
         {/each}
       </div>
@@ -222,14 +256,14 @@
               <option value="admin">{t('settings.users.role.admin')}</option>
               <option value="reader">{t('settings.users.role.reader')}</option>
             </select>
-            <button type="button" class="danger" onclick={() => deleteUser(u.id)}>{t('common.delete')}</button>
+            <button type="button" class="danger" onclick={() => deleteUser(u)}>{t('common.delete')}</button>
           </div>
         {/each}
       </div>
       <div class="test-row">
         <input type="text" placeholder={t('login.username')} bind:value={newUsername} />
         <input type="password" placeholder={t('login.password')} bind:value={newPassword} />
-        <select bind:value={newRole}><option value="reader">reader</option><option value="admin">admin</option></select>
+        <select bind:value={newRole} aria-label={t('settings.users.role')}><option value="reader">{t('settings.users.role.reader')}</option><option value="admin">{t('settings.users.role.admin')}</option></select>
         <button type="button" onclick={addUser}>{t('settings.users.add')}</button>
       </div>
     {:else if sec === 'about'}
@@ -245,18 +279,23 @@
     <form class="form" onsubmit={(e) => { e.preventDefault(); saveDevice(); }}>
       <div class="fields-grid">
         <label class="field">{t('libraries.addDialog.name')}<input type="text" bind:value={editingDevice.name} required /></label>
-        <label class="field">Kind
+        <label class="field">{t('settings.devices.kind')}
           <select bind:value={editingDevice.kind}>
-            <option value="email">email</option><option value="download">download</option><option value="folder">folder</option>
+            <option value="email">{kindLabel('email')}</option><option value="download">{kindLabel('download')}</option>
+            {#if isAdmin}<option value="folder">{kindLabel('folder')}</option>{/if}
           </select>
         </label>
-        <label class="field">Format
+        <label class="field">{t('settings.devices.format')}
           <select bind:value={editingDevice.format}>
-            <option value="original">original</option><option value="epub">epub</option><option value="kepub">kepub</option>
-            <option value="azw3">azw3</option><option value="mobi">mobi</option><option value="pdf">pdf</option>
+            <option value="original">{t('details.original')}</option><option value="epub">EPUB</option><option value="kepub">KEPUB (Kobo)</option>
+            <option value="azw3">AZW3 (Kindle)</option><option value="mobi">MOBI</option><option value="pdf">PDF</option>
           </select>
         </label>
-        <label class="field">Target<input type="text" bind:value={editingDevice.target} /></label>
+        {#if editingDevice.kind !== 'download'}
+          <label class="field">{editingDevice.kind === 'email' ? t('send.dest.email') : t('send.dest.folder')}
+            <input type="text" bind:value={editingDevice.target} placeholder={editingDevice.kind === 'email' ? 'name@kindle.com' : 'incoming'} />
+          </label>
+        {/if}
         <label class="field full">{t('send.fileName')}<input type="text" bind:value={editingDevice.fileName} /></label>
         {#if isAdmin}
           <label class="checkbox"><input type="checkbox" bind:checked={editingDevice.shared} />{t('settings.devices.shared')}</label>
@@ -273,6 +312,14 @@
 
 <style>
   .settings-page { flex-grow: 1; overflow-y: auto; background: var(--surface); display: flex; }
+  @media (max-width: 900px) {
+    .settings-page { flex-direction: column; }
+    .tabs { width: auto; flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--line); padding: 8px 12px; }
+    .tabs button { white-space: nowrap; flex-shrink: 0; }
+    .panel { padding: 16px; }
+    .fields-grid { grid-template-columns: 1fr; }
+    .field.full { grid-column: auto; }
+  }
   .tabs { width: 200px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; padding: 20px 12px; border-right: 1px solid var(--line); }
   .tabs button { text-align: left; height: 38px; padding: 0 12px; border: none; border-radius: 8px; background: transparent; font-size: 14px; color: var(--muted-2); }
   .tabs button:hover { background: var(--surface-hover); }
@@ -292,9 +339,15 @@
   .seg button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-soft-ink); }
   .device-list { display: flex; flex-direction: column; gap: 4px; }
   .device-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
-  .device-row .name { font-weight: 500; flex-grow: 1; }
-  .device-row .muted { color: var(--muted); font-size: 12px; }
-  .badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-soft-ink); }
+  .device-row { padding: 10px 12px; }
+  .dinfo { display: flex; flex-direction: column; gap: 2px; flex-grow: 1; min-width: 0; }
+  .device-row .name { font-weight: 500; }
+  .device-row .muted { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .target { color: var(--muted-2); }
+  .warn { color: var(--amber); }
+  .btn { height: 30px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+  .btn:hover, button.danger:hover { background: var(--surface-hover); }
+  .badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-soft-ink); white-space: nowrap; flex-shrink: 0; }
   button.primary { align-self: flex-start; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; }
   button.danger { color: var(--danger); border: 1px solid var(--border); background: var(--surface); height: 30px; padding: 0 10px; border-radius: 6px; }
   .row { display: flex; align-items: center; gap: 10px; }

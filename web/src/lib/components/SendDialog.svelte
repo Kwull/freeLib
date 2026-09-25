@@ -3,14 +3,20 @@
   import Icon from './Icon.svelte';
   import { api, errorText } from '../api/client';
   import type { Book, Device } from '../api/types';
-  import { devicesState } from '../stores/devices.svelte';
+  import { devicesState, preferredDevice, rememberDevice } from '../stores/devices.svelte';
+  import { getPref, setPref } from '../stores/prefs.svelte';
+  import { watchJob } from '../stores/jobs.svelte';
   import { fillFileNameTemplate } from '../utils/fileNameTemplate';
   import { t, tn } from '../i18n';
   import { showToast } from '../stores/toast.svelte';
   import { clear as clearSelection } from '../stores/selection.svelte';
   import { navigate } from '../router.svelte';
 
-  let { lib, bookIds, open, onClose }: { lib: number; bookIds: number[]; open: boolean; onClose: () => void } = $props();
+  let { lib, bookIds, open, onClose, device: initialDevice }: {
+    lib: number; bookIds: number[]; open: boolean; onClose: () => void;
+    /** preselected device (e.g. the details pane's "Send to Kindle") */
+    device?: number;
+  } = $props();
 
   let books = $state<Book[]>([]);
   let deviceId = $state<number | null>(null);
@@ -23,14 +29,15 @@
   $effect(() => {
     if (!open || bookIds.length === 0) return;
     books = [];
-    Promise.all(bookIds.slice(0, 30).map((id) => api.book(lib, id))).then((list) => { books = list; });
-    if (devicesState.items.length && deviceId === null) deviceId = devicesState.items[0].id;
+    Promise.all(bookIds.slice(0, 30).map((id) => api.book(lib, id))).then((list) => { books = list; }).catch(() => {});
+    if (devicesState.items.length && deviceId === null) deviceId = initialDevice ?? preferredDevice()?.id ?? devicesState.items[0].id;
   });
 
   $effect(() => {
     const dev = devicesState.items.find((d) => d.id === deviceId);
     if (dev) {
-      target = dev.target ?? '';
+      // the address typed on the last send to this device, else the device's own
+      target = getPref<Record<string, string>>('sendTargets', {})[String(dev.id)] ?? dev.target ?? '';
       fileName = dev.fileName;
       generateCover = dev.options.createCover !== 'never';
       joinSeries = dev.options.joinSeries;
@@ -38,7 +45,10 @@
   });
 
   const device = $derived(devicesState.items.find((d) => d.id === deviceId) ?? null);
-  const titleLine = $derived(books.map((b) => b.title).join(', '));
+  const needsAddress = $derived(device?.kind === 'email' && !target.trim());
+  const titleLine = $derived(
+    books.slice(0, 3).map((b) => `«${b.title}»`).join(', ') + (bookIds.length > 3 ? ` ${t('send.andMore', { count: bookIds.length - 3 })}` : ''),
+  );
   const preview = $derived.by(() => {
     if (!books[0] || !device) return '';
     const name = fillFileNameTemplate(fileName, books[0], { transliterate: device.options.transliterate });
@@ -47,9 +57,9 @@
   });
 
   function destLabel(d: Device): string {
-    if (d.kind === 'email') return 'Email address';
-    if (d.kind === 'folder') return 'Folder';
-    return 'Save to';
+    if (d.kind === 'email') return t('send.dest.email');
+    if (d.kind === 'folder') return t('send.dest.folder');
+    return t('send.dest.download');
   }
   function actionLabel(d: Device | null): string {
     if (!d) return '';
@@ -61,7 +71,7 @@
     if (!device) return;
     sending = true;
     try {
-      await api.send({
+      const job = await api.send({
         library: lib,
         books: bookIds,
         device: device.id,
@@ -72,7 +82,12 @@
           joinSeries,
         },
       });
-      showToast(t('send.background'));
+      watchJob(job);
+      rememberDevice(device.id);
+      if (device.kind === 'email' && target && target !== (device.target ?? '')) {
+        setPref('sendTargets', { ...getPref<Record<string, string>>('sendTargets', {}), [String(device.id)]: target });
+      }
+      showToast(t('send.started', { device: device.name }));
       clearSelection(lib);
       onClose();
     } catch (err) {
@@ -100,7 +115,7 @@
           <span class="name">{d.name}</span>
           {#if d.id === deviceId}<Icon name="check" size={18} />{/if}
         </span>
-        <span class="how">{d.kind === 'email' ? 'Send by email' : d.kind === 'folder' ? 'Copy to server folder' : 'Download'}</span>
+        <span class="how">{d.kind === 'email' ? t('send.how.email') : d.kind === 'folder' ? t('send.how.folder') : t('send.how.download')}</span>
         <span class="fmt">{d.format.toUpperCase()}</span>
       </button>
     {/each}
@@ -108,10 +123,12 @@
 
   {#if device}
     <div class="options">
-      <label>{destLabel(device)}
-        <input type="text" bind:value={target} />
-      </label>
-      <label>{t('send.fileName')}
+      {#if device.kind !== 'download'}
+        <label>{destLabel(device)}
+          <input type="text" bind:value={target} placeholder={device.kind === 'email' ? 'name@kindle.com' : ''} />
+        </label>
+      {/if}
+      <label class:wide={device.kind === 'download'}>{t('send.fileName')}
         <input type="text" bind:value={fileName} />
       </label>
       <div class="preview">{t('send.preview')}: <span>{preview}</span></div>
@@ -127,15 +144,22 @@
   {/if}
 
   <div class="footer">
-    <span class="bg-note">{t('send.background')}</span>
+    <span class="bg-note" class:warn={needsAddress}>{needsAddress ? t('send.needAddress') : t('send.background')}</span>
     <button type="button" class="secondary" onclick={onClose}>{t('send.cancel')}</button>
-    <button type="button" class="primary" disabled={!device || sending} onclick={submit}>{actionLabel(device)}</button>
+    <!-- svelte-ignore a11y_autofocus -->
+    <button type="button" class="primary" autofocus disabled={!device || sending || needsAddress} onclick={submit}>{actionLabel(device)}</button>
   </div>
 </Dialog>
 
 <style>
   .subtitle { margin: 4px 24px 0; font-size: 14px; color: var(--muted); }
   fieldset.devices { border: none; margin: 18px 24px 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 700px) {
+    fieldset.devices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .options { grid-template-columns: 1fr !important; }
+    .options label.wide, .preview { grid-column: auto !important; }
+    .bg-note:not(.warn) { display: none; }
+  }
   legend { padding: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; }
   .device-card {
     display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 84px; padding: 12px 14px;
@@ -148,14 +172,19 @@
   .options { margin: 18px 24px 0; padding: 16px; border-radius: 10px; background: var(--page); display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px 20px; }
   .options label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted-2); }
   .options input[type='text'] { height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 14px; color: var(--ink); background: var(--surface); }
+  .options label.wide { grid-column: span 2; }
   .preview { grid-column: span 2; font-size: 12px; color: var(--muted); }
   .preview span { color: var(--ink); }
-  .checkbox { flex-direction: row; align-items: center; gap: 8px; font-size: 14px; }
+  .options label.checkbox { flex-direction: row; align-items: center; gap: 8px; font-size: 14px; }
   .checkbox input { width: 16px; height: 16px; accent-color: var(--accent); }
   .note { padding: 12px 24px 0; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
   .link-btn { all: unset; color: var(--accent); cursor: pointer; }
-  .footer { margin-top: 20px; padding: 14px 24px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+  .footer {
+    margin-top: 20px; padding: 14px 24px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px;
+    position: sticky; bottom: 0; background: var(--surface);
+  }
   .bg-note { font-size: 13px; color: var(--muted); flex-grow: 1; }
+  .bg-note.warn { color: var(--amber); }
   button.secondary { display: flex; align-items: center; height: 40px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 14px; }
   button.primary { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 500; }
   button.primary:disabled { opacity: .5; cursor: default; }

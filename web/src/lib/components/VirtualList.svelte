@@ -17,7 +17,7 @@
     overscan?: number;
     row: Snippet<[T, number]>;
     scrollToIndex?: number | null;
-    onRangeChange?: (start: number, end: number) => void;
+    onRangeChange?: (start: number, end: number, firstVisible: number) => void;
     class?: string;
   } = $props();
 
@@ -32,24 +32,41 @@
   const padTop = $derived(startIndex * itemHeight);
 
   $effect(() => {
-    if (onRangeChange) onRangeChange(startIndex, endIndex);
+    if (onRangeChange) onRangeChange(startIndex, endIndex, Math.min(items.length - 1, Math.floor(scrollTop / itemHeight)));
   });
 
   $effect(() => {
     if (scrollToIndex !== null && scrollToIndex !== undefined && viewport) {
-      viewport.scrollTop = scrollToIndex * itemHeight;
+      viewport.scrollTop = Math.max(0, scrollToIndex) * itemHeight;
+      scrollTop = viewport.scrollTop;
       scrollToIndex = null;
     }
   });
+
+  /** Scrolls row `i` into view only if it is not fully visible (keyboard navigation). */
+  export function reveal(i: number) {
+    if (!viewport) return;
+    const top = i * itemHeight;
+    if (top < viewport.scrollTop) viewport.scrollTop = top;
+    else if (top + itemHeight > viewport.scrollTop + viewport.clientHeight) viewport.scrollTop = top + itemHeight - viewport.clientHeight;
+    scrollTop = viewport.scrollTop;
+  }
 
   function onScroll() {
     if (viewport) scrollTop = viewport.scrollTop;
   }
 
   function onResize(node: HTMLDivElement) {
-    const ro = new ResizeObserver(() => { viewportHeight = node.clientHeight; });
+    // next frame: updating the rendered rows inside the observer callback can trigger
+    // "ResizeObserver loop completed with undelivered notifications"
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => { viewportHeight = node.clientHeight; });
+    });
+    viewportHeight = node.clientHeight;
     ro.observe(node);
-    return { destroy: () => ro.disconnect() };
+    return { destroy: () => { cancelAnimationFrame(raf); ro.disconnect(); } };
   }
 </script>
 

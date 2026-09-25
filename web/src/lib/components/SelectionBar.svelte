@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { t } from '../i18n';
-  import { defaultDevice } from '../stores/devices.svelte';
+  import { preferredDevice as defaultDevice } from '../stores/devices.svelte';
 
   let {
     count, onSend, onDownload, onShelf, onClear,
@@ -46,12 +46,14 @@
   .bar {
     position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
     display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 16px;
-    border-radius: 10px; background: var(--ink); color: #FFFFFF; font-size: 14px; white-space: nowrap;
+    border-radius: 10px; background: var(--inverse-bg); color: var(--inverse-ink); font-size: 14px; white-space: nowrap;
     z-index: 5; box-shadow: 0 8px 24px rgba(0,0,0,.25);
   }
   .count { margin-right: 8px; }
-  button { display: flex; align-items: center; gap: 6px; height: 36px; border: none; border-radius: 7px; font-size: 14px; color: #FFFFFF; background: transparent; }
-  button.primary { padding: 0 14px; background: var(--accent); font-weight: 500; }
+  button { display: flex; align-items: center; gap: 6px; height: 36px; border: none; border-radius: 7px; font-size: 14px; color: inherit; background: transparent; }
+  button:hover { background: var(--inverse-hover); }
+  button.primary { padding: 0 14px; background: var(--accent); color: #fff; font-weight: 500; }
+  button.primary:hover { background: var(--accent-hover); }
   button.ghost { padding: 0 12px; }
   button.icon { width: 36px; padding: 0; justify-content: center; }
   .phone-only { display: none; }

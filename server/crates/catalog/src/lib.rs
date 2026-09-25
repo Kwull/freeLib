@@ -10,6 +10,7 @@ pub mod model;
 pub mod normalize;
 pub mod schema;
 pub mod search;
+pub mod summary;
 pub mod util;
 
 pub use catalog::{
@@ -24,3 +25,4 @@ pub use schema::{
     migrate_app_db, open_app_db,
 };
 pub use search::{BookAttrs, SearchKind, SearchQuery};
+pub use summary::{ANTHOLOGY_MIN_AUTHORS, AuthorSummary, Coauthor, SeriesCount};

@@ -1,38 +1,56 @@
 <script lang="ts">
-  import { api } from '../api/client';
-  import type { BookDetail } from '../api/types';
+  import { api, errorText } from '../api/client';
+  import type { AuthorSummary, BookDetail } from '../api/types';
   import Icon from './Icon.svelte';
   import CoverThumb from './CoverThumb.svelte';
   import Rating from './Rating.svelte';
+  import Splitter from './Splitter.svelte';
   import { formatSize, formatDate } from '../utils/format';
-  import { t, i18nState } from '../i18n';
+  import { t, tn, i18nState } from '../i18n';
   import { navigate } from '../router.svelte';
-  import { defaultDevice } from '../stores/devices.svelte';
+  import { preferredDevice } from '../stores/devices.svelte';
   import { shelvesState } from '../stores/shelves.svelte';
+  import {
+    PANE_LIMITS, paneWidth, setPaneWidth, detailsCollapsed, setDetailsCollapsed,
+  } from '../stores/layout.svelte';
 
-  let { lib, bookId, onSend, onAddShelf }: {
+  let { lib, bookId, onSend, onAddShelf, summary = null, standalone = false }: {
     lib: number; bookId: number | null;
     onSend: (ids: number[], device?: number) => void;
     onAddShelf: (ids: number[]) => void;
+    /** shown when no book is selected (author pages) */
+    summary?: AuthorSummary | null;
+    /** the phone book page: full width, no resize/collapse */
+    standalone?: boolean;
   } = $props();
 
   let detail = $state<BookDetail | null>(null);
   let loading = $state(false);
+  let error = $state<string | null>(null);
   let downloadMenuOpen = $state(false);
+  let allAuthors = $state(false);
+  let allSeries = $state(false);
   let genreNames = $state<Map<number, string>>(new Map());
 
   $effect(() => {
     const lang = i18nState.lang;
-    api.genres(lib, lang).then((gs) => (genreNames = new Map(gs.map((g) => [g.id, g.name]))));
+    api.genres(lib, lang).then((gs) => (genreNames = new Map(gs.map((g) => [g.id, g.name])))).catch(() => {});
   });
 
   $effect(() => {
-    if (bookId === null) { detail = null; return; }
+    allAuthors = false;
+    downloadMenuOpen = false;
+    if (bookId === null) { detail = null; error = null; return; }
     let cancelled = false;
     loading = true;
-    api.book(lib, bookId).then((d) => { if (!cancelled) { detail = d; loading = false; } });
+    error = null;
+    api.book(lib, bookId)
+      .then((d) => { if (!cancelled) detail = d; })
+      .catch((e) => { if (!cancelled) { detail = null; error = errorText(e); } })
+      .finally(() => { if (!cancelled) loading = false; });
     return () => { cancelled = true; };
   });
+  $effect(() => { summary?.id; allSeries = false; });
 
   async function rate(v: number) {
     if (!detail) return;
@@ -40,114 +58,253 @@
     await api.setRating(lib, detail.id, v);
   }
 
-  const dev = $derived(defaultDevice());
+  const dev = $derived(preferredDevice());
   const shelfNames = $derived.by(() => {
     if (!detail) return [];
     return detail.shelves.map((id) => shelvesState.items.find((s) => s.id === id)?.name).filter(Boolean) as string[];
   });
+  const titleSize = $derived(!detail ? 20 : detail.title.length > 120 ? 15 : detail.title.length > 60 ? 17 : 20);
+  const AUTHORS_SHOWN = 3;
+  const shownAuthors = $derived(detail ? (allAuthors ? detail.authors : detail.authors.slice(0, AUTHORS_SHOWN)) : []);
+
+  // Resizing / collapsing (desktop only)
+  let liveWidth = $state<number | null>(null);
+  const width = $derived(liveWidth ?? paneWidth('details'));
+  const collapsed = $derived(!standalone && detailsCollapsed());
+  const hasContent = $derived(bookId !== null || !!summary);
+  const langName = (code: string) => {
+    try { return new Intl.DisplayNames([i18nState.lang], { type: 'language' }).of(code) ?? code; } catch { return code; }
+  };
+  const years = $derived(summary && summary.firstDate ? `${summary.firstDate.slice(0, 4)}–${summary.lastDate.slice(0, 4)}` : '');
+  const SERIES_SHOWN = 12;
 </script>
 
-<aside aria-label="Book details" class="details">
-  {#if !detail}
-    <div class="empty">{loading ? t('common.loading') : t('details.noSelection')}</div>
+{#if standalone || hasContent}
+  {#if collapsed}
+    <aside class="rail" aria-label={t('details.title')}>
+      <button type="button" class="rail-btn" aria-label={t('details.show')} title={t('details.show')} onclick={() => setDetailsCollapsed(false)}>
+        <Icon name="chevronLeft" size={16} />
+      </button>
+      <span class="rail-label">{t('details.title')}</span>
+    </aside>
   {:else}
-    <div class="top">
-      <CoverThumb {lib} bookId={detail.id} title={detail.title} width={112} height={168} />
-      <div class="meta">
-        <h2>{detail.title}</h2>
-        {#each detail.authors as a (a.id)}
-          <a href="/l/{lib}/authors/{a.id}" data-link>{a.name}</a>
-        {/each}
-        {#if detail.series}
-          <span class="muted">
-            <a href="/l/{lib}/series/{detail.series.id}" data-link>{detail.series.name}</a>
-            {#if detail.serno}· #{detail.serno}{/if}
-          </span>
-        {/if}
-      </div>
-    </div>
-
-    <div class="actions">
-      {#if dev}
-        <button type="button" class="primary" onclick={() => onSend([detail!.id], dev.id)}>
-          <Icon name="send" size={16} />{t('details.sendToDevice', { device: dev.name })}
+    {#if !standalone}
+      <Splitter
+        value={width}
+        min={PANE_LIMITS.details.min}
+        max={PANE_LIMITS.details.max}
+        side="after"
+        label={t('layout.resizeDetails')}
+        onInput={(v) => (liveWidth = v)}
+        onCommit={(v) => { setPaneWidth('details', v); liveWidth = null; }}
+        onReset={() => { setPaneWidth('details', null); liveWidth = null; }}
+      />
+    {/if}
+    <aside aria-label={t('details.title')} class="details" class:standalone style:--w="{width}px">
+      {#if !standalone}
+        <button type="button" class="collapse" aria-label={t('details.hide')} title={t('details.hide')} onclick={() => setDetailsCollapsed(true)}>
+          <Icon name="chevronRight" size={16} />
         </button>
       {/if}
-      <div class="dl-wrap">
-        <button type="button" class="secondary icon-only" aria-label={t('details.downloadAs')} onclick={() => (downloadMenuOpen = !downloadMenuOpen)}>
-          <Icon name="download" size={16} /><Icon name="chevronDown" size={14} />
-        </button>
-        {#if downloadMenuOpen}
-          <div class="dl-menu" role="menu">
-            {#each detail.formats as f (f)}
-              <a href={api.fileUrl(lib, detail.id, f)} data-link={false} role="menuitem" onclick={() => (downloadMenuOpen = false)}>{f}</a>
+      {#if bookId !== null && !detail}
+        <div class="empty">
+          {#if error}
+            <p>{t('common.error')}: {error}</p>
+          {:else}
+            <div class="sk-cover"></div><div class="sk-line"></div><div class="sk-line short"></div>
+          {/if}
+        </div>
+      {:else if detail}
+        <h2 class="book-title" style:font-size="{titleSize}px">{detail.title}</h2>
+        <div class="top">
+          <CoverThumb {lib} bookId={detail.id} title={detail.title} width={96} height={144} />
+          <div class="meta">
+            {#each shownAuthors as a (a.id)}
+              <a href="/l/{lib}/authors/{a.id}" data-link>{a.name}</a>
+            {/each}
+            {#if detail.authors.length > AUTHORS_SHOWN}
+              <button type="button" class="link-btn" onclick={() => (allAuthors = !allAuthors)}>
+                {allAuthors ? t('details.fewerAuthors') : t('authors.andMore', { count: detail.authors.length - AUTHORS_SHOWN })}
+              </button>
+            {/if}
+            {#if detail.series}
+              <span class="muted">
+                <a href="/l/{lib}/series/{detail.series.id}" data-link>{detail.series.name}</a>{#if detail.serno}{` · #${detail.serno}`}{/if}
+              </span>
+            {/if}
+            <span class="muted" title={langName(detail.lang)}>{detail.ext.toUpperCase()} · {formatSize(detail.size)} · {detail.lang}</span>
+          </div>
+        </div>
+
+        <div class="actions">
+          {#if dev}
+            <button type="button" class="primary" onclick={() => onSend([detail!.id], dev.id)}>
+              <Icon name="send" size={16} /><span class="ellipsis">{t('details.sendToDevice', { device: dev.name })}</span>
+            </button>
+          {/if}
+          <div class="dl-wrap">
+            <button type="button" class="secondary icon-only" aria-label={t('details.downloadAs')} title={t('details.downloadAs')} aria-haspopup="true" aria-expanded={downloadMenuOpen} onclick={() => (downloadMenuOpen = !downloadMenuOpen)}>
+              <Icon name="download" size={16} /><Icon name="chevronDown" size={14} />
+            </button>
+            {#if downloadMenuOpen}
+              <div class="dl-menu" role="menu">
+                {#each detail.formats as f (f)}
+                  <a href={api.fileUrl(lib, detail.id, f)} data-link={false} role="menuitem" onclick={() => (downloadMenuOpen = false)}>{f === 'original' ? `${t('details.original')} (${detail.ext})` : f}</a>
+                {/each}
+              </div>
+            {/if}
+          </div>
+          <button type="button" class="secondary" onclick={() => navigate(`/l/${lib}/read/${detail!.id}`)}>
+            <Icon name="read" size={16} />{t('details.read')}
+          </button>
+        </div>
+
+        {#if detail.deleted}<p class="warn">{t('details.deletedNote')}</p>{/if}
+
+        {#if detail.genres.length}
+          <div class="chips">
+            {#each detail.genres as g (g)}
+              <a href="/l/{lib}/genres/{g}" data-link class="chip">{genreNames.get(g) ?? g}</a>
             {/each}
           </div>
         {/if}
-      </div>
-      <button type="button" class="secondary" onclick={() => navigate(`/l/${lib}/read/${detail!.id}`)}>
-        <Icon name="read" size={16} />{t('details.read')}
-      </button>
-    </div>
 
-    {#if detail.genres.length}
-      <div class="chips">
-        {#each detail.genres as g (g)}
-          <a href="/l/{lib}/genres/{g}" data-link class="chip">{genreNames.get(g) ?? g}</a>
-        {/each}
-      </div>
-    {/if}
+        {#if detail.annotation}
+          <div class="section">
+            <h3>{t('details.annotation')}</h3>
+            <!-- Server sends sanitized HTML limited to <p><em><strong><br>. -->
+            <div class="annotation">{@html detail.annotation}</div>
+          </div>
+        {/if}
 
-    {#if detail.annotation}
-      <div class="section">
-        <h3>{t('details.annotation')}</h3>
-        <!-- Server sends sanitized HTML limited to <p><em><strong><br>. -->
-        <p class="annotation">{@html detail.annotation}</p>
-      </div>
-    {/if}
+        <dl class="meta-list">
+          <dt>{t('details.added')}</dt><dd>{formatDate(detail.date, i18nState.lang)}</dd>
+          <dt>{t('details.rating')}</dt><dd><Rating value={detail.rating} onChange={rate} /></dd>
+          <dt>{t('details.shelves')}</dt>
+          <dd class="shelves-cell">
+            {#each shelfNames as name (name)}<span class="chip small">{name}</span>{/each}
+            <button type="button" class="link-btn" onclick={() => onAddShelf([detail!.id])}>{t('details.addShelf')}</button>
+          </dd>
+          <dt>{t('details.file')}</dt><dd class="muted ellipsis" title={detail.file}>{detail.file}</dd>
+        </dl>
+      {:else if summary}
+        <div class="summary">
+          <h3>{t('details.aboutAuthor')}</h3>
+          <h2>{summary.name}</h2>
+          <p class="stats">
+            {[
+              tn('browse.booksCount', summary.count),
+              summary.series.length ? tn('browse.seriesCount', summary.series.length) : '',
+              summary.anthologies ? tn('browse.inAnthologies', summary.anthologies) : '',
+            ].filter(Boolean).join(' · ')}
+          </p>
+          {#if years}<p class="muted">{t('details.addedYears', { years })}</p>{/if}
+          <p class="hint">{t('details.pickBookHint')}</p>
 
-    <dl class="meta-list">
-      <dt>{t('details.language')}</dt><dd>{detail.lang}</dd>
-      <dt>{t('details.format')}</dt><dd>{detail.ext.toUpperCase()} · {formatSize(detail.size)}</dd>
-      <dt>{t('details.added')}</dt><dd>{formatDate(detail.date, i18nState.lang)}</dd>
-      <dt>{t('details.rating')}</dt><dd><Rating value={detail.rating} onChange={rate} /></dd>
-      <dt>{t('details.shelves')}</dt>
-      <dd class="shelves-cell">
-        {#each shelfNames as name (name)}<span class="chip small">{name}</span>{/each}
-        <button type="button" class="link-btn" onclick={() => onAddShelf([detail!.id])}>{t('details.addShelf')}</button>
-      </dd>
-      <dt>{t('details.file')}</dt><dd class="muted ellipsis">{detail.file}</dd>
-    </dl>
+          {#if summary.langs.length > 1}
+            <h4>{t('details.languages')}</h4>
+            <div class="chips flat">
+              {#each summary.langs as [code, n] (code)}<span class="chip small" title={langName(code)}>{code} <b>{n}</b></span>{/each}
+            </div>
+          {/if}
+          {#if summary.genres.length}
+            <h4>{t('details.genres')}</h4>
+            <div class="chips flat">
+              {#each summary.genres as [g, n] (g)}<a href="/l/{lib}/genres/{g}" data-link class="chip small">{genreNames.get(g) ?? g} <b>{n}</b></a>{/each}
+            </div>
+          {/if}
+          {#if summary.coauthors.some((c) => c.direct > 0)}
+            <h4>{t('details.coauthors')}</h4>
+            <ul class="plain">
+              {#each summary.coauthors.filter((c) => c.direct > 0) as c (c.id)}
+                <li><a href="/l/{lib}/authors/{c.id}" data-link>{c.name}</a><span class="n">{c.direct}</span></li>
+              {/each}
+            </ul>
+          {/if}
+          {#if summary.series.length}
+            <h4>{t('details.seriesList')}</h4>
+            <ul class="plain">
+              {#each allSeries ? summary.series : summary.series.slice(0, SERIES_SHOWN) as s (s.id)}
+                <li><a href="/l/{lib}/series/{s.id}" data-link title={s.name}>{s.name}</a><span class="n">{s.count}</span></li>
+              {/each}
+              {#if summary.withoutSeries}
+                <li class="muted"><span>{t('books.outsideSeries')}</span><span class="n">{summary.withoutSeries}</span></li>
+              {/if}
+            </ul>
+            {#if summary.series.length > SERIES_SHOWN}
+              <button type="button" class="link-btn" onclick={() => (allSeries = !allSeries)}>
+                {allSeries ? t('details.fewerSeries') : t('details.allSeries', { count: summary.series.length })}
+              </button>
+            {/if}
+          {/if}
+        </div>
+      {:else}
+        <div class="empty"><p>{loading ? t('common.loading') : t('details.noSelection')}</p></div>
+      {/if}
+    </aside>
   {/if}
-</aside>
+{/if}
 
 <style>
-  .details { width: 360px; flex-shrink: 0; border-left: 1px solid var(--line); background: var(--surface-alt); overflow-y: auto; display: flex; flex-direction: column; }
-  .empty { flex-grow: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; padding: 24px; text-align: center; }
-  .top { padding: 24px 24px 0; display: flex; gap: 16px; }
-  .meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-  h2 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: 600; line-height: 1.25; }
+  .details {
+    flex: 0 1 var(--w, 360px); min-width: 280px; position: relative; container-type: inline-size;
+    border-left: 1px solid var(--line); background: var(--surface-alt); overflow-y: auto; display: flex; flex-direction: column;
+  }
+  .details.standalone { flex: 1 1 auto; border-left: none; }
+  .rail {
+    flex: 0 0 36px; border-left: 1px solid var(--line); background: var(--surface-alt);
+    display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 10px;
+  }
+  .rail-btn, .collapse {
+    width: 28px; height: 28px; border: none; border-radius: 6px; background: transparent; color: var(--muted);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .rail-btn:hover, .collapse:hover { background: var(--surface-hover); color: var(--ink); }
+  .rail-label { writing-mode: vertical-rl; font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+  .collapse { position: absolute; top: 8px; right: 8px; z-index: 2; }
+  .empty { flex-grow: 1; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; padding: 24px; text-align: center; }
+  .empty p { margin: 0; }
+  .sk-cover { width: 112px; height: 168px; border-radius: 4px; background: var(--surface-hover); }
+  .sk-line { width: 70%; height: 12px; border-radius: 6px; background: var(--surface-hover); }
+  .sk-line.short { width: 40%; }
+  .book-title { padding: 22px 44px 0 24px; }
+  .top { padding: 14px 24px 0; display: flex; gap: 16px; }
+  .meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; align-items: flex-start; }
+  h2 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
   .muted { color: var(--muted); font-size: 13px; }
   .actions { padding: 20px 24px 0; display: flex; gap: 8px; }
   .actions button.primary {
-    flex-grow: 1; display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px;
-    border: none; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 500; font-size: 14px;
+    flex-grow: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px;
+    border: none; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 500; font-size: 14px; padding: 0 12px;
   }
-  .actions button.secondary { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 14px; }
+  .actions button.primary:hover { background: var(--accent-hover); }
+  .actions button.secondary { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 14px; flex-shrink: 0; }
   .actions button.icon-only { gap: 4px; }
+  /* narrow pane: the send button gets its own row */
+  @container (max-width: 400px) {
+    .actions { flex-wrap: wrap; }
+    .actions button.primary { flex-basis: 100%; }
+    .actions button.secondary { flex-grow: 1; justify-content: center; }
+    .actions .dl-wrap { flex-grow: 1; display: flex; }
+    .actions .dl-wrap button { flex-grow: 1; justify-content: center; }
+  }
   .dl-wrap { position: relative; }
-  .dl-menu { position: absolute; top: 44px; right: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.15); min-width: 140px; z-index: 10; overflow: hidden; }
+  .dl-menu { position: absolute; top: 44px; right: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.15); min-width: 160px; z-index: 10; overflow: hidden; }
   .dl-menu a { display: block; padding: 8px 12px; font-size: 13px; color: var(--ink); text-decoration: none; text-transform: uppercase; }
   .dl-menu a:hover { background: var(--surface-hover); }
+  .warn { margin: 12px 24px 0; font-size: 13px; color: var(--danger); }
   .chips { padding: 16px 24px 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips.flat { padding: 0; }
   .chip {
     display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px;
     background: var(--surface-hover); color: var(--muted-2); font-size: 12px; text-decoration: none;
   }
+  .chip b { font-weight: 600; color: var(--muted); }
   .chip.small { height: 22px; }
   .section { padding: 18px 24px 0; }
-  h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; }
+  h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
   .annotation { margin: 0; font-family: var(--font-display); font-size: 14px; line-height: 1.55; color: var(--ink); }
+  .annotation :global(p) { margin: 0 0 .6em; }
   .meta-list { margin: 18px 24px 24px; padding-top: 14px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 96px minmax(0,1fr); row-gap: 8px; font-size: 13px; }
   .meta-list dt { color: var(--muted); }
   .meta-list dd { margin: 0; }
@@ -155,4 +312,20 @@
   .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .link-btn { all: unset; color: var(--accent); font-size: 12px; cursor: pointer; }
   .link-btn:hover { text-decoration: underline; }
+  .link-btn:focus-visible { outline: 2px solid var(--focus); }
+  .summary { padding: 22px 24px 28px; display: flex; flex-direction: column; gap: 8px; }
+  .summary h2 { font-size: 20px; padding-right: 24px; }
+  .summary h4 { margin: 12px 0 2px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+  .summary p { margin: 0; }
+  .stats { font-size: 14px; color: var(--muted-2); }
+  .hint { font-size: 13px; color: var(--muted); padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; margin-top: 4px !important; }
+  .plain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .plain li { display: flex; align-items: baseline; gap: 8px; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--line-soft); min-width: 0; }
+  .plain li a, .plain li span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .plain .n { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  @media (max-width: 900px) {
+    .details { flex: 1 1 auto; min-width: 0; border-left: none; }
+    .collapse, .rail { display: none; }
+    .book-title { padding-right: 24px; }
+  }
 </style>

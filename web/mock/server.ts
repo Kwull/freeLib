@@ -8,7 +8,7 @@ import { placeholderCover } from './covers';
 import { normalize } from './normalize';
 import { genreName } from './names';
 import type { Book, BookDetail, AuthorRef, SeriesRef } from '../src/lib/api/types';
-import type { MockBook, MockLibrary } from './gen';
+import { ANTHOLOGY_MIN_AUTHORS, type MockBook, type MockLibrary } from './gen';
 
 // A small, real two-chapter Russian EPUB (see fixtures/build-epub.mjs) served
 // for `format=epub` so the in-browser reader has actual content to render,
@@ -140,7 +140,7 @@ export function installMockApi(server: Connect.Server) {
           runJobProgress(job, {
             onDone: () => {
               const c = catalog(id);
-              lib.bookCount = c.books.length; lib.authorCount = c.authors.length; lib.seriesCount = c.series.length;
+              lib.bookCount = c.books.filter((b) => !b.deleted).length; lib.authorCount = c.authorRows.length; lib.seriesCount = c.seriesRows.length;
               lib.importedAt = new Date().toISOString(); lib.catalogVersion = 1;
               lib.status = { state: 'idle' };
               broadcast('library', lib);
@@ -191,7 +191,7 @@ export function installMockApi(server: Connect.Server) {
         const lib = catalog(Number(m[1]));
         return send(res, 200, {
           version: 1, columns: ['id', 'name', 'count'],
-          rows: lib.authors.map((a) => [a.id, a.name, a.bookCount]),
+          rows: lib.authorRows,
           letters: lib.authorLetters,
         }, { 'Cache-Control': url.searchParams.has('v') ? 'public, max-age=31536000, immutable' : 'no-cache' });
       }
@@ -200,7 +200,7 @@ export function installMockApi(server: Connect.Server) {
         const lib = catalog(Number(m[1]));
         return send(res, 200, {
           version: 1, columns: ['id', 'name', 'count'],
-          rows: lib.series.map((s) => [s.id, s.name, s.bookCount]),
+          rows: lib.seriesRows,
           letters: lib.seriesLetters,
         });
       }
@@ -255,12 +255,69 @@ export function installMockApi(server: Connect.Server) {
         } else {
           return fail(res, 400, 'bad_request', 'One of author, series, genre, shelf, since is required');
         }
+        const q = normalize(url.searchParams.get('q') ?? '').split(' ').filter(Boolean);
+        if (q.length) {
+          // like the server: every word is a prefix of a word of the title, authors or series
+          items = items.filter((b) => {
+            const hay = normalize(`${b.title} ${b.authorIds.map((a) => lib.authors[a - 1].name).join(' ')} ${b.seriesId ? lib.series[b.seriesId - 1].name : ''}`).split(' ');
+            return q.every((w) => hay.some((h) => h.startsWith(w)));
+          });
+        }
         if (lang) items = items.filter((b) => b.lang === lang);
         if (ext) items = items.filter((b) => b.ext === ext);
         if (!showDeleted) items = items.filter((b) => !b.deleted);
 
         const { page, next } = paginate(items, cursor, limit);
         return send(res, 200, { books: page.map((b) => toBook(lib, b)), nextCursor: next, total: items.length });
+      }
+      m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/authors\/(\d+)\/(summary|coauthors)$/);
+      if (m && method === 'GET') {
+        const lib = catalog(Number(m[1]));
+        const aid = Number(m[2]);
+        const author = lib.authors[aid - 1];
+        if (!author) return fail(res, 404, 'not_found', 'author not found');
+        const live = (lib.booksByAuthor.get(aid) ?? []).map((id) => lib.bookById.get(id)!).filter((b) => !b.deleted);
+        const co = new Map<number, { books: number; direct: number }>();
+        for (const b of live) {
+          const direct = b.authorIds.length < ANTHOLOGY_MIN_AUTHORS;
+          for (const a of b.authorIds) {
+            if (a === aid) continue;
+            const e = co.get(a) ?? { books: 0, direct: 0 };
+            e.books++; if (direct) e.direct++;
+            co.set(a, e);
+          }
+        }
+        const coauthors = [...co.entries()]
+          .map(([id, e]) => ({ id, name: lib.authors[id - 1].name, books: e.books, direct: e.direct, key: lib.authors[id - 1].sortKey }))
+          .sort((x, y) => y.direct - x.direct || y.books - x.books || (x.key < y.key ? -1 : x.key > y.key ? 1 : x.id - y.id));
+        if (m[3] === 'coauthors') {
+          return send(res, 200, { columns: ['id', 'name', 'books', 'direct'], rows: coauthors.map((c) => [c.id, c.name, c.books, c.direct]) });
+        }
+        const seriesCount = new Map<number, number>();
+        const langs = new Map<string, number>();
+        const genresCount = new Map<number, number>();
+        let withoutSeries = 0, anthologies = 0, firstDate = '', lastDate = '';
+        for (const b of live) {
+          if (b.seriesId) seriesCount.set(b.seriesId, (seriesCount.get(b.seriesId) ?? 0) + 1); else withoutSeries++;
+          langs.set(b.lang, (langs.get(b.lang) ?? 0) + 1);
+          for (const g of b.genreIds) genresCount.set(g, (genresCount.get(g) ?? 0) + 1);
+          if (b.authorIds.length >= ANTHOLOGY_MIN_AUTHORS) anthologies++;
+          if (!firstDate || b.date < firstDate) firstDate = b.date;
+          if (b.date > lastDate) lastDate = b.date;
+        }
+        return send(res, 200, {
+          id: aid, name: author.name, count: live.length, anthologies,
+          series: [...seriesCount.entries()]
+            .map(([id, count]) => ({ id, name: lib.series[id - 1].name, count, key: lib.series[id - 1].sortKey }))
+            .sort((x, y) => y.count - x.count || (x.key < y.key ? -1 : 1))
+            .map(({ id, name, count }) => ({ id, name, count })),
+          withoutSeries,
+          langs: [...langs.entries()].sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1)),
+          genres: [...genresCount.entries()].sort((x, y) => y[1] - x[1] || x[0] - y[0]).slice(0, 8),
+          firstDate, lastDate,
+          coauthors: coauthors.filter((c) => c.direct >= 1 || c.books >= 2).slice(0, 10).map(({ id, name, books, direct }) => ({ id, name, books, direct })),
+          coauthorCount: coauthors.length,
+        });
       }
       m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/books\/(\d+)$/);
       if (m && method === 'GET') {
@@ -510,10 +567,16 @@ export function installMockApi(server: Connect.Server) {
         store.users = store.users.filter((u) => u.id !== Number(m![1]));
         return send(res, 204);
       }
-      if (path === '/api/v1/me/prefs' && method === 'GET') return send(res, 200, store.prefs);
-      if (path === '/api/v1/me/prefs' && method === 'PUT') {
-        store.prefs = await readBody(req);
-        return send(res, 200, store.prefs);
+      if (path === '/api/v1/me/prefs') {
+        // Prefs are per browser (cookie), so parallel Playwright tests don't share
+        // pane widths, sort orders etc. through the one mock "admin" user.
+        let client = /(?:^|;\s*)freelib_mock_client=([\w-]+)/.exec(req.headers.cookie ?? '')?.[1];
+        if (!client) {
+          client = `c${store.nextClientId++}`;
+          res.setHeader('Set-Cookie', `freelib_mock_client=${client}; Path=/; SameSite=Lax`);
+        }
+        if (method === 'PUT') store.prefs.set(client, await readBody(req));
+        return send(res, 200, store.prefs.get(client) ?? {});
       }
 
       if (path.startsWith('/opds')) {

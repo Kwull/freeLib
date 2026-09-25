@@ -12,6 +12,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, ToSql};
 
 use crate::genres::genres;
 use crate::model::*;
+use crate::normalize::letter_of;
 use crate::schema::CATALOG_SCHEMA_VERSION;
 use crate::search::BookAttrs;
 
@@ -58,6 +59,9 @@ pub struct BookFilter {
     pub ext: Option<String>,
     /// Include books marked deleted (API `deleted=1`). Default: hidden.
     pub include_deleted: bool,
+    /// Only books matching these words (prefix per word over title, authors, series and
+    /// keywords, like search). `None` or no usable words = no filter.
+    pub q: Option<String>,
 }
 
 /// Pagination: `cursor` is the opaque `nextCursor` of the previous page.
@@ -249,39 +253,52 @@ impl Catalog {
         self.stats.catalog_version
     }
 
-    /// All authors ordered by `sort_key, id`, plus the letter index.
+    /// Authors with at least one live book, ordered by `sort_key, id` with the names that do not
+    /// start with a letter (`#` group: digits, symbols) moved to the end, plus the letter index.
     pub fn authors(&self) -> Result<NameList> {
         self.name_list(
-            "SELECT id, name, book_count FROM author ORDER BY sort_key, id",
+            "SELECT id, name, book_count, sort_key FROM author WHERE book_count > 0 ORDER BY sort_key, id",
             "author",
         )
     }
 
-    /// All series ordered by `sort_key, id`, plus the letter index.
+    /// Series with at least one live book, in the same order as [`authors`](Self::authors).
     pub fn series_list(&self) -> Result<NameList> {
         self.name_list(
-            "SELECT id, name, book_count FROM series ORDER BY sort_key, id",
+            "SELECT id, name, book_count, sort_key FROM series WHERE book_count > 0 ORDER BY sort_key, id",
             "series",
         )
     }
 
     fn name_list(&self, sql: &str, kind: &str) -> Result<NameList> {
         let conn = self.conn()?;
-        let mut rows = Vec::with_capacity(match kind {
+        let cap = match kind {
             "author" => self.stats.author_count,
             _ => self.stats.series_count,
-        } as usize);
+        } as usize;
+        let mut rows = Vec::with_capacity(cap);
+        let mut other = Vec::new();
+        let mut letters: Vec<(String, i64, i64)> = Vec::new();
         let mut st = conn.prepare_cached(sql)?;
         let mut q = st.query([])?;
         while let Some(r) = q.next()? {
-            rows.push((r.get(0)?, r.get(1)?, r.get(2)?));
+            let row: (i64, String, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
+            let key: String = r.get(3)?;
+            let letter = letter_of(&key);
+            if letter == "#" {
+                other.push(row);
+                continue;
+            }
+            match letters.last_mut() {
+                Some(l) if l.0 == letter => l.1 += 1,
+                _ => letters.push((letter, 1, rows.len() as i64)),
+            }
+            rows.push(row);
         }
-        let mut st = conn.prepare_cached(
-            "SELECT letter, count, first_pos FROM letter_index WHERE kind=?1 ORDER BY first_pos",
-        )?;
-        let letters = st
-            .query_map([kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !other.is_empty() {
+            letters.push(("#".to_string(), other.len() as i64, rows.len() as i64));
+            rows.extend(other);
+        }
         Ok(NameList { rows, letters })
     }
 
@@ -421,6 +438,16 @@ impl Catalog {
         if let Some(ext) = &filter.ext {
             params.push(Box::new(ext.to_lowercase()));
             where_extra.push_str(&format!(" AND b.ext=?{}", params.len()));
+        }
+        let fts = filter.q.as_deref().and_then(crate::search::fts_query);
+        if let Some(f) = &fts {
+            params.push(Box::new(f.clone()));
+            where_extra.push_str(&format!(
+                " AND b.id IN (SELECT rowid FROM book_fts WHERE book_fts MATCH ?{})",
+                params.len()
+            ));
+            // the in-memory counter knows nothing about the text filter
+            count_attrs = None;
         }
 
         let sql = format!(

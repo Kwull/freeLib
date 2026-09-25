@@ -5,10 +5,48 @@
  * vectors in docs/web/normalize-vectors.json (web/tests-unit/normalize.test.ts and
  * server/crates/catalog/tests/normalize_vectors.rs) — change them together.
  *
+ * Accented Latin letters are folded to their base letters (`Čapek` → `capek`, `ø` → `o`,
+ * `ß` → `ss`) with the FOLD_GROUPS table below (a copy of `fold_latin` in normalize.rs).
+ *
  * Rust → JS mapping: `char::is_whitespace` = \p{White_Space}, `is_control` = \p{Cc},
  * `is_alphanumeric` = \p{Alphabetic} or \p{N}, `char::to_lowercase` = per-code-point
  * `toLowerCase()` (no context-dependent final sigma).
  */
+
+// [target, letters] pairs; generated from the same table as fold_latin() in normalize.rs.
+const FOLD_GROUPS: [string, string][] = [
+  ['a', 'àáâãäåāăąǎǟǡǻȁȃȧḁạảấầẩẫậắằẳẵặ'],
+  ['ae', 'æ'],
+  ['b', 'ƀḃḅḇ'],
+  ['c', 'çćĉċčḉ'],
+  ['d', 'ðďđḋḍḏḑḓ'],
+  ['e', 'èéêëēĕėęěǝȅȇȩəḕḗḙḛḝẹẻẽếềểễệ'],
+  ['f', 'ƒḟ'],
+  ['g', 'ĝğġģǥǧǵḡ'],
+  ['h', 'ĥħȟḣḥḧḩḫẖ'],
+  ['i', 'ìíîïĩīĭįıǐȉȋɨḭḯỉị'],
+  ['j', 'ĵǰ'],
+  ['k', 'ķĸǩḱḳḵ'],
+  ['l', 'ĺļľŀłḷḹḻḽ'],
+  ['m', 'ḿṁṃ'],
+  ['n', 'ñńņňŋǹṅṇṉṋ'],
+  ['o', 'òóôõöøōŏőơǒǫǭȍȏȫȭȯȱṍṏṑṓọỏốồổỗộớờởỡợ'],
+  ['oe', 'œ'],
+  ['p', 'ṕṗ'],
+  ['r', 'ŕŗřȑȓṙṛṝṟ'],
+  ['s', 'śŝşšșṡṣṥṧṩ'],
+  ['ss', 'ß'],
+  ['t', 'ţťŧțṫṭṯṱẗ'],
+  ['th', 'þ'],
+  ['u', 'ùúûüũūŭůűųưǔǖǘǚǜȕȗṳṵṷṹṻụủứừửữự'],
+  ['v', 'ṽṿ'],
+  ['w', 'ŵẁẃẅẇẉẘ'],
+  ['x', 'ẋẍ'],
+  ['y', 'ýÿŷȳẏẙỳỵỷỹ'],
+  ['z', 'źżžƶȥẑẓẕ'],
+];
+const FOLD = new Map<string, string>();
+for (const [to, from] of FOLD_GROUPS) for (const c of from) FOLD.set(c, to);
 
 /** Dropped entirely (quotes, apostrophes): `O'Brien` → `obrien`. */
 const DROPPED = new Set(["'", '"', '`', '«', '»', '„', '“', '”', '‘', '’', '‚', '‹', '›', '´']);
@@ -41,9 +79,11 @@ function lower(c: string, code: number): string {
   if (code === 0x401 || code === 0x451) return 'е';
   if (code >= 0x430 && code <= 0x44f) return c;
   let out = '';
-  for (const lc of c.toLowerCase()) out += lc === 'ё' ? 'е' : lc;
+  for (const lc of c.toLowerCase()) out += lc === 'ё' ? 'е' : (FOLD.get(lc) ?? lc);
   return out;
 }
+
+const ASCII_LETTER_END = /[a-zA-Z]$/;
 
 export function normalize(s: string): string {
   let out = '';
@@ -52,6 +92,8 @@ export function normalize(s: string): string {
     const code = s.codePointAt(i)!;
     const c = code > 0xffff ? String.fromCodePoint(code) : s[i];
     i += c.length;
+    // a combining accent after a (folded) Latin letter: `e\u0301` → `e`
+    if (code >= 0x300 && code <= 0x36f && ASCII_LETTER_END.test(out)) continue;
     const kind = classify(c, code);
     if (kind === 0) continue;
     if (kind === 1) {

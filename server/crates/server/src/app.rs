@@ -56,6 +56,7 @@ pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
         }
     }
     autoimport(&st).await;
+    reimport_outdated(&st, &rows).await;
     spawn_cleanup(&st);
     Ok(st)
 }
@@ -99,6 +100,33 @@ fn system_user(st: &AppState) -> User {
         .ok()
         .and_then(|u| u.into_iter().find(|u| u.is_admin()))
         .unwrap_or_else(User::open_mode_admin)
+}
+
+/// Libraries whose catalog file exists but cannot be opened (written by another catalog schema
+/// version, e.g. before an upgrade) are re-imported from their INPX in the background.
+async fn reimport_outdated(st: &AppState, rows: &[LibraryRow]) {
+    for r in rows {
+        let Ok(rt) = st.lib(r.id) else { continue };
+        if rt.handle.get().is_some() || !rt.handle.path().is_file() || r.inpx.is_none() {
+            continue;
+        }
+        if rt
+            .import
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+        {
+            continue; // FREELIB_AUTOIMPORT already started it
+        }
+        tracing::info!(
+            "library {} has an outdated or unreadable catalog: re-importing",
+            r.id
+        );
+        let owner = system_user(st);
+        if let Err(e) = importer::start(st, r.id, &owner).await {
+            tracing::warn!("re-import of library {} failed to start: {e}", r.id);
+        }
+    }
 }
 
 async fn autoimport(st: &AppState) {

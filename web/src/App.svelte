@@ -19,8 +19,7 @@
   import { applyTheme } from './lib/stores/theme.svelte';
   import { i18nState } from './lib/i18n';
   import { toastState } from './lib/stores/toast.svelte';
-  import { api } from './lib/api/client';
-  import { debounce } from './lib/utils/format';
+  import { loadPrefs, getPref, setPref } from './lib/stores/prefs.svelte';
 
   let ready = $state(false);
   let readerComp = $state<any>(null);
@@ -33,22 +32,19 @@
     (async () => {
       await loadSession();
       if (isLoggedIn()) {
-        await Promise.all([loadLibraries(), loadDevices(), loadShelves(), loadJobs()]);
+        await Promise.all([loadLibraries(), loadDevices(), loadShelves(), loadJobs(), loadPrefs()]);
         startJobEvents();
-        try {
-          const prefs = await api.prefs();
-          if (typeof prefs.currentLibrary === 'number') setCurrentLibrary(prefs.currentLibrary as number);
-        } catch { /* best effort */ }
+        const preferred = getPref<number | null>('currentLibrary', null);
+        if (typeof preferred === 'number' && librariesState.items.some((l) => l.id === preferred)) setCurrentLibrary(preferred);
       }
       ready = true;
     })();
   });
 
-  const savePrefs = debounce(() => {
-    if (!isLoggedIn()) return;
-    api.setPrefs({ currentLibrary: librariesState.currentId }).catch(() => {});
-  }, 800);
-  $effect(() => { librariesState.currentId; savePrefs(); });
+  $effect(() => {
+    const id = librariesState.currentId;
+    if (ready && id !== null && getPref('currentLibrary', null) !== id) setPref('currentLibrary', id);
+  });
 
   $effect(() => {
     const route = currentRoute();
@@ -119,6 +115,9 @@
 <style>
   .boot, .not-found { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--muted); }
   .toasts { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }
-  .toast { padding: 10px 16px; border-radius: 8px; background: var(--ink); color: #fff; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.2); }
-  .toast.error { background: var(--danger); }
+  .toast { padding: 10px 16px; border-radius: 8px; background: var(--inverse-bg); color: var(--inverse-ink); font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-width: 420px; }
+  .toast.error { background: var(--danger); color: #fff; }
+  @media (max-width: 900px) {
+    .toasts { bottom: 84px; left: 12px; right: 12px; }
+  }
 </style>

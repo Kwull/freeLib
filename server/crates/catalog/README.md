@@ -20,7 +20,7 @@ handle.close();                                 // before deleting the library
 * Take `handle.get()` **once per request** and use that `Arc<Catalog>` throughout, so a reload never
   mixes two catalog versions in one response. Old `Catalog`s keep working until dropped.
 * `Catalog::open(path) -> Result<Catalog>` fails with `CatalogError::SchemaVersion` when the file was
-  written by another schema version (→ re-import) and `CatalogError::NotFound` when missing.
+  written by another schema version (→ re-import; the server starts one automatically at startup for libraries with an INPX; schema 2 = folded sort keys) and `CatalogError::NotFound` when missing.
 * Errors (`CatalogError`): `Sqlite`, `SchemaVersion` (re-import), `NotFound`, `BadCursor` (→ 400), `Stale` — an old
   `Catalog` needed a new connection after the file was replaced; take `handle.get()` again and retry.
 * Connections: read-only (`SQLITE_OPEN_READ_ONLY`, `query_only`, `mmap_size=1 GiB`, `cache_size=-65536`,
@@ -35,13 +35,15 @@ handle.close();                                 // before deleting the library
 |---|---|---|
 | `stats() -> &LibraryStats` | `bookCount` (all), `liveBookCount`, `authorCount`, `seriesCount`, `importedAt`, `catalogVersion`, `inpxVersion`, `sourceInpx`, `collectionName`, `firstAuthorOnly`, `skipDeleted` (cached at open) | `Library` |
 | `catalog_version() -> i64` | changes on every import (ms timestamp, strictly increasing) | `?v=`, ETag |
-| `authors() -> NameList` | `{rows: [(id, name, count)], letters: [(letter, count, firstRowIndex)]}` sorted by `sort_key, id` | `GET authors` |
+| `authors() -> NameList` | `{rows: [(id, name, count)], letters: [(letter, count, firstRowIndex)]}`: authors with live books, sorted by `sort_key, id`, the non-letter `#` group moved to the end (letters computed here, in row order) | `GET authors` |
 | `series_list() -> NameList` | same for series | `GET series` |
 | `author(id) -> Option<NameCount>` | `{id, name, count}` | page titles |
 | `series(id) -> Option<SeriesHit>` | `{id, name, count, authors}` (`authors` = main author(s), display string) | |
 | `genres(lang) -> Vec<GenreCount>` | all 322 `{id, name, parent, count}`, `name` localized to `lang` ("en"/"ru"/"uk"); group count = distinct books in the group | `GET genres` |
 | `languages() -> Vec<(String, i64)>` | `[(lang, count)]`, most frequent first | `GET /languages` |
 | `count_newer_than(date_or_rfc3339) -> i64` | live books with `date > d` | `newSinceLastVisit` |
+| `author_summary(id) -> Option<AuthorSummary>` | counts, series with counts, languages, top genres, date range, top co-authors (`summary.rs`, `ANTHOLOGY_MIN_AUTHORS` = 4) | `GET authors/:id/summary` |
+| `coauthors(id) -> Vec<Coauthor>` | everybody sharing a live book: `{id, name, books, direct}`, direct (non-anthology) first | `GET authors/:id/coauthors` |
 | `books(&BookSelector, &BookFilter, &Page) -> BookPage` | `{books: Vec<Book>, nextCursor, total}` | `GET books` |
 | `books_by_ids(&[i64]) -> Vec<Book>` | in the given order, no filters | send/export, OPDS |
 | `book(id) -> Option<BookDetail>` | `Book` + `file`, `archive`, `folder`, `keywords`, `libId`, `stars`, `archOffset`, `archCsize`, `archMethod`; helpers `entry_name()`, `relative_path()`, `display_file()` (`"<archive> / <file>.<ext>"`) | `GET books/:id` |
@@ -52,7 +54,8 @@ handle.close();                                 // before deleting the library
 
 ```rust
 pub enum BookSelector { Author(i64), Series(i64), Genre(u16), Since(String /*YYYY-MM-DD*/), Ids(Vec<i64>) }
-pub struct BookFilter { pub langs: Vec<String>, pub ext: Option<String>, pub include_deleted: bool } // Default = no filter, deleted hidden
+pub struct BookFilter { pub langs: Vec<String>, pub ext: Option<String>, pub include_deleted: bool,
+    pub q: Option<String> /* FTS prefix words, like search */ } // Default = no filter, deleted hidden
 pub struct Page { pub cursor: Option<String>, pub limit: usize }  // Default: None, 2000. Clamp limit to 5000 in the server.
 pub struct SearchQuery { pub q: String, pub kind: SearchKind /*All|Books|Authors|Series, Deserialize lowercase*/,
     pub genres: Vec<u16>, pub langs: Vec<String>, pub ext: Option<String>,
@@ -85,7 +88,8 @@ Plain files (`archive == ""`) live at `library_path / relative_path()`.
 
 ## Other modules
 
-* `normalize::normalize(&str) -> String` — sort key (lower-case, `ё→е`, quotes dropped, punctuation → space,
+* `normalize::normalize(&str) -> String` — sort key (lower-case, `ё→е`, accented Latin folded to the base letter
+  (`č→c`, `ø→o`, `ß→ss`; `fold_latin`, mirrored in `web/src/lib/utils/normalize.ts`), quotes dropped, punctuation → space,
   collapsed whitespace, leading non-alphanumerics dropped). `letter_of(sort_key)`, `search_tokens(q)`, `collapse_ws`.
 * `genres::genres() -> &'static Genres` — `all()`, `get(id)`, `by_code(code)`, `resolve(code)` (unknown codes →
   "…: прочее" of the matching group, else 11 "Прочее"), `top_level()`, `children(id)`, `with_descendants(id)`, `top(id)`.
@@ -110,4 +114,4 @@ handle.reload()?;         // then warm: cat.attrs()
 `ImportError::Cancelled` on cancellation (the old catalog is untouched). Mode "new" = run the same full import.
 Other entry points: `resolve_offsets(db, lib_dir, progress, cancel)` (post-import pass),
 `migrate::read_qt_database(path) -> QtMigration` + `QtMigration::apply(&mut app_conn, user_id) -> ApplyStats`,
-`synth::generate(out, &GenOptions)` (test data), `zipdir::{read_central_directory, local_data_start}`.
+`synth::generate(out, &GenOptions)` (Flibusta-like test data: Zipf-like authors with a few very prolific ones, anthologies with 5–50 authors, Latin names with diacritics, long titles/series; see the module docs), `zipdir::{read_central_directory, local_data_start}`.

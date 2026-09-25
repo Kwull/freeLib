@@ -103,7 +103,7 @@
     },
     {
       "input": "Straße",
-      "normalized": "straße",
+      "normalized": "strasse",
       "letter": "S"
     },
     {
@@ -113,12 +113,12 @@
     },
     {
       "input": "Łódź",
-      "normalized": "łódź",
-      "letter": "Ł"
+      "normalized": "lodz",
+      "letter": "L"
     },
     {
       "input": "Café—Bar",
-      "normalized": "café bar",
+      "normalized": "cafe bar",
       "letter": "C"
     },
     {
@@ -148,7 +148,7 @@
     },
     {
       "input": "x́y",
-      "normalized": "x́y",
+      "normalized": "xy",
       "letter": "X"
     },
     {
@@ -158,8 +158,8 @@
     },
     {
       "input": "ß",
-      "normalized": "ß",
-      "letter": "SS"
+      "normalized": "ss",
+      "letter": "S"
     },
     {
       "input": "ǅemal",
@@ -218,8 +218,8 @@
     },
     {
       "input": "Émile Zola",
-      "normalized": "émile zola",
-      "letter": "É"
+      "normalized": "emile zola",
+      "letter": "E"
     },
     {
       "input": "ﬁ ligature",
@@ -270,6 +270,86 @@
       "input": "NEL line",
       "normalized": "nel line",
       "letter": "N"
+    },
+    {
+      "input": "Čapek Karel",
+      "normalized": "capek karel",
+      "letter": "C"
+    },
+    {
+      "input": "Lem Stanisław",
+      "normalized": "lem stanislaw",
+      "letter": "L"
+    },
+    {
+      "input": "Ødegaard Knut",
+      "normalized": "odegaard knut",
+      "letter": "O"
+    },
+    {
+      "input": "Əlibəyli Ramiz",
+      "normalized": "elibeyli ramiz",
+      "letter": "E"
+    },
+    {
+      "input": "Þórðarson Þórbergur",
+      "normalized": "thordarson thorbergur",
+      "letter": "T"
+    },
+    {
+      "input": "Ðukić Dragana",
+      "normalized": "dukic dragana",
+      "letter": "D"
+    },
+    {
+      "input": "Åsa Larsson",
+      "normalized": "asa larsson",
+      "letter": "A"
+    },
+    {
+      "input": "Öztürk Ayşe",
+      "normalized": "ozturk ayse",
+      "letter": "O"
+    },
+    {
+      "input": "Żeromski",
+      "normalized": "zeromski",
+      "letter": "Z"
+    },
+    {
+      "input": "Šalamun Tomaž",
+      "normalized": "salamun tomaz",
+      "letter": "S"
+    },
+    {
+      "input": "Æsop Œuvre",
+      "normalized": "aesop oeuvre",
+      "letter": "A"
+    },
+    {
+      "input": "Nguyễn Văn",
+      "normalized": "nguyen van",
+      "letter": "N"
+    },
+    {
+      "input": "Café",
+      "normalized": "cafe",
+      "letter": "C"
+    },
+    {
+      "input": "Йозеф Їжак Ґанна Єва",
+      "normalized": "йозеф їжак ґанна єва",
+      "letter": "Й"
+    },
+    {
+      "input": "Ärger Über",
+      "normalized": "arger uber",
+      "letter": "A"
+    },
+    {
+      "input": "ẞ Capital",
+      "normalized": "ss capital",
+      "letter": "S"
     }
   ]
 }

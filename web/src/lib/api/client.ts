@@ -1,7 +1,7 @@
 import { ApiError } from './types';
 import type {
   Library, Book, BookDetail, Genre, Shelf, Device, Job, Session, NameListResponse,
-  BooksResponse, SearchResponse, Settings, User, ConvertOptions,
+  BooksResponse, SearchResponse, Settings, User, ConvertOptions, AuthorSummary, CoauthorsResponse,
 } from './types';
 
 const BASE = '/api/v1';
@@ -69,8 +69,10 @@ export const api = {
   genres: (lib: number, lang?: string) => request<Genre[]>(`/libraries/${lib}/genres${qs({ lang })}`),
   books: (lib: number, params: {
     author?: number; series?: number; genre?: number; shelf?: number; since?: string;
-    lang?: string; ext?: string; deleted?: boolean; cursor?: string; limit?: number;
-  }) => request<BooksResponse>(`/libraries/${lib}/books${qs({ ...params, deleted: params.deleted ? 1 : undefined })}`),
+    lang?: string; ext?: string; deleted?: boolean; q?: string; cursor?: string; limit?: number;
+  }, init?: RequestInit) => request<BooksResponse>(`/libraries/${lib}/books${qs({ ...params, deleted: params.deleted ? 1 : undefined })}`, init),
+  authorSummary: (lib: number, id: number) => request<AuthorSummary>(`/libraries/${lib}/authors/${id}/summary`),
+  coauthors: (lib: number, id: number) => request<CoauthorsResponse>(`/libraries/${lib}/authors/${id}/coauthors`),
   book: (lib: number, id: number) => request<BookDetail>(`/libraries/${lib}/books/${id}`),
   coverUrl: (lib: number, id: number, size: 'thumb' | 'full' = 'thumb') =>
     `${BASE}/libraries/${lib}/books/${id}/cover?size=${size}`,

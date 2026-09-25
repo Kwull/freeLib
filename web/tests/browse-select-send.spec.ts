@@ -18,6 +18,6 @@ test('browse an author, select books, open send dialog', async ({ page }) => {
   await page.getByRole('button', { name: 'Send to…' }).click();
 
   await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByText('The Hound of the Baskervilles, The White Company')).toBeVisible();
+  await expect(page.getByText('«The Hound of the Baskervilles», «The White Company»')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Kindle Send by email EPUB' })).toBeVisible();
 });

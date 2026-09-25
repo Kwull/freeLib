@@ -116,10 +116,22 @@ fn generated_catalog_end_to_end() {
         (cat.authors().unwrap(), st.author_count),
         (cat.series_list().unwrap(), st.series_count),
     ] {
-        assert_eq!(list.rows.len() as i64, count);
+        // only names with live books are listed
+        assert!(list.rows.len() as i64 <= count && list.rows.iter().all(|r| r.2 > 0));
         let keys: Vec<String> = list.rows.iter().map(|r| normalize(&r.1)).collect();
-        assert!(keys.windows(2).all(|w| w[0] <= w[1]), "sorted by sort key");
-        assert_eq!(list.letters.iter().map(|l| l.1).sum::<i64>(), count);
+        // sorted by sort key, with the non-letter ("#") group moved to the end
+        let hash_at = |k: &String| freelib_catalog::letter_of(k) == "#";
+        let first_hash = keys.iter().position(hash_at).unwrap_or(keys.len());
+        assert!(keys[first_hash..].iter().all(hash_at));
+        assert!(
+            keys[..first_hash].windows(2).all(|w| w[0] <= w[1]),
+            "sorted by sort key"
+        );
+        assert!(keys[first_hash..].windows(2).all(|w| w[0] <= w[1]));
+        assert_eq!(
+            list.letters.iter().map(|l| l.1).sum::<i64>(),
+            list.rows.len() as i64
+        );
         for (letter, _, first) in &list.letters {
             assert_eq!(&freelib_catalog::letter_of(&keys[*first as usize]), letter);
         }
@@ -212,6 +224,7 @@ fn generated_catalog_end_to_end() {
                 langs: vec!["ru".into()],
                 ext: Some("FB2".into()),
                 include_deleted: false,
+                q: None,
             },
             &Page::default(),
         )
@@ -893,4 +906,159 @@ fn app_db_migrates() {
     let c = freelib_catalog::open_app_db(&p).unwrap();
     c.execute("INSERT INTO setting(key, value) VALUES ('x', '1')", [])
         .unwrap();
+}
+
+#[test]
+fn name_lists_fold_diacritics_and_put_non_letters_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let inpx = dir.path().join("names.inpx");
+    let st = "AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;LANG;LIBRATE;KEYWORDS;";
+    let rec = |id: usize, author: &str, title: &str, series: &str, del: bool| -> Vec<String> {
+        vec![
+            author.to_string(),
+            "sf:".into(),
+            title.into(),
+            series.into(),
+            if series.is_empty() { "" } else { "1" }.into(),
+            id.to_string(),
+            "10".into(),
+            id.to_string(),
+            if del { "1" } else { "0" }.into(),
+            "fb2".into(),
+            format!("2020-01-{:02}", id),
+            "ru".into(),
+            "".into(),
+            "".into(),
+        ]
+    };
+    let recs: Vec<Vec<String>> = vec![
+        rec(1, "Čapek,Karel,:", "Válka s mloky", "", false),
+        rec(2, "Capek,Anna,:", "Solo", "", false),
+        rec(3, "Ødegaard,Knut,:", "Nord", "Øst", false),
+        rec(4, "Zeta,,:", "Z", "Ostrov", false),
+        rec(5, "Абрамов,Фёдор,:", "Дом", "12 стульев", false),
+        rec(6, "1984 Group,,:", "Numbers", "", false),
+        rec(7, "#55 Aircraft,,:", "Planes", "", false),
+        rec(8, "Удалённый,Автор,:", "Gone", "Пустая серия", true),
+        // an anthology (4 authors) and a two-author book
+        rec(
+            9,
+            "Абрамов,Фёдор,:Capek,Anna,:Zeta,,:1984 Group,,:",
+            "Антология",
+            "",
+            false,
+        ),
+        rec(10, "Абрамов,Фёдор,:Zeta,,:", "Вдвоём", "", false),
+        rec(
+            11,
+            "Абрамов,Фёдор,:Zeta,,:",
+            "Вдвоём-2",
+            "12 стульев",
+            false,
+        ),
+    ];
+    let recs: Vec<Vec<&str>> = recs
+        .iter()
+        .map(|r| r.iter().map(String::as_str).collect())
+        .collect();
+    write_inpx(&inpx, Some(st), &[("a.inp", recs)]);
+    let db = dir.path().join("lib_3.db");
+    import(&inpx, &db, None);
+    let cat = Catalog::open(&db).unwrap();
+
+    let a = cat.authors().unwrap();
+    let names: Vec<&str> = a.rows.iter().map(|r| r.1.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Capek Anna",
+            "Čapek Karel",
+            "Ødegaard Knut",
+            "Zeta",
+            "Абрамов Фёдор",
+            "1984 Group",
+            "#55 Aircraft"
+        ],
+        "diacritics folded, deleted-only author hidden, # group last"
+    );
+    let letters: Vec<(&str, i64, i64)> = a
+        .letters
+        .iter()
+        .map(|(l, c, p)| (l.as_str(), *c, *p))
+        .collect();
+    assert_eq!(
+        letters,
+        [
+            ("C", 2, 0),
+            ("O", 1, 2),
+            ("Z", 1, 3),
+            ("А", 1, 4),
+            ("#", 2, 5)
+        ]
+    );
+    let s = cat.series_list().unwrap();
+    let snames: Vec<&str> = s.rows.iter().map(|r| r.1.as_str()).collect();
+    assert_eq!(snames, ["Øst", "Ostrov", "12 стульев"]);
+    assert_eq!(s.letters.last().unwrap().0, "#");
+
+    // author summary and co-authors
+    let abr = a.rows.iter().find(|r| r.1 == "Абрамов Фёдор").unwrap().0;
+    let sum = cat.author_summary(abr).unwrap().unwrap();
+    assert_eq!((sum.count, sum.anthologies, sum.without_series), (4, 1, 2));
+    assert_eq!(sum.series.len(), 1);
+    assert_eq!(
+        (sum.series[0].name.as_str(), sum.series[0].count),
+        ("12 стульев", 2)
+    );
+    assert_eq!(sum.langs, vec![("ru".to_string(), 4)]);
+    assert_eq!(
+        (sum.first_date.as_str(), sum.last_date.as_str()),
+        ("2020-01-05", "2020-01-11")
+    );
+    assert_eq!(sum.coauthor_count, 3);
+    // Zeta: 2 direct + the anthology; Capek and 1984 Group share only the anthology
+    assert_eq!(sum.coauthors.len(), 1);
+    assert_eq!(
+        (
+            sum.coauthors[0].name.as_str(),
+            sum.coauthors[0].books,
+            sum.coauthors[0].direct
+        ),
+        ("Zeta", 3, 2)
+    );
+    let all = cat.coauthors(abr).unwrap();
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[0].name, "Zeta");
+    assert!(all[1..].iter().all(|c| c.books == 1 && c.direct == 0));
+    assert!(cat.author_summary(9999).unwrap().is_none());
+
+    // text filter on book lists
+    let f = freelib_catalog::BookFilter {
+        q: Some("вдвоём".into()),
+        ..Default::default()
+    };
+    let p = cat
+        .books(&BookSelector::Author(abr), &f, &Page::default())
+        .unwrap();
+    let titles: Vec<&str> = p.books.iter().map(|b| b.title.as_str()).collect();
+    assert_eq!(titles, ["Вдвоём-2", "Вдвоём"]);
+    assert_eq!(p.total, 2);
+    let p = cat
+        .books(
+            &BookSelector::Since("2000-01-01".into()),
+            &freelib_catalog::BookFilter {
+                q: Some("capek".into()),
+                ..Default::default()
+            },
+            &Page {
+                cursor: None,
+                limit: 1,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        p.total, 3,
+        "author names match too (Čapek, Capek, anthology)"
+    );
+    assert!(p.next_cursor.is_some());
 }

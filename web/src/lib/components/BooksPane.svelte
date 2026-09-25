@@ -1,14 +1,19 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
-  import type { Book } from '../api/types';
-  import { api } from '../api/client';
+  import { tick, untrack } from 'svelte';
+  import type { Book, Coauthor } from '../api/types';
+  import { api, errorText } from '../api/client';
   import Icon from './Icon.svelte';
   import CoverThumb from './CoverThumb.svelte';
   import Rating from './Rating.svelte';
   import SelectionBar from './SelectionBar.svelte';
   import VirtualList from './VirtualList.svelte';
+  import Splitter from './Splitter.svelte';
+  import CoauthorsPopover from './CoauthorsPopover.svelte';
   import { formatSize, formatDate } from '../utils/format';
+  import { normalize } from '../utils/normalize';
   import { t, tn, i18nState } from '../i18n';
+  import { getPref, setPref } from '../stores/prefs.svelte';
+  import { COL_LIMITS, colWidth, setColWidth, type ColKey } from '../stores/layout.svelte';
   import {
     isSelected, selectedCount, toggle, toggleMany, clear as clearSelection, selectedIds,
   } from '../stores/selection.svelte';
@@ -25,7 +30,10 @@
     name: string;
     booksCount: number;
     seriesCount?: number;
-    alsoWith?: { id: number; name: string; href: string }[];
+    anthologies?: number;
+    /** top co-authors of an author (see AuthorSummary) */
+    coauthors?: Coauthor[];
+    coauthorCount?: number;
   };
 
   let {
@@ -39,79 +47,129 @@
     onOpenShelf: (ids: number[]) => void;
     header?: Header;
     onBack?: () => void;
-    onCounts?: (counts: { books: number; series: number; coauthors: { id: number; name: string }[] }) => void;
+    onCounts?: (counts: { books: number }) => void;
   } = $props();
 
-  const ALL_COLUMNS = ['author', 'series', 'genre', 'language', 'format'] as const;
-  type OptCol = (typeof ALL_COLUMNS)[number];
+  /** A book with this many authors is an anthology / collection (same as the server). */
+  const ANTHOLOGY_MIN_AUTHORS = 4;
+  /** More series groups than this start collapsed. */
+  const COLLAPSE_ABOVE = 8;
+  const ROW_H = 40;
+
+  const OPT_COLUMNS = ['author', 'series', 'genre', 'language', 'format', 'rating'] as const;
+  type OptCol = (typeof OPT_COLUMNS)[number];
+  type SortKey = 'series' | 'number' | 'title' | 'date';
+
+  const scopeKey = $derived(scope.kind === 'since' ? `since:${scope.date}` : `${scope.kind}:${scope.id}`);
+  const fullScope = $derived(scope.kind === 'author' || scope.kind === 'series');
+  // Author/series scopes are loaded in full (a whole bibliography, at most a few thousand
+  // books) and filtered/sorted here; genre/new-arrivals/shelf scopes can run into the tens of
+  // thousands of rows, so those page from the server as the list scrolls.
+  const paginated = $derived(!fullScope);
 
   let books = $state<Book[]>([]);
   let loading = $state(true);
-  let genreNames = $state<Map<number, string>>(new Map());
-  $effect(() => { const lang = i18nState.lang; api.genres(lib, lang).then((gs) => (genreNames = new Map(gs.map((g) => [g.id, g.name])))); });
-  let view = $state<'table' | 'grid'>('table');
-  let grouping = $state(true);
-  let hideDeleted = $state(true);
-  let columnMenuOpen = $state(false);
-  let extraColumns = $state<Set<OptCol>>(new Set(untrack(() => (scope.kind === 'author' ? [] : ['author']))));
-  let lastClickedIndex = -1;
-  let filterMenuOpen = $state(false);
-  let langFilter = $state<string | null>(null);
-  let extFilter = $state<Set<string>>(new Set());
-
-  // Author/series scopes are small (a person's whole bibliography), so we still
-  // load them in full. Genre/new-arrivals/shelf scopes can run into the tens of
-  // thousands of rows, so those page incrementally as the virtual list scrolls
-  // near the end instead of front-loading everything.
-  const paginated = $derived(scope.kind === 'genre' || scope.kind === 'shelf' || scope.kind === 'since');
+  let loadError = $state<string | null>(null);
+  let reloadTick = $state(0);
   let nextCursor = $state<string | null>(null);
   let fetchingMore = $state(false);
   let total = $state<number | null>(null);
 
+  let genreNames = $state<Map<number, string>>(new Map());
+  $effect(() => { const lang = i18nState.lang; api.genres(lib, lang).then((gs) => (genreNames = new Map(gs.map((g) => [g.id, g.name])))).catch(() => {}); });
+
+  // ---- view options (persisted per user) -------------------------------------------
+  const colsPrefKey = $derived(scope.kind === 'author' ? 'cols.author' : scope.kind === 'series' ? 'cols.series' : 'cols.other');
+  const extraColumns = $derived(
+    new Set<OptCol>(getPref<OptCol[]>(colsPrefKey, scope.kind === 'author' ? [] : ['author'])),
+  );
+  const view = $derived(getPref<'table' | 'grid'>('booksView', 'table'));
+  const sortPrefKey = $derived(`sort.${scope.kind === 'author' ? 'author' : 'series'}`);
+  const sort = $derived<SortKey>(
+    scope.kind === 'author' ? getPref<SortKey>(sortPrefKey, 'series')
+      : scope.kind === 'series' ? getPref<SortKey>(sortPrefKey, 'number')
+        : 'date',
+  );
+  const hideAnth = $derived(scope.kind === 'author' && getPref<boolean>('hideAnthologies', false));
+
+  let showDeleted = $state(false);
+  let langFilter = $state<string | null>(null);
+  let extFilter = $state<string | null>(null);
+  let text = $state('');
+  let q = $state('');
+  let qTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const v = text;
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => (q = v.trim()), paginated ? 300 : 120);
+  });
+  let columnMenuOpen = $state(false);
+  let filterMenuOpen = $state(false);
+  let coauthorsOpen = $state(false);
+  let collapsed = $state<Set<string>>(new Set());
+  let collapseInitFor = '';
+  let lastClickedIndex = -1;
+  let listRef = $state<{ reveal: (i: number) => void } | undefined>();
+
+  // New scope: forget the per-scope filters.
+  $effect(() => {
+    scopeKey;
+    untrack(() => {
+      text = ''; q = ''; langFilter = null; extFilter = null; showDeleted = false;
+      coauthorsOpen = false; filterMenuOpen = false; columnMenuOpen = false;
+    });
+  });
+
   function queryParams(): Record<string, unknown> {
-    const params: Record<string, unknown> = { deleted: !hideDeleted };
+    const params: Record<string, unknown> = { deleted: showDeleted };
     if (scope.kind === 'author') params.author = scope.id;
     else if (scope.kind === 'series') params.series = scope.id;
     else if (scope.kind === 'genre') params.genre = scope.id;
     else if (scope.kind === 'shelf') params.shelf = scope.id;
     else params.since = scope.date;
     if (langFilter) params.lang = langFilter;
-    if (extFilter.size === 1) params.ext = [...extFilter][0];
+    if (extFilter) params.ext = extFilter;
+    if (paginated && q) params.q = q;
     return params;
   }
 
   $effect(() => {
+    reloadTick;
     const params = queryParams();
     const isPaginated = paginated;
-    let cancelled = false;
+    const ctrl = new AbortController();
     loading = true;
+    loadError = null;
+    hay = new Map();
     books = [];
     nextCursor = null;
     total = null;
-    async function load() {
-      if (isPaginated) {
-        const res = await api.books(lib, { ...params, limit: 100 } as any);
-        if (cancelled) return;
-        books = res.books;
-        nextCursor = res.nextCursor;
-        total = res.total;
-        loading = false;
-        return;
+    (async () => {
+      try {
+        if (isPaginated) {
+          const res = await api.books(lib, { ...params, limit: 100 } as any, { signal: ctrl.signal });
+          books = res.books;
+          nextCursor = res.nextCursor;
+          total = res.total;
+          return;
+        }
+        let cursor: string | undefined;
+        const acc: Book[] = [];
+        for (let page = 0; page < 25; page++) {
+          const res = await api.books(lib, { ...params, cursor, limit: 2000 } as any, { signal: ctrl.signal });
+          acc.push(...res.books);
+          books = acc.slice();
+          total = res.total;
+          if (!res.nextCursor) break;
+          cursor = res.nextCursor;
+        }
+      } catch (e) {
+        if (!ctrl.signal.aborted) loadError = errorText(e);
+      } finally {
+        if (!ctrl.signal.aborted) loading = false;
       }
-      let cursor: string | undefined;
-      const acc: Book[] = [];
-      for (let page = 0; page < 25; page++) {
-        const res = await api.books(lib, { ...params, cursor, limit: 2000 } as any);
-        if (cancelled) return;
-        acc.push(...res.books);
-        books = acc.slice();
-        if (!res.nextCursor) break;
-        cursor = res.nextCursor;
-      }
-      loading = false;
-    }
-    load();
-    return () => { cancelled = true; };
+    })();
+    return () => ctrl.abort();
   });
 
   async function loadMore() {
@@ -121,7 +179,7 @@
       const res = await api.books(lib, { ...queryParams(), cursor: nextCursor, limit: 100 } as any);
       books = [...books, ...res.books];
       nextCursor = res.nextCursor;
-    } finally {
+    } catch { /* the next scroll retries */ } finally {
       fetchingMore = false;
     }
   }
@@ -130,27 +188,95 @@
     if (end >= flatRows.length - 20) loadMore();
   }
 
-  type Row = { book: Book; num: number | string };
-  type Group = { key: string; name: string; count: number; rows: Row[] };
+  // ---- client-side filter / sort for full scopes -----------------------------------
+  let hay = new Map<number, string>();
+  function haystack(b: Book): string {
+    let h = hay.get(b.id);
+    if (h === undefined) {
+      h = normalize(`${b.title} ${b.series?.name ?? ''} ${b.authors.map((a) => a.name).join(' ')}`);
+      hay.set(b.id, h);
+    }
+    return h;
+  }
+  const isAnthology = (b: Book) => b.authors.length >= ANTHOLOGY_MIN_AUTHORS;
 
+  const textMatched = $derived.by(() => {
+    if (paginated || !q) return books;
+    const words = normalize(q).split(' ').filter(Boolean);
+    if (!words.length) return books;
+    return books.filter((b) => { const h = haystack(b); return words.every((w) => h.includes(w)); });
+  });
+  const anthCount = $derived(scope.kind === 'author' ? textMatched.filter(isAnthology).length : 0);
+  const visibleBooks = $derived.by(() => {
+    let list = hideAnth ? textMatched.filter((b) => !isAnthology(b)) : textMatched;
+    if (sort === 'title') list = list.slice().sort((a, b) => cmpStr(normalize(a.title), normalize(b.title)) || a.id - b.id);
+    else if (sort === 'date') list = list.slice().sort((a, b) => cmpStr(b.date, a.date) || cmpStr(a.title, b.title));
+    return list;
+  });
+  function cmpStr(a: string, b: string) { return a < b ? -1 : a > b ? 1 : 0; }
+
+  type Row = { book: Book; num: number | string };
+  type Group = { key: string; name: string; seriesId: number | null; count: number; rows: Row[] };
+
+  const grouped = $derived(scope.kind === 'author' && sort === 'series');
   const groups = $derived.by<Group[]>(() => {
-    if (!(scope.kind === 'author' && grouping)) {
-      return [{ key: '_all', name: '', count: books.length, rows: books.map((b, i) => ({ book: b, num: i + 1 })) }];
+    const numFor = (b: Book, i: number) => (fullScope ? (b.serno ?? '') : i + 1);
+    if (!grouped) {
+      return [{ key: '_all', name: '', seriesId: null, count: visibleBooks.length, rows: visibleBooks.map((b, i) => ({ book: b, num: numFor(b, i) })) }];
     }
     const bySeries = new Map<string, Book[]>();
     const order: string[] = [];
-    for (const b of books) {
+    for (const b of visibleBooks) {
       const key = b.series ? `s${b.series.id}` : '_none';
       if (!bySeries.has(key)) { bySeries.set(key, []); order.push(key); }
       bySeries.get(key)!.push(b);
     }
     return order.map((key) => {
       const list = bySeries.get(key)!;
-      const name = key === '_none' ? t('books.outsideSeries') : list[0].series!.name;
+      const s = key === '_none' ? null : list[0].series!;
       return {
-        key, name, count: list.length,
+        key, name: s ? s.name : t('books.outsideSeries'), seriesId: s ? s.id : null, count: list.length,
         rows: list.map((b) => ({ book: b, num: b.serno ?? '' })),
       };
+    });
+  });
+  const showGroupHeads = $derived(groups.length > 1);
+
+  // Many series: start with all groups collapsed (a table of contents); a text filter opens them.
+  $effect(() => {
+    const n = groups.length;
+    if (loading || !books.length) return;
+    if (collapseInitFor === scopeKey) return;
+    collapseInitFor = scopeKey;
+    collapsed = n > COLLAPSE_ABOVE ? new Set(groups.map((g) => g.key)) : new Set();
+  });
+  const effectiveCollapsed = $derived(q ? new Set<string>() : collapsed);
+  const allCollapsed = $derived(showGroupHeads && groups.every((g) => effectiveCollapsed.has(g.key)));
+
+  function toggleCollapse(key: string) {
+    const s = new Set(collapsed);
+    if (s.has(key)) s.delete(key); else s.add(key);
+    collapsed = s;
+  }
+  function setAllCollapsed(on: boolean) {
+    collapsed = on ? new Set(groups.map((g) => g.key)) : new Set();
+  }
+
+  // A book selected from outside (search, deep link): open its group and scroll to it.
+  let revealedFor: number | null = null;
+  $effect(() => {
+    const id = selectedBookId;
+    if (id === null || loading) return;
+    untrack(() => {
+      if (revealedFor === id) return;
+      const g = groups.find((gr) => gr.rows.some((r) => r.book.id === id));
+      if (!g) return;
+      revealedFor = id;
+      if (collapsed.has(g.key)) { const s = new Set(collapsed); s.delete(g.key); collapsed = s; }
+      tick().then(() => {
+        const i = flatRows.findIndex((fr) => fr.kind === 'row' && fr.row.book.id === id);
+        if (i >= 0) listRef?.reveal(Math.max(0, i));
+      });
     });
   });
 
@@ -158,7 +284,8 @@
   const flatRows = $derived.by<FlatRow[]>(() => {
     const out: FlatRow[] = [];
     for (const g of groups) {
-      if (g.name) out.push({ kind: 'group', group: g });
+      if (showGroupHeads) out.push({ kind: 'group', group: g });
+      if (showGroupHeads && effectiveCollapsed.has(g.key)) continue;
       for (const r of g.rows) out.push({ kind: 'row', row: r, groupKey: g.key });
     }
     return out;
@@ -166,22 +293,21 @@
 
   $effect(() => {
     if (!onCounts) return;
-    const seriesCount = scope.kind === 'author' ? groups.filter((g) => g.name).length : 0;
-    let coauthors: { id: number; name: string }[] = [];
-    if (scope.kind === 'author') {
-      const map = new Map<number, string>();
-      for (const b of books) for (const a of b.authors) if (a.id !== scope.id) map.set(a.id, a.name);
-      coauthors = [...map.entries()].map(([id, name]) => ({ id, name }));
-    }
-    onCounts({ books: total ?? books.length, series: seriesCount, coauthors });
+    onCounts({ books: total ?? books.length });
   });
 
-  const availableLangs = $derived.by(() => [...new Set(books.map((b) => b.lang))].sort());
-  const availableExts = $derived.by(() => [...new Set(books.map((b) => b.ext))].sort());
+  const availableLangs = $derived.by(() => [...new Set(books.map((b) => b.lang).filter(Boolean))].sort());
+  const availableExts = $derived.by(() => [...new Set(books.map((b) => b.ext).filter(Boolean))].sort());
+  const activeFilterCount = $derived((langFilter ? 1 : 0) + (extFilter ? 1 : 0) + (showDeleted ? 1 : 0));
+  const anyFilter = $derived(activeFilterCount > 0 || !!q || hideAnth);
 
-  const allIds = $derived(books.map((b) => b.id));
+  function resetFilters() {
+    text = ''; q = ''; langFilter = null; extFilter = null; showDeleted = false;
+    if (hideAnth) setPref('hideAnthologies', false);
+  }
+
+  const allIds = $derived(visibleBooks.map((b) => b.id));
   const allChecked = $derived(allIds.length > 0 && allIds.every((id) => isSelected(lib, id)));
-  const anyChecked = $derived(selectedCount(lib) > 0);
 
   function toggleAll() {
     toggleMany(lib, allIds, !allChecked);
@@ -192,37 +318,70 @@
   }
   function rowClick(e: MouseEvent, book: Book, flatIndex: number) {
     if (e.shiftKey && lastClickedIndex >= 0) {
-      const flat = groups.flatMap((g) => g.rows.map((r) => r.book));
       const [a, b] = [lastClickedIndex, flatIndex].sort((x, y) => x - y);
-      toggleMany(lib, flat.slice(a, b + 1).map((x) => x.id), true);
+      const ids = flatRows.slice(a, b + 1).flatMap((fr) => (fr.kind === 'row' ? [fr.row.book.id] : []));
+      toggleMany(lib, ids, true);
     } else {
       onPick(book.id);
     }
     lastClickedIndex = flatIndex;
   }
 
-  function flatIndexOf(bookId: number): number {
-    let i = 0;
-    for (const g of groups) for (const r of g.rows) { if (r.book.id === bookId) return i; i++; }
-    return -1;
+  // Keyboard: ↑/↓ move the current book, Space ticks it, ←/→ fold/unfold its series group.
+  function tableKeydown(e: KeyboardEvent) {
+    if ((e.target as HTMLElement).closest('input, button:not(.title-btn), [role=separator]')) return;
+    const rows = flatRows;
+    let cur = rows.findIndex((fr) => fr.kind === 'row' && fr.row.book.id === selectedBookId);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const d = e.key === 'ArrowDown' ? 1 : -1;
+      let i = cur < 0 ? (d > 0 ? -1 : rows.length) : cur;
+      do { i += d; } while (i >= 0 && i < rows.length && rows[i].kind !== 'row');
+      if (i >= 0 && i < rows.length) {
+        const fr = rows[i];
+        if (fr.kind === 'row') { onPick(fr.row.book.id); lastClickedIndex = i; }
+        listRef?.reveal(i);
+      }
+    } else if (e.key === ' ' && cur >= 0) {
+      e.preventDefault();
+      const fr = rows[cur];
+      if (fr.kind === 'row') toggle(lib, fr.row.book.id);
+    } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && showGroupHeads && cur >= 0) {
+      const fr = rows[cur];
+      if (fr.kind !== 'row') return;
+      e.preventDefault();
+      if (e.key === 'ArrowLeft') { const s = new Set(collapsed); s.add(fr.groupKey); collapsed = s; }
+    }
   }
 
-  const gridColumns = $derived.by(() => {
-    // checkbox, num, title(flex), then optional columns, rating
-    const cols = ['36px', '36px', 'minmax(0,1fr)'];
-    if (extraColumns.has('author')) cols.push('140px');
-    if (extraColumns.has('series')) cols.push('140px');
-    if (extraColumns.has('genre')) cols.push('120px');
-    if (extraColumns.has('language')) cols.push('70px');
-    if (extraColumns.has('format')) cols.push('70px');
-    cols.push('64px', '92px', '84px');
-    return cols.join(' ');
+  // ---- columns ---------------------------------------------------------------------
+  let liveCols = $state<Partial<Record<ColKey, number>>>({});
+  const showNum = $derived(fullScope);
+  type Col = ColKey | 'title';
+  const columns = $derived.by<Col[]>(() => {
+    const c: Col[] = [];
+    if (showNum) c.push('num');
+    c.push('title');
+    for (const k of ['author', 'series', 'genre', 'language', 'format'] as const) if (extraColumns.has(k)) c.push(k);
+    c.push('size', 'added');
+    if (extraColumns.has('rating')) c.push('rating');
+    return c;
+  });
+  const titleIndex = $derived(columns.indexOf('title'));
+  const w = (k: ColKey) => liveCols[k] ?? colWidth(k);
+  const gridColumns = $derived(
+    ['32px', ...columns.map((c) => (c === 'title' ? 'minmax(120px, 1fr)' : `${w(c)}px`))].join(' '),
+  );
+  const colLabel: Record<Col, string> = $derived({
+    num: '#', title: t('books.col.title'), author: t('books.col.author'), series: t('books.col.series'),
+    genre: t('books.col.genre'), language: t('books.col.language'), format: t('books.col.format'),
+    size: t('books.col.size'), added: t('books.col.added'), rating: t('books.col.rating'),
   });
 
   function toggleColumn(c: OptCol) {
     const s = new Set(extraColumns);
     if (s.has(c)) s.delete(c); else s.add(c);
-    extraColumns = s;
+    setPref(colsPrefKey, [...s]);
   }
 
   // The desktop table's fixed columns don't fit a phone screen (see
@@ -237,56 +396,114 @@
   });
 
   function rowMeta(r: Row): string {
-    const parts = [r.num ? `#${r.num}` : '', r.book.ext.toUpperCase(), formatSize(r.book.size)];
+    const b = r.book;
+    const parts: string[] = [];
+    if (scope.kind !== 'author') parts.push(authorsShort(b));
+    if (b.series && !grouped && scope.kind !== 'series') parts.push(`${b.series.name}${b.serno ? ` #${b.serno}` : ''}`);
+    else if (b.serno && (grouped || scope.kind === 'series')) parts.push(`#${b.serno}`);
+    parts.push(b.ext.toUpperCase(), formatSize(b.size));
     return parts.filter(Boolean).join(' · ');
   }
+  function authorsShort(b: Book): string {
+    if (b.authors.length <= 2) return b.authors.map((a) => a.name).join(', ');
+    return `${b.authors[0].name} ${t('books.andMore', { count: b.authors.length - 1 })}`;
+  }
+
+  // Cover grid: pages in more books when the end comes into view.
+  function sentinel(node: HTMLElement) {
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) loadMore(); });
+    io.observe(node);
+    return { destroy: () => io.disconnect() };
+  }
+
+  const shownCoauthors = $derived((header?.coauthors ?? []).slice(0, 3));
+  const moreCoauthors = $derived(Math.max(0, (header?.coauthorCount ?? 0) - shownCoauthors.length));
+  const sortOptions = $derived<SortKey[]>(scope.kind === 'author' ? ['series', 'title', 'date'] : ['number', 'title', 'date']);
+  const countLabel = $derived(
+    fullScope && (q || hideAnth || langFilter || extFilter)
+      ? t('books.shownOf', { shown: visibleBooks.length, total: books.length })
+      : '',
+  );
 </script>
 
-<main class="books-pane">
+{#snippet filterMenu(phone: boolean)}
+  <div class="col-menu" class:phone-menu={phone} role="menu">
+    <label class="menu-check"><input type="checkbox" bind:checked={showDeleted} />{t('books.showDeleted')}</label>
+    {#if availableLangs.length > 1 || langFilter}
+      <div class="menu-group-title">{t('search.language')}</div>
+      <label><input type="radio" name="langf-{phone}" checked={langFilter === null} onchange={() => (langFilter = null)} />{t('books.any')}</label>
+      {#each availableLangs as l (l)}
+        <label><input type="radio" name="langf-{phone}" checked={langFilter === l} onchange={() => (langFilter = l)} />{l}</label>
+      {/each}
+    {/if}
+    {#if availableExts.length > 1 || extFilter}
+      <div class="menu-group-title">{t('search.format')}</div>
+      <label><input type="radio" name="extf-{phone}" checked={extFilter === null} onchange={() => (extFilter = null)} />{t('books.any')}</label>
+      {#each availableExts as e (e)}
+        <label><input type="radio" name="extf-{phone}" checked={extFilter === e} onchange={() => (extFilter = e)} />{e.toUpperCase()}</label>
+      {/each}
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet colHead(c: Col, i: number)}
+  <span class="hcell" class:right={c === 'size' || c === 'added' || c === 'rating'}>
+    <span class="hlabel">{colLabel[c]}</span>
+    {#if c !== 'title'}
+      {@const k = c as ColKey}
+      {#if i < titleIndex}
+        <Splitter
+          class="col-split at-right"
+          value={w(k)} min={COL_LIMITS[k].min} max={COL_LIMITS[k].max}
+          label={t('layout.resizeColumn', { name: colLabel[c] })}
+          side="before"
+          onInput={(v) => (liveCols = { ...liveCols, [k]: v })}
+          onCommit={(v) => { setColWidth(k, v); liveCols = {}; }}
+          onReset={() => { setColWidth(k, null); liveCols = {}; }}
+        />
+      {:else}
+        <Splitter
+          class="col-split at-left"
+          value={w(k)} min={COL_LIMITS[k].min} max={COL_LIMITS[k].max}
+          label={t('layout.resizeColumn', { name: colLabel[c] })}
+          side="after"
+          onInput={(v) => (liveCols = { ...liveCols, [k]: v })}
+          onCommit={(v) => { setColWidth(k, v); liveCols = {}; }}
+          onReset={() => { setColWidth(k, null); liveCols = {}; }}
+        />
+      {/if}
+    {/if}
+  </span>
+{/snippet}
+
+<main class="books-pane" aria-busy={loading}>
   {#if header && !isMobile}
     <div class="scope-header">
       <div class="crumb">{header.crumb}</div>
-      <h1>{header.name}</h1>
+      <h1 title={header.name}>{header.name}</h1>
       <div class="counts">
-        {#if header.seriesCount}
-          {tn('browse.booksCount', header.booksCount)} · {tn('browse.seriesCount', header.seriesCount)}
-        {:else}
-          {tn('browse.booksCount', header.booksCount)}
-        {/if}
-        {#if header.alsoWith?.length}
-          &nbsp;·&nbsp;{t('authors.alsoWith')}
-          {#each header.alsoWith as a, i (a.id)}{#if i > 0}, {/if}<a href={a.href} data-link>{a.name}</a>{/each}
-        {/if}
+        <span>{tn('browse.booksCount', header.booksCount)}</span>
+        {#if header.seriesCount}<span>· {tn('browse.seriesCount', header.seriesCount)}</span>{/if}
+        {#if header.anthologies}<span>· {tn('browse.inAnthologies', header.anthologies)}</span>{/if}
       </div>
-      <div class="chips">
-        {#if langFilter}
-          <span class="chip">{t('details.language')}: {langFilter}
-            <button type="button" aria-label={t('common.close')} onclick={() => (langFilter = null)}><Icon name="close" size={12} /></button>
+      {#if shownCoauthors.length || moreCoauthors}
+        <div class="coauthors">
+          <span class="lbl">{t('authors.alsoWith')}</span>
+          <span class="names">
+            {#each shownCoauthors as a, i (a.id)}{#if i > 0}{', '}{/if}<a href="/l/{lib}/authors/{a.id}" data-link title={tn('authors.sharedBooks', a.books)}>{a.name}</a>{/each}
           </span>
-        {/if}
-        {#each [...extFilter] as ext (ext)}
-          <span class="chip">{ext.toUpperCase()}
-            <button type="button" aria-label={t('common.close')} onclick={() => { const s = new Set(extFilter); s.delete(ext); extFilter = s; }}><Icon name="close" size={12} /></button>
-          </span>
-        {/each}
-        <div class="filter-chooser">
-          <button type="button" class="chip dashed" onclick={() => (filterMenuOpen = !filterMenuOpen)} aria-haspopup="true" aria-expanded={filterMenuOpen}>
-            <Icon name="plus" size={12} />{t('books.filter')}
-          </button>
-          {#if filterMenuOpen}
-            <div class="col-menu" role="menu">
-              <div class="menu-group-title">{t('search.language')}</div>
-              {#each availableLangs as l (l)}
-                <label><input type="radio" name="langf" checked={langFilter === l} onchange={() => (langFilter = l)} />{l}</label>
-              {/each}
-              <div class="menu-group-title">{t('search.format')}</div>
-              {#each availableExts as e (e)}
-                <label><input type="checkbox" checked={extFilter.has(e)} onchange={() => { const s = new Set(extFilter); if (s.has(e)) s.delete(e); else s.add(e); extFilter = s; }} />{e.toUpperCase()}</label>
-              {/each}
+          {#if moreCoauthors}
+            <div class="more-wrap">
+              <button type="button" class="more-btn" aria-haspopup="dialog" aria-expanded={coauthorsOpen} onclick={() => (coauthorsOpen = !coauthorsOpen)}>
+                {shownCoauthors.length ? t('authors.andMore', { count: moreCoauthors }) : tn('authors.coauthorsCount', moreCoauthors)}
+              </button>
+              {#if coauthorsOpen && scope.kind === 'author'}
+                <CoauthorsPopover {lib} authorId={scope.id} onClose={() => (coauthorsOpen = false)} />
+              {/if}
             </div>
           {/if}
         </div>
-      </div>
+      {/if}
     </div>
   {:else if header && isMobile}
     <div class="scope-header-phone">
@@ -294,47 +511,59 @@
       <div class="ph-info">
         <span class="ph-name">{header.name}</span>
         <span class="ph-counts">
-          {#if header.seriesCount}
-            {tn('browse.booksCount', header.booksCount)} · {tn('browse.seriesCount', header.seriesCount)}
-          {:else}
-            {tn('browse.booksCount', header.booksCount)}
-          {/if}
+          {tn('browse.booksCount', header.booksCount)}{#if header.seriesCount}&nbsp;· {tn('browse.seriesCount', header.seriesCount)}{/if}
         </span>
       </div>
-      <button type="button" class="filter-btn" aria-label={t('books.filter')} onclick={() => (filterMenuOpen = !filterMenuOpen)}><Icon name="filter" size={18} /></button>
-      {#if filterMenuOpen}
-        <div class="col-menu phone-menu" role="menu">
-          <div class="menu-group-title">{t('search.language')}</div>
-          {#each availableLangs as l (l)}
-            <label><input type="radio" name="langfp" checked={langFilter === l} onchange={() => (langFilter = l)} />{l}</label>
-          {/each}
-          <div class="menu-group-title">{t('search.format')}</div>
-          {#each availableExts as e (e)}
-            <label><input type="checkbox" checked={extFilter.has(e)} onchange={() => { const s = new Set(extFilter); if (s.has(e)) s.delete(e); else s.add(e); extFilter = s; }} />{e.toUpperCase()}</label>
-          {/each}
-        </div>
-      {/if}
     </div>
   {/if}
+
   <div class="toolbar">
-    <div class="row">
-      <button type="button" class="tbtn" onclick={() => (hideDeleted = !hideDeleted)}>
-        {hideDeleted ? t('books.hideDeleted') : t('books.showDeleted')}
+    <label class="find">
+      <Icon name="search" size={15} />
+      <input
+        type="search"
+        placeholder={scope.kind === 'author' ? t('books.findInAuthor') : t('books.findInList')}
+        aria-label={t('books.findInList')}
+        bind:value={text}
+        onkeydown={(e) => { if (e.key === 'Escape') text = ''; }}
+      />
+    </label>
+    {#if fullScope}
+      <label class="sort">
+        <span class="visually-hidden">{t('books.sort')}</span>
+        <select value={sort} onchange={(e) => setPref(sortPrefKey, (e.currentTarget as HTMLSelectElement).value)} aria-label={t('books.sort')}>
+          {#each sortOptions as o (o)}<option value={o}>{t(`books.sort.${o}`)}</option>{/each}
+        </select>
+      </label>
+    {/if}
+    {#if groups.length > 3 && !q}
+      <button type="button" class="tbtn" onclick={() => setAllCollapsed(!allCollapsed)}>
+        {allCollapsed ? t('books.expandAll') : t('books.collapseAll')}
       </button>
-      <div class="spacer"></div>
-      {#if scope.kind === 'author'}
-        <button type="button" class="tbtn group-btn" onclick={() => (grouping = !grouping)}>
-          {grouping ? t('books.groupSeries') : t('books.groupNone')}
-          <Icon name="chevronDown" size={14} />
-        </button>
-      {/if}
+    {/if}
+    {#if scope.kind === 'author' && (anthCount > 0 || hideAnth)}
+      <button type="button" class="tbtn toggle" aria-pressed={hideAnth} class:on={hideAnth}
+        title={t('books.anthologiesHint', { n: ANTHOLOGY_MIN_AUTHORS })}
+        onclick={() => setPref('hideAnthologies', !hideAnth)}>
+        {hideAnth ? t('books.anthologiesHidden', { count: anthCount }) : t('books.hideAnthologies', { count: anthCount })}
+      </button>
+    {/if}
+    <div class="filter-chooser">
+      <button type="button" class="tbtn" class:on={activeFilterCount > 0} aria-haspopup="true" aria-expanded={filterMenuOpen} onclick={() => (filterMenuOpen = !filterMenuOpen)}>
+        <Icon name="filter" size={14} /><span class="lbl-f">{t('books.filter')}</span>{#if activeFilterCount}<span class="badge">{activeFilterCount}</span>{/if}
+      </button>
+      {#if filterMenuOpen}{@render filterMenu(isMobile)}{/if}
+    </div>
+    {#if countLabel}<span class="shown">{countLabel}</span>{/if}
+    <div class="spacer"></div>
+    {#if !isMobile}
       <div class="col-chooser">
         <button type="button" class="tbtn" onclick={() => (columnMenuOpen = !columnMenuOpen)} aria-haspopup="true" aria-expanded={columnMenuOpen}>
           {t('books.columns')}<Icon name="chevronDown" size={14} />
         </button>
         {#if columnMenuOpen}
           <div class="col-menu" role="menu">
-            {#each ALL_COLUMNS as c (c)}
+            {#each OPT_COLUMNS as c (c)}
               <label>
                 <input type="checkbox" checked={extraColumns.has(c)} onchange={() => toggleColumn(c)} />
                 {t(`books.col.${c}`)}
@@ -343,27 +572,44 @@
           </div>
         {/if}
       </div>
-      <div role="group" aria-label="View" class="view-toggle">
-        <button type="button" aria-label={t('books.viewTable')} aria-pressed={view === 'table'} class:active={view === 'table'} onclick={() => (view = 'table')}>
+      <div role="group" aria-label={t('books.view')} class="view-toggle">
+        <button type="button" aria-label={t('books.viewTable')} aria-pressed={view === 'table'} class:active={view === 'table'} onclick={() => setPref('booksView', 'table')}>
           <Icon name="table" size={16} />
         </button>
-        <button type="button" aria-label={t('books.viewGrid')} aria-pressed={view === 'grid'} class:active={view === 'grid'} onclick={() => (view = 'grid')}>
+        <button type="button" aria-label={t('books.viewGrid')} aria-pressed={view === 'grid'} class:active={view === 'grid'} onclick={() => setPref('booksView', 'grid')}>
           <Icon name="grid" size={16} />
         </button>
       </div>
-    </div>
+    {/if}
   </div>
 
   {#if loading && books.length === 0}
-    <div class="empty">{t('common.loading')}</div>
-  {:else if books.length === 0}
-    <div class="empty">{t('search.noResults')}</div>
+    <div class="skeleton" aria-label={t('common.loading')}>
+      {#each Array(8) as _, i (i)}<div class="sk-row"><span></span><span style="width: {40 + ((i * 37) % 45)}%"></span></div>{/each}
+    </div>
+  {:else if loadError}
+    <div class="empty">
+      <p>{t('common.error')}: {loadError}</p>
+      <button type="button" class="tbtn" onclick={() => reloadTick++}>{t('common.retry')}</button>
+    </div>
+  {:else if visibleBooks.length === 0}
+    <div class="empty">
+      {#if anyFilter}
+        <p>{t('books.nothingMatches')}</p>
+        <button type="button" class="tbtn" onclick={resetFilters}>{t('books.resetFilters')}</button>
+      {:else}
+        <p>{t('books.noBooks')}</p>
+      {/if}
+    </div>
   {:else if isMobile}
     <div class="mobile-list">
       <VirtualList items={flatRows} itemHeight={64} overscan={6} onRangeChange={onRowRangeChange}>
         {#snippet row(fr)}
           {#if fr.kind === 'group'}
-            <div class="m-group">{fr.group.name}<span class="gcount">{fr.group.count}</span></div>
+            <button type="button" class="m-group" aria-expanded={!effectiveCollapsed.has(fr.group.key)} onclick={() => toggleCollapse(fr.group.key)}>
+              <span class="chev" class:open={!effectiveCollapsed.has(fr.group.key)}><Icon name="chevronRight" size={14} /></span>
+              <span class="gname">{fr.group.name}</span><span class="gcount">{fr.group.count}</span>
+            </button>
           {:else}
             {@const r = fr.row}
             <div
@@ -371,6 +617,7 @@
               role="row"
               tabindex="0"
               class:checked={isSelected(lib, r.book.id)}
+              class:deleted={r.book.deleted}
               onclick={() => onPick(r.book.id)}
               onkeydown={(e) => { if (e.key === 'Enter') onPick(r.book.id); }}
             >
@@ -381,7 +628,7 @@
               </div>
               <input
                 type="checkbox"
-                aria-label={`Select ${r.book.title}`}
+                aria-label={t('books.select', { title: r.book.title })}
                 checked={isSelected(lib, r.book.id)}
                 onclick={(e) => e.stopPropagation()}
                 onchange={() => toggle(lib, r.book.id)}
@@ -393,62 +640,73 @@
     </div>
   {:else if view === 'table'}
     <div class="table-wrap">
-      <div class="brow head" style="grid-template-columns: {gridColumns}">
+      <div class="brow head" role="row" style="grid-template-columns: {gridColumns}">
         <input type="checkbox" aria-label={t('books.selectAll')} checked={allChecked} onchange={toggleAll} />
-        <span>{t('books.col.no')}</span>
-        <span>{t('books.col.title')}</span>
-        {#if extraColumns.has('author')}<span>{t('books.col.author')}</span>{/if}
-        {#if extraColumns.has('series')}<span>{t('books.col.series')}</span>{/if}
-        {#if extraColumns.has('genre')}<span>{t('books.col.genre')}</span>{/if}
-        {#if extraColumns.has('language')}<span>{t('books.col.language')}</span>{/if}
-        {#if extraColumns.has('format')}<span>{t('books.col.format')}</span>{/if}
-        <span style="text-align:right">{t('books.col.size')}</span>
-        <span style="text-align:right">{t('books.col.added')}</span>
-        <span style="text-align:right">{t('books.col.rating')}</span>
+        {#each columns as c, i (c)}{@render colHead(c, i)}{/each}
       </div>
-      <div class="scroll">
-        <VirtualList items={flatRows} itemHeight={40} onRangeChange={onRowRangeChange}>
-          {#snippet row(fr)}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div class="scroll" tabindex="0" role="grid" aria-label={t('books.list')} onkeydown={tableKeydown}>
+        <VirtualList bind:this={listRef} items={flatRows} itemHeight={ROW_H} onRangeChange={onRowRangeChange}>
+          {#snippet row(fr, fi)}
             {#if fr.kind === 'group'}
-              <div class="group-head">
+              {@const open = !effectiveCollapsed.has(fr.group.key)}
+              <div class="group-head" role="row">
                 <input
                   type="checkbox"
-                  aria-label={`Select series ${fr.group.name}`}
+                  aria-label={t('books.selectGroup', { name: fr.group.name })}
                   checked={fr.group.rows.every((r) => isSelected(lib, r.book.id))}
                   onchange={() => toggleGroup(fr.group.rows.map((r) => r.book.id))}
                 />
-                <span class="gname">{fr.group.name}</span>
-                <span class="gcount">{fr.group.count}</span>
+                <button type="button" class="gtoggle" aria-expanded={open} onclick={() => toggleCollapse(fr.group.key)}>
+                  <span class="chev" class:open><Icon name="chevronRight" size={14} /></span>
+                  <span class="gname">{fr.group.name}</span>
+                  <span class="gcount">{fr.group.count}</span>
+                </button>
+                {#if fr.group.seriesId !== null}
+                  <a class="glink" href="/l/{lib}/series/{fr.group.seriesId}" data-link title={t('books.openSeries')} aria-label={t('books.openSeries')}><Icon name="external" size={13} /></a>
+                {/if}
               </div>
             {:else}
               {@const r = fr.row}
+              {@const b = r.book}
+              <!-- keyboard: the grid container handles ↑/↓/Space (tableKeydown) -->
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
               <div
                 class="brow"
                 role="row"
-                tabindex="0"
-                class:selected={r.book.id === selectedBookId}
-                class:checked={isSelected(lib, r.book.id)}
+                tabindex="-1"
+                class:selected={b.id === selectedBookId}
+                class:checked={isSelected(lib, b.id)}
+                class:deleted={b.deleted}
                 style="grid-template-columns: {gridColumns}"
-                onclick={(e) => rowClick(e, r.book, flatIndexOf(r.book.id))}
-                onkeydown={(e) => { if (e.key === 'Enter') { onPick(r.book.id); } }}
+                onclick={(e) => rowClick(e, b, fi)}
               >
                 <input
                   type="checkbox"
-                  aria-label={`Select ${r.book.title}`}
-                  checked={isSelected(lib, r.book.id)}
+                  aria-label={t('books.select', { title: b.title })}
+                  checked={isSelected(lib, b.id)}
                   onclick={(e) => e.stopPropagation()}
-                  onchange={() => toggle(lib, r.book.id)}
+                  onchange={() => toggle(lib, b.id)}
                 />
-                <span class="muted">{r.num}</span>
-                <button type="button" class="title-btn" class:strong={r.book.id === selectedBookId}>{r.book.title}</button>
-                {#if extraColumns.has('author')}<span class="muted ellipsis">{r.book.authors.map((a) => a.name).join(', ')}</span>{/if}
-                {#if extraColumns.has('series')}<span class="muted ellipsis">{r.book.series?.name ?? ''}</span>{/if}
-                {#if extraColumns.has('genre')}<span class="muted ellipsis">{genreNames.get(r.book.genres[0]) ?? ''}</span>{/if}
-                {#if extraColumns.has('language')}<span class="muted">{r.book.lang}</span>{/if}
-                {#if extraColumns.has('format')}<span class="muted">{r.book.ext}</span>{/if}
-                <span class="muted" style="text-align:right">{formatSize(r.book.size)}</span>
-                <span class="muted" style="text-align:right">{formatDate(r.book.date, i18nState.lang)}</span>
-                <span style="display:flex;justify-content:flex-end"><Rating value={r.book.rating} /></span>
+                {#each columns as c (c)}
+                  {#if c === 'num'}<span class="muted num">{r.num}</span>
+                  {:else if c === 'title'}
+                    <span class="title-cell" title={b.title}>
+                      <button type="button" class="title-btn" tabindex="-1" class:strong={b.id === selectedBookId}>{b.title}</button>
+                      {#if scope.kind === 'author' && !grouped && b.series && !extraColumns.has('series')}<span class="sub">{b.series.name}{b.serno ? ` #${b.serno}` : ''}</span>{/if}
+                      {#if isAnthology(b)}<span class="tag" title={b.authors.map((a) => a.name).join(', ')}>{tn('books.authorsCount', b.authors.length)}</span>{/if}
+                      {#if b.deleted}<span class="tag danger">{t('books.deleted')}</span>{/if}
+                    </span>
+                  {:else if c === 'author'}<span class="muted ellipsis" title={b.authors.map((a) => a.name).join(', ')}>{authorsShort(b)}</span>
+                  {:else if c === 'series'}<span class="muted ellipsis" title={b.series?.name ?? ''}>{b.series ? `${b.series.name}${b.serno ? ` #${b.serno}` : ''}` : ''}</span>
+                  {:else if c === 'genre'}<span class="muted ellipsis">{genreNames.get(b.genres[0]) ?? ''}</span>
+                  {:else if c === 'language'}<span class="muted">{b.lang}</span>
+                  {:else if c === 'format'}<span class="muted">{b.ext}</span>
+                  {:else if c === 'size'}<span class="muted right">{formatSize(b.size)}</span>
+                  {:else if c === 'added'}<span class="muted right">{formatDate(b.date, i18nState.lang)}</span>
+                  {:else if c === 'rating'}<span class="right rating-cell">{#if b.rating}<Rating value={b.rating} />{/if}</span>
+                  {/if}
+                {/each}
               </div>
             {/if}
           {/snippet}
@@ -458,8 +716,8 @@
     </div>
   {:else}
     <div class="grid-view">
-      {#each books as b (b.id)}
-        <button type="button" class="cover-card" class:selected={b.id === selectedBookId} onclick={() => onPick(b.id)}>
+      {#each visibleBooks as b (b.id)}
+        <button type="button" class="cover-card" class:selected={b.id === selectedBookId} onclick={() => onPick(b.id)} title={b.title}>
           <div class="cover-wrap">
             <CoverThumb {lib} bookId={b.id} title={b.title} width={140} height={200} />
             {#if isSelected(lib, b.id)}
@@ -468,15 +726,17 @@
             <input
               type="checkbox"
               class="grid-check"
-              aria-label={`Select ${b.title}`}
+              aria-label={t('books.select', { title: b.title })}
               checked={isSelected(lib, b.id)}
               onclick={(e) => e.stopPropagation()}
               onchange={() => toggle(lib, b.id)}
             />
           </div>
           <span class="cover-title">{b.title}</span>
+          {#if scope.kind !== 'author'}<span class="cover-sub">{authorsShort(b)}</span>{/if}
         </button>
       {/each}
+      {#if nextCursor}<div class="grid-sentinel" use:sentinel>{fetchingMore ? t('common.loading') : ''}</div>{/if}
     </div>
   {/if}
 
@@ -490,84 +750,141 @@
 </main>
 
 <style>
-  .books-pane { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface); position: relative; min-height: 0; }
-  .scope-header { padding: 20px 24px 14px; display: flex; flex-direction: column; gap: 12px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  .books-pane { flex: 1 1 0; min-width: 320px; display: flex; flex-direction: column; background: var(--surface); position: relative; min-height: 0; }
+  .scope-header { padding: 16px 24px 12px; display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--line); flex-shrink: 0; min-width: 0; }
   .scope-header .crumb { font-size: 12px; color: var(--muted); }
-  .scope-header h1 { margin: 4px 0 2px; font-family: var(--font-display); font-size: 26px; font-weight: 600; line-height: 1.2; }
-  .scope-header .counts { font-size: 13px; color: var(--muted); }
-  .scope-header .counts a { color: inherit; }
-  .chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .chip {
-    display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px;
-    background: var(--surface-alt); color: var(--muted-2); font-size: 12px; border: none;
+  .scope-header h1 {
+    margin: 2px 0 2px; font-family: var(--font-display); font-size: 24px; font-weight: 600; line-height: 1.25;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .chip button { display: flex; background: none; border: none; padding: 0; color: inherit; }
-  .chip.dashed { border: 1px dashed var(--border); background: var(--surface); cursor: pointer; }
-  .filter-chooser { position: relative; }
-  .menu-group-title { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 6px 6px 2px; }
+  .counts { display: flex; gap: 4px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+  .coauthors { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); min-width: 0; }
+  .coauthors .lbl { flex-shrink: 0; }
+  .coauthors .names { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .coauthors a { color: var(--muted-2); }
+  .coauthors a:hover { color: var(--accent); }
+  .more-wrap { position: relative; flex-shrink: 0; }
+  .more-btn { border: none; background: none; padding: 0; color: var(--accent); font-size: 13px; white-space: nowrap; }
+  .more-btn:hover { text-decoration: underline; }
   .scope-header-phone { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-shrink: 0; position: relative; }
-  .scope-header-phone .back, .scope-header-phone .filter-btn { width: 36px; height: 36px; border: none; background: transparent; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .scope-header-phone .back:hover, .scope-header-phone .filter-btn:hover { background: var(--surface-hover); }
+  .scope-header-phone .back { width: 36px; height: 36px; border: none; background: transparent; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .scope-header-phone .back:hover { background: var(--surface-hover); }
   .ph-info { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; }
   .ph-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ph-counts { font-size: 12px; color: var(--muted); }
-  .phone-menu { top: 46px; right: 8px; }
   .loading-more { text-align: center; padding: 10px; font-size: 12px; color: var(--muted); }
-  .toolbar { padding: 12px 24px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
-  .row { display: flex; align-items: center; gap: 8px; }
+  .toolbar { padding: 10px 16px 10px 24px; border-bottom: 1px solid var(--line); flex-shrink: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .find {
+    display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px; flex: 1 1 160px; max-width: 300px; min-width: 120px;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted);
+  }
+  .find:focus-within { border-color: var(--accent); }
+  .find input { border: none; outline: none; background: transparent; flex-grow: 1; min-width: 0; font: inherit; font-size: 13px; color: var(--ink); }
+  .sort select {
+    height: 32px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+    color: var(--muted-2); font: inherit; font-size: 13px;
+  }
   .spacer { flex-grow: 1; }
+  .shown { font-size: 12px; color: var(--muted); white-space: nowrap; }
   .tbtn {
-    display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px;
+    display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; white-space: nowrap;
     border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted-2); font-size: 13px;
   }
-  .col-chooser { position: relative; }
+  .tbtn:hover { background: var(--surface-hover); }
+  .tbtn.on { background: var(--accent-soft); color: var(--accent-soft-ink); border-color: var(--accent); }
+  .badge { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
+  .filter-chooser, .col-chooser { position: relative; }
   .col-menu {
-    position: absolute; top: 38px; right: 0; z-index: 10; background: var(--surface); border: 1px solid var(--line);
-    border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.15); padding: 8px; display: flex; flex-direction: column; gap: 4px; min-width: 160px;
+    position: absolute; top: 38px; left: 0; z-index: 20; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.15); padding: 8px; display: flex; flex-direction: column; gap: 2px; min-width: 180px;
+    max-height: 60vh; overflow-y: auto;
   }
+  .col-chooser .col-menu { left: auto; right: 0; }
   .col-menu label { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 6px; border-radius: 4px; }
   .col-menu label:hover { background: var(--surface-hover); }
+  .menu-check { border-bottom: 1px solid var(--line-soft); padding-bottom: 8px !important; margin-bottom: 4px; }
+  .menu-group-title { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 6px 6px 2px; }
   .view-toggle { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-  .view-toggle button { width: 36px; height: 30px; border: none; background: var(--surface); color: var(--muted-2); display: flex; align-items: center; justify-content: center; }
+  .view-toggle button { width: 34px; height: 30px; border: none; background: var(--surface); color: var(--muted-2); display: flex; align-items: center; justify-content: center; }
   .view-toggle button + button { border-left: 1px solid var(--border); }
-  .view-toggle button.active { background: var(--surface-hover); }
-  .empty { flex-grow: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; }
+  .view-toggle button.active { background: var(--surface-hover); color: var(--ink); }
+  .empty { flex-grow: 1; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; padding: 24px; text-align: center; }
+  .empty p { margin: 0; }
+  .skeleton { padding: 8px 24px; display: flex; flex-direction: column; }
+  .sk-row { display: flex; gap: 16px; align-items: center; height: 40px; border-bottom: 1px solid var(--line-soft); }
+  .sk-row span { display: block; height: 10px; border-radius: 5px; background: var(--surface-hover); animation: pulse 1.2s ease-in-out infinite; }
+  .sk-row span:first-child { width: 16px; }
+  @keyframes pulse { 50% { opacity: .45; } }
   .mobile-list { flex-grow: 1; min-height: 0; position: relative; }
-  .m-group { padding: 14px 16px 6px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; display: flex; gap: 8px; background: var(--surface-alt); }
-  .m-group .gcount { font-weight: 400; }
-  .m-row { display: flex; align-items: center; gap: 12px; padding: 8px 16px; min-height: 64px; box-sizing: border-box; }
+  .m-group {
+    all: unset; box-sizing: border-box; width: 100%; height: 64px; padding: 0 16px; font-size: 13px; font-weight: 600; color: var(--muted-2);
+    display: flex; align-items: center; gap: 8px; background: var(--surface-alt); border-bottom: 1px solid var(--line-soft); cursor: pointer;
+  }
+  .m-group .gname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .m-group .gcount { font-weight: 400; color: var(--muted); margin-left: auto; }
+  .m-row { display: flex; align-items: center; gap: 12px; padding: 6px 16px; height: 64px; box-sizing: border-box; }
   .m-row.checked { background: var(--accent-soft); }
   .m-info { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .m-title { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .m-meta { font-size: 12px; color: var(--muted); }
+  .m-meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .m-row input[type='checkbox'] { width: 22px; height: 22px; flex-shrink: 0; }
+  .deleted .m-title, .deleted .title-btn { text-decoration: line-through; color: var(--muted); }
   @media (max-width: 900px) {
-    .toolbar .col-chooser, .toolbar .view-toggle, .toolbar .group-btn { display: none; }
+    .books-pane { min-width: 0; }
+    .toolbar { padding: 8px 12px; }
+    .find { max-width: none; flex-basis: 100%; }
+    .toolbar .lbl-f, .toolbar .shown { display: none; }
+    .col-menu.phone-menu { left: auto; right: 0; }
   }
   .table-wrap { flex-grow: 1; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
-  /* Leaves room so the floating selection bar never covers the last rows. */
-  .scroll { flex-grow: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+  .scroll { flex-grow: 1; min-height: 0; position: relative; display: flex; flex-direction: column; outline: none; }
+  .scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
   .scroll :global(.vlist) { flex-grow: 1; min-height: 0; }
-  .brow { display: grid; align-items: center; height: 40px; padding: 0 12px; border-bottom: 1px solid var(--line-soft); font-size: 14px; cursor: default; gap: 8px; }
-  .brow.head { height: 34px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-alt); }
+  .brow { display: grid; align-items: center; height: 40px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line-soft); font-size: 14px; cursor: default; gap: 8px; }
+  .brow.head { height: 34px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-alt); flex-shrink: 0; }
+  .hcell { position: relative; min-width: 0; height: 100%; display: flex; align-items: center; }
+  .hcell.right { justify-content: flex-end; }
+  .hlabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hcell :global(.splitter.col-split) { position: absolute; top: 4px; bottom: 4px; margin: 0; }
+  /* centred on the middle of the 8px column gap */
+  .hcell :global(.splitter.col-split.at-right) { left: calc(100% - .5px); }
+  .hcell :global(.splitter.col-split.at-left) { left: -8.5px; }
+  .hcell :global(.splitter.col-split)::after { opacity: .25; background: var(--border-dashed); }
+  .hcell :global(.splitter.col-split:hover)::after { opacity: 1; background: var(--accent); }
   .brow:not(.head):hover { background: var(--row-hover); }
-  .brow.checked { background: #F3F7F6; }
-  :global(:root[data-theme='dark']) .brow.checked { background: #1E3230; }
+  .brow.checked { background: var(--row-checked); }
   .brow.selected { background: var(--accent-soft); }
-  .group-head { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 12px; background: var(--page); border-bottom: 1px solid var(--line-soft); font-size: 13px; }
-  .gname { font-weight: 600; }
-  .gcount { color: var(--muted); }
+  .group-head { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 16px; background: var(--page); border-bottom: 1px solid var(--line-soft); font-size: 13px; min-width: 0; }
+  .gtoggle { all: unset; display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 1 auto; cursor: pointer; padding: 4px 4px; border-radius: 4px; }
+  .gtoggle:hover { background: var(--surface-hover); }
+  .gtoggle:focus-visible { outline: 2px solid var(--focus); }
+  .chev { display: inline-flex; color: var(--muted); transition: transform .12s; flex-shrink: 0; }
+  .chev.open { transform: rotate(90deg); }
+  .gname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .gcount { color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .glink { display: inline-flex; color: var(--muted); padding: 4px; border-radius: 4px; }
+  .glink:hover { color: var(--accent); background: var(--surface-hover); }
   .muted { color: var(--muted); }
+  .num { font-variant-numeric: tabular-nums; }
+  .right { text-align: right; justify-self: end; }
+  .rating-cell { display: flex; justify-content: flex-end; }
   .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .title-btn { all: unset; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .title-cell { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .title-btn { all: unset; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; min-width: 0; flex: 0 1 auto; }
   .title-btn.strong { font-weight: 600; }
-  .grid-view { flex-grow: 1; overflow-y: auto; padding: 20px 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 20px 16px; align-content: start; }
-  .cover-card { all: unset; display: flex; flex-direction: column; gap: 8px; cursor: pointer; }
-  .cover-wrap { position: relative; }
+  .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 10 auto; min-width: 0; }
+  .tag { flex-shrink: 0; font-size: 11px; color: var(--muted-2); background: var(--surface-hover); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+  .tag.danger { color: var(--danger); }
+  .grid-view { flex-grow: 1; overflow-y: auto; padding: 20px 24px 80px; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 20px 16px; align-content: start; }
+  .grid-sentinel { grid-column: 1 / -1; height: 24px; text-align: center; font-size: 12px; color: var(--muted); }
+  .cover-card { all: unset; display: flex; flex-direction: column; gap: 4px; cursor: pointer; min-width: 0; }
+  .cover-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }
+  .cover-wrap { position: relative; margin-bottom: 4px; }
   .cover-wrap :global(.cover) { width: 100% !important; aspect-ratio: 2/3; height: auto !important; }
   .cover-card.selected .cover-wrap :global(.cover) { outline: 2px solid var(--accent); outline-offset: 2px; }
   .check-badge { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 11px; background: #FFF; display: flex; align-items: center; justify-content: center; color: var(--accent); }
   .grid-check { position: absolute; top: 8px; left: 8px; width: 16px; height: 16px; }
-  .cover-title { font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cover-title { font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
+  .cover-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   input[type='checkbox'] { width: 16px; height: 16px; accent-color: var(--accent); }
 </style>

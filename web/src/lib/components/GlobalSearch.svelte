@@ -1,9 +1,8 @@
 <script lang="ts">
   import { api } from '../api/client';
   import type { SearchResponse } from '../api/types';
-  import { debounce } from '../utils/format';
   import { navigate } from '../router.svelte';
-  import { t } from '../i18n';
+  import { t, tn } from '../i18n';
 
   let { lib }: { lib: number } = $props();
 
@@ -11,29 +10,75 @@
   let query = $state('');
   let open = $state(false);
   let result = $state<SearchResponse | null>(null);
+  let active = $state(-1);
+  let seq = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const runSearch = debounce(async (q: string) => {
+  $effect(() => {
+    const q = query;
+    clearTimeout(timer);
+    active = -1;
     if (q.trim().length < 2) { result = null; return; }
-    result = await api.search(lib, { q, kind: 'all', limit: 5 });
-  }, 180);
+    timer = setTimeout(async () => {
+      const mine = ++seq;
+      try {
+        const r = await api.search(lib, { q, kind: 'all', limit: 5 });
+        if (mine === seq) result = r; // ignore late answers to older keystrokes
+      } catch { /* the results page shows errors */ }
+    }, 160);
+  });
 
-  $effect(() => { runSearch(query); });
+  type Item = { href: string; label: string; sub?: string; n?: string; group: string };
+  const items = $derived.by<Item[]>(() => {
+    if (!result) return [];
+    const out: Item[] = [];
+    for (const a of result.authors.slice(0, 4)) out.push({ group: 'authors', href: `/l/${lib}/authors/${a.id}`, label: a.name, n: String(a.count) });
+    for (const s of result.series.slice(0, 3)) out.push({ group: 'series', href: `/l/${lib}/series/${s.id}`, label: s.name, sub: s.authors, n: String(s.count) });
+    for (const b of result.books.slice(0, 5)) {
+      const author = b.authors[0];
+      // desktop: open the book in its author's list; phone: the book page
+      const href = author && window.innerWidth >= 900
+        ? `/l/${lib}/authors/${author.id}?book=${b.id}`
+        : `/l/${lib}/book/${b.id}`;
+      const names = b.authors.length > 2 ? `${b.authors[0].name} ${t('books.andMore', { count: b.authors.length - 1 })}` : b.authors.map((a) => a.name).join(', ');
+      out.push({ group: 'books', href, label: b.title, sub: names });
+    }
+    return out;
+  });
+
+  function go(href: string) {
+    open = false;
+    inputEl?.blur();
+    navigate(href);
+  }
 
   function submit() {
-    if (query.trim().length >= 2) navigate(`/l/${lib}/search?q=${encodeURIComponent(query)}`);
-    open = false;
+    if (active >= 0 && items[active]) { go(items[active].href); return; }
+    if (query.trim().length >= 2) go(`/l/${lib}/search?q=${encodeURIComponent(query.trim())}`);
+  }
+
+  function keydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); open = true; active = Math.min(items.length - 1, active + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(-1, active - 1); }
+    else if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    else if (e.key === 'Escape') { if (open) { open = false; } else { query = ''; inputEl?.blur(); } }
   }
 
   function globalKeydown(e: KeyboardEvent) {
-    if (e.key === '/' && document.activeElement !== inputEl && !(document.activeElement instanceof HTMLInputElement)) {
+    const el = document.activeElement;
+    const typing = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement || (el as HTMLElement)?.isContentEditable;
+    if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       inputEl?.focus();
+      inputEl?.select();
     }
   }
   $effect(() => {
     window.addEventListener('keydown', globalKeydown);
     return () => window.removeEventListener('keydown', globalKeydown);
   });
+
+  const groupLabel: Record<string, string> = $derived({ authors: t('search.authors'), series: t('search.series'), books: t('search.books') });
 </script>
 
 <div class="wrap">
@@ -42,35 +87,41 @@
     <input
       bind:this={inputEl}
       type="text"
+      role="combobox"
+      aria-expanded={open && items.length > 0}
+      aria-controls="global-search-list"
+      aria-activedescendant={active >= 0 ? `gs-${active}` : undefined}
+      aria-autocomplete="list"
       placeholder={t('search.placeholder')}
       bind:value={query}
       onfocus={() => (open = true)}
+      oninput={() => (open = true)}
       onblur={() => setTimeout(() => (open = false), 150)}
-      onkeydown={(e) => e.key === 'Enter' && submit()}
+      onkeydown={keydown}
     />
     <kbd>/</kbd>
   </label>
-  {#if open && result && (result.authors.length || result.series.length || result.books.length)}
-    <div class="dropdown" role="listbox">
-      {#if result.authors.length}
-        <div class="group-label">{t('search.authors')}</div>
-        {#each result.authors.slice(0, 4) as a (a.id)}
-          <a href="/l/{lib}/authors/{a.id}" data-link class="row">{a.name}<span class="n">{a.count}</span></a>
-        {/each}
-      {/if}
-      {#if result.series.length}
-        <div class="group-label">{t('search.series')}</div>
-        {#each result.series.slice(0, 4) as s (s.id)}
-          <a href="/l/{lib}/series/{s.id}" data-link class="row">{s.name}<span class="n">{s.count}</span></a>
-        {/each}
-      {/if}
-      {#if result.books.length}
-        <div class="group-label">{t('search.books')}</div>
-        {#each result.books.slice(0, 4) as b (b.id)}
-          <a href="/l/{lib}/book/{b.id}" data-link class="row">{b.title}</a>
-        {/each}
-      {/if}
-      <button type="button" class="all" onclick={submit}>{t('search.results')} «{query}» →</button>
+  {#if open && query.trim().length >= 2 && result}
+    <div class="dropdown" id="global-search-list" role="listbox">
+      {#each items as it, i (it.href)}
+        {#if i === 0 || items[i - 1].group !== it.group}<div class="group-label">{groupLabel[it.group]}</div>{/if}
+        <a
+          id="gs-{i}"
+          role="option"
+          aria-selected={i === active}
+          href={it.href}
+          class="row"
+          class:active={i === active}
+          onmousedown={(e) => { e.preventDefault(); go(it.href); }}
+        >
+          <span class="lbl"><span class="main">{it.label}</span>{#if it.sub}<span class="sub">{it.sub}</span>{/if}</span>
+          {#if it.n}<span class="n">{it.n}</span>{/if}
+        </a>
+      {/each}
+      {#if !items.length}<div class="none">{t('search.noResults')}</div>{/if}
+      <button type="button" class="all" onmousedown={(e) => { e.preventDefault(); active = -1; submit(); }}>
+        {result.total ? tn('search.allResults', result.total) : t('search.results')} «{query.trim()}» →
+      </button>
     </div>
   {/if}
 </div>
@@ -82,15 +133,20 @@
     background: var(--surface-hover); color: var(--muted);
   }
   .box.focused { outline: 2px solid var(--focus); }
-  input { flex-grow: 1; border: none; outline: none; background: transparent; font: inherit; font-size: 14px; color: var(--ink); }
+  input { flex-grow: 1; min-width: 0; border: none; outline: none; background: transparent; font: inherit; font-size: 14px; color: var(--ink); }
   kbd { font: inherit; font-size: 12px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--page); color: var(--muted); }
   .dropdown {
     position: absolute; top: 44px; left: 0; right: 0; background: var(--surface); border: 1px solid var(--line);
-    border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.18); padding: 8px; z-index: 50; max-height: 60vh; overflow-y: auto;
+    border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.18); padding: 8px; z-index: 50; max-height: 70vh; overflow-y: auto;
   }
   .group-label { padding: 8px 10px 4px; font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .04em; }
-  .row { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 6px; font-size: 14px; color: var(--ink); text-decoration: none; }
-  .row:hover { background: var(--surface-hover); text-decoration: none; }
-  .n { color: var(--muted); font-size: 12px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 6px; font-size: 14px; color: var(--ink); text-decoration: none; }
+  .row:hover, .row.active { background: var(--surface-hover); text-decoration: none; color: var(--ink); }
+  .lbl { display: flex; flex-direction: column; min-width: 0; }
+  .main, .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub { font-size: 12px; color: var(--muted); }
+  .n { color: var(--muted); font-size: 12px; flex-shrink: 0; }
+  .none { padding: 10px; color: var(--muted); font-size: 13px; }
   .all { all: unset; display: block; width: 100%; box-sizing: border-box; padding: 10px; text-align: center; color: var(--accent); font-size: 13px; cursor: pointer; border-top: 1px solid var(--line-soft); margin-top: 4px; }
+  .all:hover { background: var(--surface-hover); }
 </style>
