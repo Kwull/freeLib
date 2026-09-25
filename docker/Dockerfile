@@ -46,9 +46,13 @@ RUN useradd -m -u 1000 freelib \
     && mkdir -p /data /cache /export /books \
     && chown freelib:freelib /data /cache /export
 COPY --from=build /tmp/freelib-server /usr/local/bin/freelib-server
-RUN chmod +x /usr/local/bin/freelib-server
-USER freelib
-ENV FREELIB_PORT=8080 \
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/freelib-server /usr/local/bin/entrypoint.sh
+# The container starts as root only long enough for entrypoint.sh to give the
+# volumes to PUID:PGID; the server itself runs as that unprivileged user.
+ENV PUID=1000 \
+    PGID=1000 \
+    FREELIB_PORT=8080 \
     FREELIB_DATA_DIR=/data \
     FREELIB_BOOKS_DIR=/books \
     FREELIB_CACHE_DIR=/cache \
@@ -57,12 +61,11 @@ VOLUME /data /cache /export
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD freelib-server healthcheck || exit 1
-ENTRYPOINT ["tini", "--"]
+ENTRYPOINT ["tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["freelib-server"]
 
 # trixie ships Calibre 8.x; the server refuses Calibre < 6.19 (CVE-2023-46303, bookworm has 6.13)
 FROM slim AS full
-USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
     calibre \
     fonts-dejavu-core \
@@ -70,4 +73,3 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 ENV QT_QPA_PLATFORM=offscreen \
     FREELIB_CALIBRE=/usr/bin/ebook-convert
-USER freelib

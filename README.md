@@ -36,10 +36,11 @@ A self-hosted web catalog for large e-book libraries described by INPX files (Fl
 mkdir freelib && cd freelib
 curl -O https://raw.githubusercontent.com/Kwull/freeLib/master/docker/docker-compose.yml
 echo "FREELIB_ADMIN_PASSWORD=change-me" > .env
-mkdir books data cache export   # put your .inpx file and the book archives in books/
-sudo chown 1000:1000 data cache export   # the container runs as uid 1000
+mkdir books        # put your .inpx file and the book archives here
 docker compose up -d
 ```
+
+The server runs as an unprivileged user (uid/gid 1000 by default) and takes ownership of the `data`, `cache` and `export` folders on start. To use your own user instead — for example on a NAS — set `PUID` and `PGID` to its ids (`id -u`, `id -g`).
 
 Open <http://localhost:8080>, sign in as `admin`, go to **Libraries → Add library** and pick the `.inpx` file and the archive folder. To import automatically on start, set `FREELIB_AUTOIMPORT=/books/<name>.inpx` (archives in `/books/<name>/` next to it are found automatically).
 
@@ -58,6 +59,7 @@ See **[docs/web/DOCKER.md](docs/web/DOCKER.md)** for all settings, reverse proxy
 
 | Variable | Purpose |
 |---|---|
+| `PUID` / `PGID` | User and group the server runs as and that own `/data`, `/cache`, `/export` (default 1000) |
 | `FREELIB_ADMIN_PASSWORD` | Admin password. Without it (and without users) the server runs in open mode with no login — only for trusted home networks |
 | `FREELIB_ALLOWED_HOSTS` | Host names the server answers to besides `localhost` and IP addresses, e.g. `books.example.com` |
 | `FREELIB_TRUST_PROXY` | Set to `1` when running behind a reverse proxy |
