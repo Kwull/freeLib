@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>freeLib — Browse authors</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1D1C19;background:#F5F3EE}
+a{color:#1F5F5B;text-decoration:none}a:hover{color:#16433F;text-decoration:underline}
+button{font-family:inherit}
+.nav{display:flex;align-items:center;gap:12px;height:40px;padding:0 12px;border-radius:8px;color:#3F3C35;font-size:14px}
+.nav:hover{background:#EDEAE3;text-decoration:none;color:#1D1C19}
+.arow{display:flex;justify-content:space-between;align-items:center;height:36px;padding:0 12px;border-radius:6px;font-size:14px;color:#1D1C19}
+.arow:hover{background:#EDEAE3;text-decoration:none;color:#1D1C19}
+.brow{display:grid;grid-template-columns:36px 36px minmax(0,1fr) 64px 92px 84px;align-items:center;height:40px;padding:0 12px;border-bottom:1px solid #ECE8DF;font-size:14px;cursor:default}
+.brow:hover{background:#F7F5F0}
+.tbtn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border:1px solid #D9D4C8;border-radius:6px;background:#FFFFFF;color:#3F3C35;font-size:13px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:13px;background:#EDEAE3;color:#3F3C35;font-size:12px}
+.letter{display:block;width:22px;text-align:center;font-size:11px;line-height:17px;color:#5C584F}
+.letter:hover{color:#1F5F5B;text-decoration:none}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; flex-direction: column; background: #F5F3EE; overflow: hidden">
+
+<header style="height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 16px 0 20px; background: #FFFFFF; border-bottom: 1px solid #E2DDD2">
+<div style="display: flex; align-items: center; gap: 10px; width: 172px">
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1F5F5B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 5h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2z"/><path d="M22 5h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/></svg>
+<span style="font-family: Literata, Georgia, serif; font-size: 20px; font-weight: 600">freeLib</span>
+</div>
+<button type="button" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #D9D4C8; border-radius: 8px; background: #FFFFFF; font-size: 14px; color: #1D1C19">
+<span style="width: 8px; height: 8px; border-radius: 4px; background: #2E7D4F"></span>Flibusta
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+</button>
+<a href="Search.dc.html" style="flex-grow: 1; max-width: 640px; display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 14px; border-radius: 8px; background: #EDEAE3; color: #5C584F; font-size: 14px; text-decoration: none">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+<span style="flex-grow: 1">Search authors, series, books…</span>
+<kbd style="font-family: inherit; font-size: 12px; padding: 2px 6px; border: 1px solid #CFC9BC; border-radius: 4px; background: #F5F3EE">/</kbd>
+</a>
+<div style="flex-grow: 1"></div>
+<a href="Libraries.dc.html" aria-label="Activity: 1 job running" style="position: relative; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 8px; color: #3F3C35">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+<span style="position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 4px; background: #B8741A"></span>
+</a>
+<button type="button" aria-label="Account" style="width: 36px; height: 36px; border-radius: 18px; border: none; background: #1F5F5B; color: #FFFFFF; font-size: 14px; font-weight: 600">K</button>
+</header>
+
+<div style="flex-grow: 1; display: flex; min-height: 0">
+
+<nav aria-label="Main" style="width: 208px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px; border-right: 1px solid #E2DDD2">
+<a class="nav" href="#">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5"/><path d="M5 5h14l2 8v6H3v-6z"/></svg>New arrivals<span style="margin-left: auto; font-size: 12px; color: #5C584F">214</span></a>
+<a class="nav" href="#" aria-current="page" style="background: #E3EEEC; color: #16433F; font-weight: 500">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Authors</a>
+<a class="nav" href="#">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>Series</a>
+<a class="nav" href="#">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Genres</a>
+<a class="nav" href="#">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>Shelves</a>
+<div style="height: 1px; background: #E2DDD2; margin: 12px 4px"></div>
+<div style="padding: 0 12px 6px; font-size: 12px; font-weight: 600; color: #5C584F; letter-spacing: 0.04em">MY SHELVES</div>
+<a class="nav" href="#"><span style="width: 10px; height: 10px; border-radius: 5px; background: #1F5F5B"></span>To read<span style="margin-left: auto; font-size: 12px; color: #5C584F">18</span></a>
+<a class="nav" href="#"><span style="width: 10px; height: 10px; border-radius: 5px; background: #B8741A"></span>Favourites<span style="margin-left: auto; font-size: 12px; color: #5C584F">42</span></a>
+<a class="nav" href="#"><span style="width: 10px; height: 10px; border-radius: 5px; background: #6B4E8A"></span>For kids<span style="margin-left: auto; font-size: 12px; color: #5C584F">7</span></a>
+<div style="flex-grow: 1"></div>
+<a class="nav" href="Libraries.dc.html">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>Libraries</a>
+<a class="nav" href="#">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Settings</a>
+</nav>
+
+<section aria-label="Authors" style="width: 280px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid #E2DDD2; background: #FBFAF7">
+<div style="padding: 16px 16px 10px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: baseline; justify-content: space-between">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Authors</h2>
+<span style="font-size: 12px; color: #5C584F">sorted by last name</span>
+</div>
+<label style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid #D9D4C8; border-radius: 6px; background: #FFFFFF">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5C584F" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+<input type="text" value="стру" aria-label="Filter authors" style="border: none; outline: none; flex-grow: 1; font: inherit; font-size: 14px; background: transparent; color: #1D1C19">
+</label>
+</div>
+<div style="flex-grow: 1; display: flex; min-height: 0">
+<div style="flex-grow: 1; display: flex; flex-direction: column; gap: 1px; padding: 0 4px 0 8px; overflow: hidden">
+<div style="padding: 8px 12px 4px; font-size: 12px; font-weight: 600; color: #5C584F">С</div>
+<sc-for list="{{authors}}" as="a" hint-placeholder-count="12">
+<a class="arow" href="#" style="background: {{a.bg}}; font-weight: {{a.weight}}"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{a.name}}</span><span style="font-size: 12px; color: #5C584F">{{a.count}}</span></a>
+</sc-for>
+</div>
+<div aria-label="Jump to letter" style="width: 26px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; padding: 6px 0">
+<sc-for list="{{letters}}" as="l" hint-placeholder-count="29">
+<a class="letter" href="#" style="font-weight: {{l.weight}}; color: {{l.color}}">{{l.ch}}</a>
+</sc-for>
+</div>
+</div>
+</section>
+
+<main style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; background: #FFFFFF; position: relative">
+<div style="padding: 20px 24px 14px; display: flex; flex-direction: column; gap: 12px; border-bottom: 1px solid #E2DDD2">
+<div>
+<div style="font-size: 12px; color: #5C584F">Authors / С</div>
+<h1 style="margin: 4px 0 2px; font-family: Literata, Georgia, serif; font-size: 26px; font-weight: 600; line-height: 1.2">Стругацкий Аркадий Натанович</h1>
+<div style="font-size: 13px; color: #5C584F">12 books · 2 series · also with <a href="#">Стругацкий Борис Натанович</a></div>
+</div>
+<div style="display: flex; align-items: center; gap: 8px">
+<span class="chip">Language: Russian
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span>
+<button type="button" class="chip" style="border: 1px dashed #BDB6A7; background: #FFFFFF">
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Filter</button>
+<div style="flex-grow: 1"></div>
+<button type="button" class="tbtn">Group: series
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+<div role="group" aria-label="View" style="display: flex; border: 1px solid #D9D4C8; border-radius: 6px; overflow: hidden">
+<button type="button" aria-label="Table view" aria-pressed="{{isTable}}" onClick="{{showTable}}" style="width: 36px; height: 30px; border: none; background: {{tableBg}}; color: #3F3C35; display: flex; align-items: center; justify-content: center">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1"/></svg></button>
+<button type="button" aria-label="Cover view" aria-pressed="{{isGrid}}" onClick="{{showGrid}}" style="width: 36px; height: 30px; border: none; border-left: 1px solid #D9D4C8; background: {{gridBg}}; color: #3F3C35; display: flex; align-items: center; justify-content: center">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+</div>
+</div>
+</div>
+
+<sc-if value="{{isTable}}" hint-placeholder-val="{{ true }}">
+<div style="flex-grow: 1; overflow: hidden">
+<div class="brow" style="height: 34px; font-size: 12px; font-weight: 600; color: #5C584F; background: #FBFAF7; cursor: default">
+<input type="checkbox" aria-label="Select all books" checked="{{allChecked}}" onChange="{{toggleAll}}" style="width: 16px; height: 16px; accent-color: #1F5F5B">
+<span>No.</span><span>Title</span><span style="text-align: right">Size</span><span style="text-align: right">Added</span><span style="text-align: right">Rating</span>
+</div>
+<sc-for list="{{groups}}" as="g" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 12px; background: #F5F3EE; border-bottom: 1px solid #ECE8DF; font-size: 13px">
+<input type="checkbox" aria-label="Select series {{g.name}}" checked="{{g.checked}}" onChange="{{g.toggle}}" style="width: 16px; height: 16px; accent-color: #1F5F5B">
+<span style="font-weight: 600">{{g.name}}</span><span style="color: #5C584F">{{g.count}}</span>
+</div>
+<sc-for list="{{g.books}}" as="b" hint-placeholder-count="4">
+<div class="brow" onClick="{{b.pick}}" style="background: {{b.rowBg}}">
+<input type="checkbox" aria-label="Select {{b.title}}" checked="{{b.checked}}" onChange="{{b.toggle}}" onClick="{{b.stop}}" style="width: 16px; height: 16px; accent-color: #1F5F5B">
+<span style="color: #5C584F">{{b.num}}</span>
+<button type="button" onClick="{{b.pick}}" style="all: unset; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: {{b.weight}}; cursor: pointer">{{b.title}}</button>
+<span style="text-align: right; color: #5C584F">{{b.size}}</span>
+<span style="text-align: right; color: #5C584F">{{b.added}}</span>
+<span style="display: flex; justify-content: flex-end; gap: 1px" aria-label="Rating {{b.rating}} of 5">
+<sc-for list="{{b.stars}}" as="s" hint-placeholder-count="5"><svg width="13" height="13" viewBox="0 0 24 24" fill="{{s.fill}}" stroke="{{s.stroke}}" stroke-width="1.6" aria-hidden="true"><path d="m12 3 2.8 5.8 6.2.9-4.5 4.4 1 6.3L12 17.5 6.5 20.4l1-6.3L3 9.7l6.2-.9z"/></svg></sc-for>
+</span>
+</div>
+</sc-for>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{isGrid}}" hint-placeholder-val="{{ false }}">
+<div style="flex-grow: 1; overflow: hidden; padding: 20px 24px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px 16px; align-content: start">
+<sc-for list="{{allBooks}}" as="b" hint-placeholder-count="8">
+<button type="button" onClick="{{b.pick}}" style="all: unset; display: flex; flex-direction: column; gap: 8px; cursor: pointer">
+<div style="position: relative; aspect-ratio: 2 / 3; border-radius: 4px; background: {{b.cover}}; padding: 12px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; outline: {{b.outline}}; outline-offset: 2px">
+<span style="font-size: 10px; color: #F2EEE6; letter-spacing: 0.06em">СТРУГАЦКИЕ</span>
+<span style="font-family: Literata, Georgia, serif; font-size: 15px; line-height: 1.2; color: #FFFFFF">{{b.title}}</span>
+<sc-if value="{{b.checked}}" hint-placeholder-val="{{ false }}"><span style="position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 11px; background: #FFFFFF; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1F5F5B" stroke-width="3" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg></span></sc-if>
+</div>
+<span style="font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{b.title}}</span>
+</button>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{hasChecked}}" hint-placeholder-val="{{ true }}">
+<div role="region" aria-label="Selection" style="position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 16px; border-radius: 10px; background: #1D1C19; color: #FFFFFF; font-size: 14px; white-space: nowrap">
+<span style="margin-right: 8px"><b>{{checkedCount}}</b> selected</span>
+<a href="Send.dc.html" style="display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 7px; background: #2E7F79; color: #FFFFFF; text-decoration: none; font-weight: 500">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>Send to…</a>
+<a href="Send.dc.html" style="display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: 7px; color: #FFFFFF; text-decoration: none">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5"/><path d="M4 21h16"/></svg>Download</a>
+<button type="button" style="display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border: none; border-radius: 7px; background: transparent; color: #FFFFFF; font-size: 14px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V4h8l10 10-8 8z"/></svg>Shelf</button>
+<button type="button" aria-label="Clear selection" onClick="{{clear}}" style="width: 36px; height: 36px; border: none; border-radius: 7px; background: transparent; color: #FFFFFF; display: flex; align-items: center; justify-content: center">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+</div>
+</sc-if>
+</main>
+
+<aside aria-label="Book details" style="width: 360px; flex-shrink: 0; border-left: 1px solid #E2DDD2; background: #FBFAF7; overflow: hidden; display: flex; flex-direction: column">
+<div style="padding: 24px 24px 0; display: flex; gap: 16px">
+<div style="width: 112px; height: 168px; flex-shrink: 0; border-radius: 4px; background: {{book.cover}}; padding: 10px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between">
+<span style="font-size: 9px; color: #F2EEE6; letter-spacing: 0.06em">СТРУГАЦКИЕ</span>
+<span style="font-family: Literata, Georgia, serif; font-size: 13px; line-height: 1.2; color: #FFFFFF">{{book.title}}</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0">
+<h2 style="margin: 0; font-family: Literata, Georgia, serif; font-size: 20px; font-weight: 600; line-height: 1.25">{{book.title}}</h2>
+<a href="#" style="font-size: 14px">Стругацкий Аркадий</a>
+<a href="#" style="font-size: 14px">Стругацкий Борис</a>
+<span style="font-size: 13px; color: #5C584F">{{book.seriesLine}}</span>
+</div>
+</div>
+<div style="padding: 20px 24px 0; display: flex; gap: 8px">
+<a href="Send.dc.html" style="flex-grow: 1; display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px; border-radius: 8px; background: #1F5F5B; color: #FFFFFF; font-weight: 500; font-size: 14px; text-decoration: none">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>Send to Kindle</a>
+<button type="button" aria-label="Download as…" style="display: flex; align-items: center; gap: 4px; height: 40px; padding: 0 12px; border: 1px solid #D9D4C8; border-radius: 8px; background: #FFFFFF; color: #1D1C19; font-size: 14px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5"/><path d="M4 21h16"/></svg>
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+<button type="button" style="display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 1px solid #D9D4C8; border-radius: 8px; background: #FFFFFF; color: #1D1C19; font-size: 14px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M2 5h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2z"/><path d="M22 5h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/></svg>Read</button>
+</div>
+<div style="padding: 16px 24px 0; display: flex; flex-wrap: wrap; gap: 6px">
+<a href="#" class="chip" style="text-decoration: none">Социальная фантастика</a>
+<a href="#" class="chip" style="text-decoration: none">Научная фантастика</a>
+</div>
+<div style="padding: 18px 24px 0">
+<h3 style="margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #5C584F; letter-spacing: 0.04em">ANNOTATION</h3>
+<p style="margin: 0; font-family: Literata, Georgia, serif; font-size: 14px; line-height: 1.55; color: #2B2925">{{book.annotation}}</p>
+</div>
+<dl style="margin: 18px 24px 0; padding-top: 14px; border-top: 1px solid #E2DDD2; display: grid; grid-template-columns: 96px minmax(0, 1fr); row-gap: 8px; font-size: 13px">
+<dt style="color: #5C584F">Language</dt><dd style="margin: 0">Russian</dd>
+<dt style="color: #5C584F">Format</dt><dd style="margin: 0">FB2 · {{book.size}}</dd>
+<dt style="color: #5C584F">Added</dt><dd style="margin: 0">{{book.added}}</dd>
+<dt style="color: #5C584F">Shelves</dt><dd style="margin: 0; display: flex; gap: 6px"><span class="chip" style="height: 22px">To read</span><a href="#" style="font-size: 12px; line-height: 22px">+ Add</a></dd>
+<dt style="color: #5C584F">File</dt><dd style="margin: 0; color: #5C584F; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{book.file}}</dd>
+</dl>
+</aside>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+var GROUPS = [
+  { name: 'Полдень, XXII век', cover: '#2F4A5A', books: [
+    { id: 1, num: 1, title: 'Полдень, XXII век', size: '612 KB', added: '11.03.2024', rating: 4 },
+    { id: 2, num: 2, title: 'Попытка к бегству', size: '298 KB', added: '11.03.2024', rating: 4 },
+    { id: 3, num: 3, title: 'Трудно быть богом', size: '405 KB', added: '02.07.2025', rating: 5 },
+    { id: 4, num: 5, title: 'Обитаемый остров', size: '871 KB', added: '11.03.2024', rating: 5 },
+    { id: 5, num: 6, title: 'Жук в муравейнике', size: '466 KB', added: '19.01.2026', rating: 4 },
+    { id: 6, num: 7, title: 'Волны гасят ветер', size: '352 KB', added: '11.03.2024', rating: 4 }
+  ]},
+  { name: 'НИИЧАВО', cover: '#6B3A2E', books: [
+    { id: 7, num: 1, title: 'Понедельник начинается в субботу', size: '540 KB', added: '11.03.2024', rating: 5 },
+    { id: 8, num: 2, title: 'Сказка о Тройке', size: '318 KB', added: '11.03.2024', rating: 3 }
+  ]},
+  { name: 'Outside series', cover: '#3E5A3A', books: [
+    { id: 9, num: '', title: 'Пикник на обочине', size: '331 KB', added: '04.09.2026', rating: 5 },
+    { id: 10, num: '', title: 'Улитка на склоне', size: '489 KB', added: '11.03.2024', rating: 3 },
+    { id: 11, num: '', title: 'Град обреченный', size: '925 KB', added: '11.03.2024', rating: 4 },
+    { id: 12, num: '', title: 'Отель «У погибшего альпиниста»', size: '377 KB', added: '11.03.2024', rating: 4 }
+  ]}
+];
+var NOTES = {
+  9: 'После Посещения на Земле остались Зоны — места, где не действуют привычные законы. Сталкер Рэдрик Шухарт раз за разом уходит туда за артефактами, пока поиски не приводят его к Золотому шару, который, говорят, исполняет желания.',
+  3: 'Дон Румата — наблюдатель с Земли в средневековом королевстве Арканар. Ему запрещено вмешиваться в ход истории, но смотреть, как уничтожают книжников и поэтов, становится всё труднее.'
+};
+var AUTHORS = [
+  ['Стругацкий Аркадий Натанович', 12], ['Стругацкий Борис Натанович', 19], ['Струве Пётр Бернгардович', 6],
+  ['Струков Андрей', 3], ['Струн Эдуард', 2], ['Струнский Александр', 1], ['Струтинская Елена', 4],
+  ['Струтинский Николай', 2], ['Струтт Виктория', 1], ['Струцкий Игорь', 5], ['Струшкевич Анна', 2],
+  ['Стрюкова Ольга', 3], ['Стрыгин Алексей', 1]
+];
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sel: 9, checked: [3, 9, 11], view: 'table' };
+  }
+  toggleIds(ids, on) {
+    var set = this.state.checked.filter(function (x) { return ids.indexOf(x) < 0; });
+    if (on) set = set.concat(ids);
+    this.setState({ checked: set });
+  }
+  renderVals() {
+    var self = this, st = this.state;
+    var has = function (id) { return st.checked.indexOf(id) >= 0; };
+    var all = [];
+    var groups = GROUPS.map(function (g) {
+      var ids = g.books.map(function (b) { return b.id; });
+      var books = g.books.map(function (b) {
+        var c = has(b.id), s = st.sel === b.id;
+        var bk = Object.assign({}, b, {
+          cover: g.cover, group: g.name,
+          checked: c, selected: s,
+          weight: s ? 600 : 400,
+          rowBg: s ? '#E3EEEC' : (c ? '#F3F7F6' : 'transparent'),
+          outline: s ? '2px solid #1F5F5B' : 'none',
+          pick: function () { self.setState({ sel: b.id }); },
+          stop: function (e) { e.stopPropagation(); },
+          toggle: function () { self.toggleIds([b.id], !c); },
+          stars: [1, 2, 3, 4, 5].map(function (i) { return { fill: i <= b.rating ? '#B8741A' : 'none', stroke: i <= b.rating ? '#B8741A' : '#B5AFA2' }; })
+        });
+        all.push(bk);
+        return bk;
+      });
+      var allOn = ids.every(has);
+      return { name: g.name, count: g.books.length + ' books', books: books, checked: allOn, toggle: function () { self.toggleIds(ids, !allOn); } };
+    });
+    var cur = all.filter(function (b) { return b.id === st.sel; })[0] || all[0];
+    var allIds = all.map(function (b) { return b.id; });
+    var allOn = allIds.every(has);
+    var book = {
+      title: cur.title, cover: cur.cover, size: cur.size, added: cur.added,
+      seriesLine: cur.group === 'Outside series' ? 'Outside series' : cur.group + ' · #' + cur.num,
+      annotation: NOTES[cur.id] || 'Аннотация загружается из файла книги при первом открытии и затем кэшируется на сервере.',
+      file: 'fb2-168103-172702.zip / ' + (160000 + cur.id * 37) + '.fb2'
+    };
+    var letters = 'АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЭЮЯ'.split('').map(function (ch) {
+      return { ch: ch, weight: ch === 'С' ? 700 : 400, color: ch === 'С' ? '#1F5F5B' : '#5C584F' };
+    });
+    return {
+      authors: AUTHORS.map(function (a, i) { return { name: a[0], count: a[1], bg: i === 0 ? '#E3EEEC' : 'transparent', weight: i === 0 ? 600 : 400 }; }),
+      letters: letters,
+      groups: groups, allBooks: all, book: book,
+      isTable: st.view === 'table', isGrid: st.view === 'grid',
+      tableBg: st.view === 'table' ? '#EDEAE3' : '#FFFFFF', gridBg: st.view === 'grid' ? '#EDEAE3' : '#FFFFFF',
+      showTable: function () { self.setState({ view: 'table' }); },
+      showGrid: function () { self.setState({ view: 'grid' }); },
+      hasChecked: st.checked.length > 0, checkedCount: st.checked.length,
+      allChecked: allOn, toggleAll: function () { self.toggleIds(allIds, !allOn); },
+      clear: function () { self.setState({ checked: [] }); }
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+{
+  "name": "web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "test": "pnpm test:unit && playwright test",
+    "test:unit": "node --test tests-unit/*.test.ts",
+    "test:real": "playwright test --config=playwright.real.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.0",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "@tsconfig/svelte": "^5.0.8",
+    "@types/node": "^24.13.3",
+    "@types/qrcode": "^1.5.6",
+    "playwright-core": "1.56.0",
+    "svelte": "^5.57.0",
+    "svelte-check": "^4.7.6",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@fontsource/literata": "^5.3.0",
+    "idb": "^8.0.3",
+    "qrcode": "^1.5.4"
+  }
+}

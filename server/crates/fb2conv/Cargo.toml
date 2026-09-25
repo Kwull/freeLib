@@ -1,0 +1,20 @@
+[package]
+name = "freelib-fb2conv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FB2 metadata reader and FB2 -> EPUB 3 / KEPUB converter for freeLib web"
+
+[dependencies]
+quick-xml.workspace = true
+encoding_rs.workspace = true
+zip.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
+ab_glyph = "0.2"
+
+[dev-dependencies]
+freelib-import = { path = "../import" }
+serde_json.workspace = true
+tempfile.workspace = true

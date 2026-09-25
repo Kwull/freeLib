@@ -1,0 +1,28 @@
+[package]
+name = "freelib-import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "freeLib web: INPX import, Qt database migration, synthetic INPX generator and benchmarks"
+
+[dependencies]
+freelib-catalog = { path = "../catalog" }
+rusqlite.workspace = true
+zip.workspace = true
+flate2 = "1"
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "gen-inpx"
+path = "src/bin/gen_inpx.rs"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"

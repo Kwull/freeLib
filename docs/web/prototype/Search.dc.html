@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>freeLib — Search</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1D1C19;background:#F5F3EE}
+a{color:#1F5F5B;text-decoration:none}a:hover{color:#16433F;text-decoration:underline}
+button{font-family:inherit}
+.fl{display:flex;align-items:center;gap:8px;height:32px;font-size:14px;color:#1D1C19}
+.fl span.n{margin-left:auto;font-size:12px;color:#5C584F}
+.fh{margin:0 0 6px;font-size:12px;font-weight:600;color:#5C584F;letter-spacing:.04em}
+.res{display:grid;grid-template-columns:44px minmax(0,1fr) 180px 110px 90px;gap:16px;align-items:center;padding:12px 16px;border-bottom:1px solid #ECE8DF}
+mark{background:#F4E2BF;color:inherit;padding:0 1px;border-radius:2px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; flex-direction: column; background: #F5F3EE; overflow: hidden">
+<header style="height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 16px 0 20px; background: #FFFFFF; border-bottom: 1px solid #E2DDD2">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; width: 172px; color: #1D1C19; text-decoration: none">
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1F5F5B" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M2 5h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2z"/><path d="M22 5h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/></svg>
+<span style="font-family: Literata, Georgia, serif; font-size: 20px; font-weight: 600">freeLib</span></a>
+<label style="flex-grow: 1; max-width: 760px; display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 14px; border-radius: 8px; border: 2px solid #1F5F5B; background: #FFFFFF">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1F5F5B" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+<input type="search" value="пикник" aria-label="Search" style="flex-grow: 1; border: none; outline: none; font: inherit; font-size: 15px; background: transparent; color: #1D1C19">
+<span style="font-size: 12px; color: #5C584F">38 ms</span>
+</label>
+</header>
+
+<div style="flex-grow: 1; display: flex; min-height: 0">
+<aside aria-label="Filters" style="width: 264px; flex-shrink: 0; padding: 20px 20px; display: flex; flex-direction: column; gap: 22px; border-right: 1px solid #E2DDD2; overflow: hidden">
+<div>
+<h3 class="fh">SHOW</h3>
+<label class="fl"><input type="radio" name="kind" checked style="accent-color: #1F5F5B">Everything<span class="n">31</span></label>
+<label class="fl"><input type="radio" name="kind" style="accent-color: #1F5F5B">Books<span class="n">27</span></label>
+<label class="fl"><input type="radio" name="kind" style="accent-color: #1F5F5B">Series<span class="n">3</span></label>
+<label class="fl"><input type="radio" name="kind" style="accent-color: #1F5F5B">Authors<span class="n">1</span></label>
+</div>
+<div>
+<h3 class="fh">GENRE</h3>
+<label class="fl"><input type="checkbox" checked style="accent-color: #1F5F5B">Социальная фантастика<span class="n">9</span></label>
+<label class="fl"><input type="checkbox" style="accent-color: #1F5F5B">Детская литература<span class="n">6</span></label>
+<label class="fl"><input type="checkbox" style="accent-color: #1F5F5B">Современная проза<span class="n">5</span></label>
+<a href="#" style="font-size: 13px">Show all genres</a>
+</div>
+<div>
+<h3 class="fh">LANGUAGE</h3>
+<label class="fl"><input type="checkbox" checked style="accent-color: #1F5F5B">Russian<span class="n">24</span></label>
+<label class="fl"><input type="checkbox" style="accent-color: #1F5F5B">Ukrainian<span class="n">2</span></label>
+<label class="fl"><input type="checkbox" style="accent-color: #1F5F5B">English<span class="n">1</span></label>
+</div>
+<div>
+<h3 class="fh">ADDED</h3>
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<button type="button" style="height: 30px; padding: 0 10px; border-radius: 15px; border: 1px solid #D9D4C8; background: #FFFFFF; font-size: 13px">Last week</button>
+<button type="button" style="height: 30px; padding: 0 10px; border-radius: 15px; border: 1px solid #D9D4C8; background: #FFFFFF; font-size: 13px">Last month</button>
+<button type="button" style="height: 30px; padding: 0 10px; border-radius: 15px; border: 1px solid #D9D4C8; background: #FFFFFF; font-size: 13px">Custom…</button>
+</div>
+</div>
+<div>
+<h3 class="fh">FORMAT</h3>
+<label class="fl"><input type="checkbox" style="accent-color: #1F5F5B">FB2<span class="n">25</span></label>
+<label class="fl"><input type="checkbox" style="accent-color: #1F5F5B">EPUB<span class="n">2</span></label>
+</div>
+</aside>
+
+<main style="flex-grow: 1; min-width: 0; overflow: hidden; padding: 20px 28px; display: flex; flex-direction: column; gap: 22px">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 14px; color: #5C584F">
+<span><b style="color: #1D1C19">9 results</b> for «пикник»</span>
+<span style="display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: #E3EEEC; color: #16433F; font-size: 12px">Социальная фантастика
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span>
+<span style="display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: #E3EEEC; color: #16433F; font-size: 12px">Russian
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span>
+<div style="flex-grow: 1"></div>
+<span>Sort: <a href="#">Relevance</a></span>
+</div>
+
+<section aria-labelledby="h-series">
+<h2 id="h-series" class="fh" style="margin-bottom: 10px">SERIES</h2>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+<a href="#" style="display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 10px; background: #FFFFFF; border: 1px solid #E2DDD2; color: #1D1C19; text-decoration: none">
+<span style="font-weight: 600"><mark>Пикник</mark> на обочине (Антология)</span><span style="font-size: 13px; color: #5C584F">4 books · разные авторы</span></a>
+<a href="#" style="display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 10px; background: #FFFFFF; border: 1px solid #E2DDD2; color: #1D1C19; text-decoration: none">
+<span style="font-weight: 600">Сталкер: <mark>Пикник</mark></span><span style="font-size: 13px; color: #5C584F">3 books · Орлов Сергей</span></a>
+<a href="#" style="display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 10px; background: #FFFFFF; border: 1px solid #E2DDD2; color: #1D1C19; text-decoration: none">
+<span style="font-weight: 600">Мир Полудня</span><span style="font-size: 13px; color: #5C584F">matched in keywords · 21 books</span></a>
+</div>
+</section>
+
+<section aria-labelledby="h-books" style="background: #FFFFFF; border: 1px solid #E2DDD2; border-radius: 10px; overflow: hidden">
+<h2 id="h-books" class="fh" style="margin: 0; padding: 12px 16px; border-bottom: 1px solid #ECE8DF">BOOKS</h2>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="6">
+<div class="res">
+<div style="width: 44px; height: 64px; border-radius: 3px; background: {{r.cover}}"></div>
+<div style="display: flex; flex-direction: column; gap: 3px; min-width: 0">
+<a href="Main.dc.html" style="font-family: Literata, Georgia, serif; font-size: 16px; font-weight: 600; color: #1D1C19">{{r.pre}}<mark>{{r.hit}}</mark>{{r.post}}</a>
+<span style="font-size: 13px; color: #5C584F">{{r.author}}</span>
+</div>
+<span style="font-size: 13px; color: #3F3C35">{{r.genre}}</span>
+<span style="font-size: 13px; color: #5C584F">{{r.added}}</span>
+<a href="Send.dc.html" style="justify-self: end; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 7px; border: 1px solid #D9D4C8; color: #1D1C19; font-size: 13px; text-decoration: none">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>Send</a>
+</div>
+</sc-for>
+</section>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { rows: [
+      { cover: '#3E5A3A', pre: '', hit: 'Пикник', post: ' на обочине', author: 'Стругацкий Аркадий, Стругацкий Борис', genre: 'Социальная фантастика', added: '04.09.2026' },
+      { cover: '#2F4A5A', pre: '', hit: 'Пикник', post: ' на обочине. Сценарий', author: 'Стругацкий Аркадий, Стругацкий Борис', genre: 'Драматургия', added: '11.03.2024' },
+      { cover: '#6B3A2E', pre: 'Обочина. Новый ', hit: 'пикник', post: '', author: 'Орлов Сергей', genre: 'Социальная фантастика', added: '22.05.2025' },
+      { cover: '#4A4063', pre: 'Послесловие к «', hit: 'Пикнику', post: '»', author: 'Стругацкий Борис', genre: 'Публицистика', added: '11.03.2024' },
+      { cover: '#5A4A2F', pre: '', hit: 'Пикник', post: ' в Зоне', author: 'Сборник', genre: 'Социальная фантастика', added: '30.01.2026' },
+      { cover: '#2F4A5A', pre: 'Последний ', hit: 'пикник', post: '', author: 'Левин Андрей', genre: 'Социальная фантастика', added: '17.08.2026' }
+    ] };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>freeLib — Send books</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1D1C19;background:#8A857A}
+a{color:#1F5F5B}a:hover{color:#16433F}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 880px; height: 680px; box-sizing: border-box; padding: 32px; background: #8A857A; display: flex; align-items: center; justify-content: center">
+<div role="dialog" aria-modal="true" aria-labelledby="send-title" style="width: 760px; box-sizing: border-box; background: #FFFFFF; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden">
+<div style="padding: 22px 24px 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px">
+<div>
+<h2 id="send-title" style="margin: 0; font-family: Literata, Georgia, serif; font-size: 22px; font-weight: 600">Send 3 books</h2>
+<p style="margin: 4px 0 0; font-size: 14px; color: #5C584F">Трудно быть богом, Пикник на обочине, Град обреченный</p>
+</div>
+<a href="Main.dc.html" aria-label="Close" style="width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #3F3C35">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></a>
+</div>
+
+<fieldset style="border: none; margin: 0; padding: 0 24px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+<legend style="padding: 0 0 8px; font-size: 12px; font-weight: 600; color: #5C584F; letter-spacing: 0.04em">DEVICE</legend>
+<sc-for list="{{devices}}" as="d" hint-placeholder-count="6">
+<button type="button" aria-pressed="{{d.on}}" onClick="{{d.pick}}" style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 84px; padding: 12px 14px; border-radius: 10px; border: {{d.border}}; background: {{d.bg}}; text-align: left; cursor: pointer">
+<span style="display: flex; width: 100%; justify-content: space-between; align-items: center; font-size: 15px; font-weight: 600; color: #1D1C19">{{d.name}}
+<sc-if value="{{d.on}}" hint-placeholder-val="{{ false }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1F5F5B" stroke-width="2.5" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg></sc-if>
+</span>
+<span style="font-size: 13px; color: #5C584F">{{d.how}}</span>
+<span style="margin-top: auto; font-size: 11px; font-weight: 600; color: #3F3C35; padding: 2px 6px; border-radius: 4px; background: #EDEAE3">{{d.fmt}}</span>
+</button>
+</sc-for>
+</fieldset>
+
+<div style="margin: 18px 24px 0; padding: 16px; border-radius: 10px; background: #F5F3EE; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #3F3C35">{{destLabel}}
+<input type="text" value="{{dest}}" style="height: 36px; padding: 0 10px; border: 1px solid #D9D4C8; border-radius: 6px; font: inherit; font-size: 14px; color: #1D1C19; background: #FFFFFF">
+</label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #3F3C35">File name
+<input type="text" value="%a - %s %n - %b" style="height: 36px; padding: 0 10px; border: 1px solid #D9D4C8; border-radius: 6px; font: inherit; font-size: 14px; color: #1D1C19; background: #FFFFFF">
+</label>
+<div style="grid-column: span 2; font-size: 12px; color: #5C584F">Preview: <span style="color: #1D1C19">Стругацкие - Полдень 03 - Трудно быть богом.{{ext}}</span></div>
+<label style="display: flex; align-items: center; gap: 8px; font-size: 14px"><input type="checkbox" checked style="width: 16px; height: 16px; accent-color: #1F5F5B">Generate cover when missing</label>
+<label style="display: flex; align-items: center; gap: 8px; font-size: 14px"><input type="checkbox" style="width: 16px; height: 16px; accent-color: #1F5F5B">Join series into one book</label>
+</div>
+
+<div style="padding: 12px 24px 0; display: flex; align-items: center; gap: 6px; font-size: 13px; color: #5C584F">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+Formatting (fonts, hyphenation, footnotes, drop caps) comes from the device profile · <a href="#">Edit profile</a>
+</div>
+
+<div style="margin-top: 20px; padding: 14px 24px; border-top: 1px solid #E2DDD2; display: flex; align-items: center; gap: 10px">
+<span style="font-size: 13px; color: #5C584F; flex-grow: 1">Books convert in the background — progress appears in Activity.</span>
+<a href="Main.dc.html" style="display: flex; align-items: center; height: 40px; padding: 0 16px; border-radius: 8px; border: 1px solid #D9D4C8; color: #1D1C19; font-size: 14px; text-decoration: none">Cancel</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px; border-radius: 8px; background: #1F5F5B; color: #FFFFFF; font-size: 14px; font-weight: 500; text-decoration: none">{{action}}</a>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":880,"height":680}}'>
+var DEVICES = [
+  { id: 'kindle-mail', name: 'Kindle', how: 'Send to Kindle by email', fmt: 'EPUB', dl: 'Kindle address', dest: 'reader@kindle.com', ext: 'epub', action: 'Send 3 books' },
+  { id: 'kindle-usb', name: 'Kindle (USB)', how: 'Download for sideloading', fmt: 'AZW3', dl: 'Save to', dest: 'Browser downloads', ext: 'azw3', action: 'Download 3 books' },
+  { id: 'apple', name: 'Apple Books', how: 'Download, or open on iPhone / iPad', fmt: 'EPUB 3', dl: 'Save to', dest: 'Browser downloads', ext: 'epub', action: 'Download 3 books' },
+  { id: 'kobo', name: 'Kobo', how: 'Download for sideloading', fmt: 'KEPUB', dl: 'Save to', dest: 'Browser downloads', ext: 'kepub.epub', action: 'Download 3 books' },
+  { id: 'folder', name: 'Server folder', how: 'Copy into /export on the server', fmt: 'Any', dl: 'Folder', dest: '/export/Стругацкие', ext: 'epub', action: 'Export 3 books' },
+  { id: 'orig', name: 'Original', how: 'The file exactly as stored', fmt: 'FB2 / ZIP', dl: 'Save to', dest: 'Browser downloads', ext: 'fb2.zip', action: 'Download 3 books' }
+];
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { dev: 'kindle-mail' }; }
+  renderVals() {
+    var self = this, cur = DEVICES.filter(function (d) { return d.id === self.state.dev; })[0];
+    return {
+      devices: DEVICES.map(function (d) {
+        var on = d.id === self.state.dev;
+        return Object.assign({}, d, { on: on, border: on ? '2px solid #1F5F5B' : '1px solid #D9D4C8', bg: on ? '#E3EEEC' : '#FFFFFF', pick: function () { self.setState({ dev: d.id }); } });
+      }),
+      destLabel: cur.dl, dest: cur.dest, ext: cur.ext, action: cur.action
+    };
+  }
+}
+</script>
+</body>
+</html>

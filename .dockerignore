@@ -1,0 +1,7 @@
+.git
+server/target
+web/node_modules
+web/dist
+web/test-results
+server/bench-data
+freeLib

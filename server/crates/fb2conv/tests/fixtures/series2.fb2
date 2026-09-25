@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
+<description><title-info><genre>sf</genre><author><first-name>Isaac</first-name><last-name>Asimov</last-name></author>
+<book-title>Foundation and Empire</book-title><lang>en</lang><sequence name="Foundation" number="2"/></title-info></description>
+<body>
+<section id="c1"><title><p>Chapter 1 of Foundation and Empire</p></title><p>Text of book 2<a l:href="#n1" type="note">1</a>.</p><image l:href="#pic.png"/></section>
+<section id="c2"><title><p>Chapter 2</p></title><p>More text, see <a l:href="#c1">chapter 1</a>.</p></section>
+</body>
+<body name="notes"><section id="n1"><title><p>1</p></title><p>Note of book 2.</p></section></body>
+<binary id="pic.png" content-type="image/png">iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAYAAAChS3wfAAABb0lEQVR4Ae3AA6AkWZbG8f937o3I
+zKdyS2Oubdu2bdu2bdu2bWmMnpZKr54yMyLu+Xa3anqmhztr1a/+MZgKVKACFahABSpQgQpUoAIV
+qEAFKlCBClSgAhWoQAUqUIEKVKACFahABSpQgQpUoAIVqEAFKlCBClSgAhWoQAUqUIEKVKACFahA
+BSpQgQpUoAIVqEAFKlTo+H+MCh3/j1Gh4/8xKnT8P0aFjv/HqNDx/xgVOv4fo0LH/2NU6Ph/jAod
+/49RoeP/MSp0/D9GhY7/x6jQ8f8YFTr+H6NCx/9jVOj4f4wKHf+PUaHj/zEqdPw/RoWO/8eo0PH/
+GBU6/h+jQsf/Y1To+H+MCh3/j1Gh4/8xKnT8P0aFjv/HqNDx/xgVOv4fo0LH/2NU6Ph/jAod/49R
+oeP/MSp0/D9GhY7/x6jQ8f8YFTr+H6NCx/9jVOj4f4wKHf+PUaHj/zEqdPw/RoWO/8eo0PH/GBU6
+/h/jHwFXzgRvjgyaDQAAAABJRU5ErkJggg==
+</binary>
+</FictionBook>

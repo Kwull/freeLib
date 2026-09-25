@@ -1,0 +1,127 @@
+@import '@fontsource/literata/400.css';
+@import '@fontsource/literata/600.css';
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+
+:root {
+  --font-display: 'Literata', Georgia, serif;
+  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+
+  --page: #F5F3EE;
+  --surface: #FFFFFF;
+  --surface-alt: #FBFAF7;
+  --surface-hover: #EDEAE3;
+  --row-hover: #F7F5F0;
+  --line: #E2DDD2;
+  --line-soft: #ECE8DF;
+  --border: #D9D4C8;
+  --border-dashed: #BDB6A7;
+  --ink: #1D1C19;
+  --ink-strong: #1D1C19;
+  --muted: #5C584F;
+  --muted-2: #3F3C35;
+  --accent: #1F5F5B;
+  --accent-hover: #16433F;
+  --accent-soft: #E3EEEC;
+  --accent-soft-ink: #16433F;
+  --amber: #B8741A;
+  --danger: #B3261E;
+  --scrim: rgba(29, 28, 25, 0.55);
+  --focus: #1F5F5B;
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'],
+:root:not([data-theme='light']) {
+  @media (prefers-color-scheme: dark) {
+    --page: #17181A;
+    --surface: #1D1F21;
+    --surface-alt: #202224;
+    --surface-hover: #2A2C2E;
+    --row-hover: #24262828;
+    --line: #333536;
+    --line-soft: #2A2C2E;
+    --border: #3A3C3E;
+    --border-dashed: #4A4C4E;
+    --ink: #EDEBE6;
+    --ink-strong: #FFFFFF;
+    --muted: #A6A296;
+    --muted-2: #C9C5B9;
+    --accent: #3E8F89;
+    --accent-hover: #59A9A3;
+    --accent-soft: #1E3230;
+    --accent-soft-ink: #8FD3CC;
+    --amber: #D18F3C;
+    --danger: #E5675F;
+    --scrim: rgba(0, 0, 0, 0.65);
+    --focus: #59A9A3;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --page: #17181A;
+  --surface: #1D1F21;
+  --surface-alt: #202224;
+  --surface-hover: #2A2C2E;
+  --row-hover: #242628;
+  --line: #333536;
+  --line-soft: #2A2C2E;
+  --border: #3A3C3E;
+  --border-dashed: #4A4C4E;
+  --ink: #EDEBE6;
+  --ink-strong: #FFFFFF;
+  --muted: #A6A296;
+  --muted-2: #C9C5B9;
+  --accent: #3E8F89;
+  --accent-hover: #59A9A3;
+  --accent-soft: #1E3230;
+  --accent-soft-ink: #8FD3CC;
+  --amber: #D18F3C;
+  --danger: #E5675F;
+  --scrim: rgba(0, 0, 0, 0.65);
+  --focus: #59A9A3;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+body { overflow: hidden; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+button, input, select, textarea { font-family: inherit; color: inherit; }
+
+button { cursor: pointer; }
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+#app { height: 100%; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }

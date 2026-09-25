@@ -1,0 +1,275 @@
+{
+  "description": "Shared test vectors of normalize() / letter_of(): server/crates/catalog/src/normalize.rs and web/src/lib/utils/normalize.ts must both produce these (tested by server/crates/catalog/tests/normalize_vectors.rs and web/tests-unit/normalize.test.ts).",
+  "vectors": [
+    {
+      "input": "Ёлкин Пётр",
+      "normalized": "елкин петр",
+      "letter": "Е"
+    },
+    {
+      "input": "ЁЖИК",
+      "normalized": "ежик",
+      "letter": "Е"
+    },
+    {
+      "input": "Йозеф",
+      "normalized": "йозеф",
+      "letter": "Й"
+    },
+    {
+      "input": "«Война и мир»",
+      "normalized": "война и мир",
+      "letter": "В"
+    },
+    {
+      "input": "Толстой Л.Н.",
+      "normalized": "толстой л н",
+      "letter": "Т"
+    },
+    {
+      "input": "O'Brien",
+      "normalized": "obrien",
+      "letter": "O"
+    },
+    {
+      "input": "Что? Где? Когда!",
+      "normalized": "что где когда",
+      "letter": "Ч"
+    },
+    {
+      "input": "Мамин-Сибиряк",
+      "normalized": "мамин-сибиряк",
+      "letter": "М"
+    },
+    {
+      "input": "(Не)везучий [сборник]",
+      "normalized": "не везучий сборник",
+      "letter": "Н"
+    },
+    {
+      "input": "  Стругацкий\t Аркадий   Натанович  ",
+      "normalized": "стругацкий аркадий натанович",
+      "letter": "С"
+    },
+    {
+      "input": "",
+      "normalized": "",
+      "letter": "#"
+    },
+    {
+      "input": "   ",
+      "normalized": "",
+      "letter": "#"
+    },
+    {
+      "input": "- Hello",
+      "normalized": "hello",
+      "letter": "H"
+    },
+    {
+      "input": "...и всё",
+      "normalized": "и все",
+      "letter": "И"
+    },
+    {
+      "input": "#1",
+      "normalized": "1",
+      "letter": "#"
+    },
+    {
+      "input": "!!!",
+      "normalized": "!!!",
+      "letter": "#"
+    },
+    {
+      "input": "1984",
+      "normalized": "1984",
+      "letter": "#"
+    },
+    {
+      "input": "Zeta",
+      "normalized": "zeta",
+      "letter": "Z"
+    },
+    {
+      "input": "Ὀδυσσεύς",
+      "normalized": "ὀδυσσεύς",
+      "letter": "Ὀ"
+    },
+    {
+      "input": "ΣΊΣΥΦΟΣ",
+      "normalized": "σίσυφοσ",
+      "letter": "Σ"
+    },
+    {
+      "input": "Straße",
+      "normalized": "straße",
+      "letter": "S"
+    },
+    {
+      "input": "İstanbul",
+      "normalized": "i̇stanbul",
+      "letter": "I"
+    },
+    {
+      "input": "Łódź",
+      "normalized": "łódź",
+      "letter": "Ł"
+    },
+    {
+      "input": "Café—Bar",
+      "normalized": "café bar",
+      "letter": "C"
+    },
+    {
+      "input": "a/b\\c|d",
+      "normalized": "a b c d",
+      "letter": "A"
+    },
+    {
+      "input": "“Quoted” ‘single’ „low“ ‹angle› ´acute´ `tick`",
+      "normalized": "quoted single low angle acute tick",
+      "letter": "Q"
+    },
+    {
+      "input": "Ⅻ век",
+      "normalized": "ⅻ век",
+      "letter": "Ⅻ"
+    },
+    {
+      "input": "٣ digits",
+      "normalized": "٣ digits",
+      "letter": "#"
+    },
+    {
+      "input": "½ half",
+      "normalized": "½ half",
+      "letter": "#"
+    },
+    {
+      "input": "x́y",
+      "normalized": "x́y",
+      "letter": "X"
+    },
+    {
+      "input": "東京 物語",
+      "normalized": "東京 物語",
+      "letter": "東"
+    },
+    {
+      "input": "ß",
+      "normalized": "ß",
+      "letter": "SS"
+    },
+    {
+      "input": "ǅemal",
+      "normalized": "ǆemal",
+      "letter": "Ǆ"
+    },
+    {
+      "input": "​zero width",
+      "normalized": "zero width",
+      "letter": "Z"
+    },
+    {
+      "input": "-*- stars",
+      "normalized": "stars",
+      "letter": "S"
+    },
+    {
+      "input": "  «»  ",
+      "normalized": "«»",
+      "letter": "#"
+    },
+    {
+      "input": "Ёё",
+      "normalized": "ее",
+      "letter": "Е"
+    },
+    {
+      "input": "Tab\tNew\nLine",
+      "normalized": "tab new line",
+      "letter": "T"
+    },
+    {
+      "input": "Семёнов-Тян-Шанский",
+      "normalized": "семенов-тян-шанский",
+      "letter": "С"
+    },
+    {
+      "input": "100%",
+      "normalized": "100%",
+      "letter": "#"
+    },
+    {
+      "input": "C++ & C#",
+      "normalized": "c++ & c#",
+      "letter": "C"
+    },
+    {
+      "input": "e.e. cummings",
+      "normalized": "e e cummings",
+      "letter": "E"
+    },
+    {
+      "input": "—",
+      "normalized": "—",
+      "letter": "#"
+    },
+    {
+      "input": "Émile Zola",
+      "normalized": "émile zola",
+      "letter": "É"
+    },
+    {
+      "input": "ﬁ ligature",
+      "normalized": "ﬁ ligature",
+      "letter": "FI"
+    },
+    {
+      "input": "ΟΔΟΣ Σ",
+      "normalized": "οδοσ σ",
+      "letter": "Ο"
+    },
+    {
+      "input": "ǈubljana",
+      "normalized": "ǉubljana",
+      "letter": "Ǉ"
+    },
+    {
+      "input": "Ἀ",
+      "normalized": "ἀ",
+      "letter": "Ἀ"
+    },
+    {
+      "input": "\u0001ctrl",
+      "normalized": "ctrl",
+      "letter": "C"
+    },
+    {
+      "input": "  -  ",
+      "normalized": "-",
+      "letter": "#"
+    },
+    {
+      "input": "«Ё»",
+      "normalized": "е",
+      "letter": "Е"
+    },
+    {
+      "input": "ab",
+      "normalized": "a b",
+      "letter": "A"
+    },
+    {
+      "input": "Ё-Ж",
+      "normalized": "е-ж",
+      "letter": "Е"
+    },
+    {
+      "input": "NEL line",
+      "normalized": "nel line",
+      "letter": "N"
+    }
+  ]
+}
