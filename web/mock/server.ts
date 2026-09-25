@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { store, catalog, createJob, runJobProgress, broadcast } from './store';
 import { placeholderCover } from './covers';
+import { scenarioOf, handleScenario, handleMockControl, sendSlowly } from './scenario';
 import { normalize } from './normalize';
 import { genreName } from './names';
 import type { Book, BookDetail, AuthorRef, SeriesRef } from '../src/lib/api/types';
@@ -100,15 +101,20 @@ export function installMockApi(server: Connect.Server) {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
     const method = req.method ?? 'GET';
+    if (handleMockControl(url, res)) return;
     if (!path.startsWith('/api/v1') && !path.startsWith('/opds')) return next();
 
     // simulate small network latency for realism
     await new Promise((r) => setTimeout(r, 15 + Math.random() * 25));
 
+    // simulated server states (see mock/scenario.ts)
+    const sc = scenarioOf(req);
+    if (sc && await handleScenario(sc, req, res, path, () => store.libraries, { id: 1, username: 'admin', role: 'admin' })) return;
+
     try {
       // ---- Session --------------------------------------------------
       if (path === '/api/v1/session' && method === 'GET') {
-        return send(res, 200, { user: { id: 1, username: 'admin', role: 'admin' }, openMode: true });
+        return send(res, 200, { user: { id: 1, username: 'admin', role: 'admin' }, openMode: true, auth: { password: true, oidc: null } });
       }
       if (path === '/api/v1/login' && method === 'POST') {
         const body = await readBody(req);
@@ -189,20 +195,16 @@ export function installMockApi(server: Connect.Server) {
       m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/authors$/);
       if (m && method === 'GET') {
         const lib = catalog(Number(m[1]));
-        return send(res, 200, {
-          version: 1, columns: ['id', 'name', 'count'],
-          rows: lib.authorRows,
-          letters: lib.authorLetters,
-        }, { 'Cache-Control': url.searchParams.has('v') ? 'public, max-age=31536000, immutable' : 'no-cache' });
+        const body = { version: 1, columns: ['id', 'name', 'count'], rows: lib.authorRows, letters: lib.authorLetters };
+        if (sc?.flags.has('slow')) return sendSlowly(res, body, sc.slow);
+        return send(res, 200, body, { 'Cache-Control': url.searchParams.has('v') ? 'public, max-age=31536000, immutable' : 'no-cache' });
       }
       m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/series$/);
       if (m && method === 'GET') {
         const lib = catalog(Number(m[1]));
-        return send(res, 200, {
-          version: 1, columns: ['id', 'name', 'count'],
-          rows: lib.seriesRows,
-          letters: lib.seriesLetters,
-        });
+        const body = { version: 1, columns: ['id', 'name', 'count'], rows: lib.seriesRows, letters: lib.seriesLetters };
+        if (sc?.flags.has('slow')) return sendSlowly(res, body, sc.slow);
+        return send(res, 200, body);
       }
       m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/genres$/);
       if (m && method === 'GET') {
@@ -548,7 +550,9 @@ export function installMockApi(server: Connect.Server) {
         return send(res, 200, store.settings);
       }
       if (path === '/api/v1/settings/smtp/test' && method === 'POST') return send(res, 204);
-      if (path === '/api/v1/users' && method === 'GET') return send(res, 200, store.users);
+      if (path === '/api/v1/users' && method === 'GET') {
+        return send(res, 200, store.users.map((u) => ({ ...u, hasPassword: true, sso: null })));
+      }
       if (path === '/api/v1/users' && method === 'POST') {
         const body = await readBody(req);
         const user = { id: store.users.length + 1, username: body.username, role: body.role };

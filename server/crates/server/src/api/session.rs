@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 
 use crate::auth::{self, COOKIE};
 use crate::db::{self, User};
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::util::{random_token, set_header, unix_now};
 
@@ -21,7 +21,17 @@ pub async fn get_session(State(st): State<AppState>, headers: HeaderMap) -> ApiR
     if let Some(u) = &user {
         track_visit(&st, u.id).await?;
     }
-    let mut r = Json(json!({ "user": user, "openMode": st.open_mode() })).into_response();
+    let oidc = st
+        .oidc
+        .as_ref()
+        .map(|p| json!({ "enabled": true, "label": p.cfg.button }));
+    let password = !st.cfg.oidc.as_ref().is_some_and(|o| o.disable_password);
+    let mut r = Json(json!({
+        "user": user,
+        "openMode": st.open_mode(),
+        "auth": { "password": password, "oidc": oidc },
+    }))
+    .into_response();
     set_header(&mut r, header::CACHE_CONTROL, "no-store");
     Ok(r)
 }
@@ -50,17 +60,31 @@ pub async fn login(
     if st.open_mode() {
         return Ok(Json(json!({ "user": User::open_mode_admin() })).into_response());
     }
+    if st.password_login_refused(&b.username) {
+        return Err(ApiError::forbidden(
+            "password sign-in is disabled: use single sign-on",
+        ));
+    }
     let ip = auth::client_ip(&headers, peer.map(|p| p.0.0), st.cfg.trust_proxy);
     let user = auth::check_credentials(&st, ip, b.username.trim(), &b.password).await?;
     let token = random_token(32);
     let (uid, t2) = (user.id, token.clone());
-    st.db.run(move |c| db::create_session(c, uid, &t2)).await?;
+    // a fresh session id; a session this browser had before is dropped
+    let old = auth::cookie_value(&headers, COOKIE);
+    st.db
+        .run(move |c| {
+            if let Some(o) = old {
+                db::delete_session(c, &o)?;
+            }
+            db::create_session(c, uid, &t2)
+        })
+        .await?;
     tracing::info!(user = %user.username, "login");
     let mut r = Json(json!({ "user": user })).into_response();
     set_header(
         &mut r,
         header::SET_COOKIE,
-        &auth::session_cookie(&token, auth::is_https(&headers)),
+        &auth::session_cookie(&token, st.secure_cookies(&headers)),
     );
     set_header(&mut r, header::CACHE_CONTROL, "no-store");
     Ok(r)

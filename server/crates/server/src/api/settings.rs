@@ -195,8 +195,33 @@ pub async fn smtp_test(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn users(State(st): State<AppState>, Admin(_): Admin) -> ApiResult<Json<Vec<User>>> {
-    Ok(Json(st.db.run(|c| db::list_users(c)).await?))
+/// Users with how they sign in: `hasPassword`, and `sso` (the linked single sign-on identity:
+/// `email`, `createdAt`, `lastLogin`) or `null`.
+pub async fn users(State(st): State<AppState>, Admin(_): Admin) -> ApiResult<Json<Vec<Value>>> {
+    let issuer = st.oidc.as_ref().map(|p| p.issuer().to_string());
+    let rows = st
+        .db
+        .run(move |c| {
+            let users = db::list_users(c)?;
+            let ids = db::identities(c)?;
+            let mut out = Vec::with_capacity(users.len());
+            for u in users {
+                let hp = db::has_password(c, u.id)?;
+                let sso = ids
+                    .get(&u.id)
+                    .filter(|i| issuer.as_deref().is_none_or(|x| x == i.issuer));
+                out.push(json!({
+                    "id": u.id,
+                    "username": u.username,
+                    "role": u.role,
+                    "hasPassword": hp,
+                    "sso": sso,
+                }));
+            }
+            Ok(out)
+        })
+        .await?;
+    Ok(Json(rows))
 }
 
 #[derive(Deserialize)]

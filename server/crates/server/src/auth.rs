@@ -252,8 +252,9 @@ async fn verify_credentials(
     let (u, p) = (username.to_string(), password.to_string());
     let user = st.db.run(move |c| db::user_with_hash(c, &u)).await?;
     Ok(tokio::task::spawn_blocking(move || match user {
-        Some((user, hash)) => verify_password(&p, &hash).then_some(user),
-        None => {
+        // accounts created by single sign-on have no password: same timing as an unknown user
+        Some((user, hash)) if !hash.is_empty() => verify_password(&p, &hash).then_some(user),
+        _ => {
             dummy_verify(&p, fast);
             None
         }

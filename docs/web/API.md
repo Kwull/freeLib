@@ -19,7 +19,15 @@ Responses carry `ETag`; list endpoints called with `?v=<catalogVersion>` get
 ## Types
 
 ```ts
-type LibraryStatus = { state: "idle" | "importing" | "error"; progress?: number /*0..1*/; message?: string };
+type LibraryStatus = {
+  state: "idle" | "importing" | "error"; progress?: number /*0..1*/; message?: string /*current step, or the error*/;
+  // set when the server started the import by itself: "upgrade" = the catalog was written by another
+  // schema version and is rebuilt after an update; "autoimport" = FREELIB_AUTOIMPORT
+  reason?: "upgrade" | "autoimport";
+};
+// A library is browsable when importedAt is set. While a library without a catalog imports (first import,
+// rebuild after an update), its browsing endpoints answer 404 "library is not imported yet"; a re-import of a
+// browsable library keeps serving the old catalog until the new one is swapped in.
 type Library = {
   id: number; name: string; path: string; inpx: string | null;
   firstAuthorOnly: boolean; skipDeleted: boolean; isDefault: boolean;
@@ -111,9 +119,27 @@ their separator. Result is sanitised for file systems; `transliterate` applies R
 
 | Method & path | Body | Response |
 |---|---|---|
-| `GET /session` | – | `{ user: {id, username, role} \| null, openMode: boolean }` (never 401) |
-| `POST /login` | `{username, password}` | `{user}` + cookie; 401 on bad credentials; 429 `rate_limited` after 5 failures per client address (IPv6: per /64) **or** per user name (the wait doubles with each further failure, max 5 min; attempts in flight count) |
+| `GET /session` | – | `{ user: {id, username, role} \| null, openMode: boolean, auth: { password: boolean, oidc: { enabled: true, label: string } \| null } }` (never 401). `auth.password` is false with `FREELIB_OIDC_DISABLE_PASSWORD`; `auth.oidc.label` is the sign-in button text (`FREELIB_OIDC_BUTTON`) |
+| `POST /login` | `{username, password}` | `{user}` + cookie (a new session id; a session cookie the browser already had is invalidated); 401 on bad credentials; 403 when password sign-in is disabled (`FREELIB_OIDC_DISABLE_PASSWORD`; the `FREELIB_ADMIN_USER` account keeps it while `FREELIB_ADMIN_PASSWORD` is set); 429 `rate_limited` after 5 failures per client address (IPv6: per /64) **or** per user name (the wait doubles with each further failure, max 5 min; attempts in flight count) |
 | `POST /logout` | – | 204 |
+
+### Single sign-on (OpenID Connect)
+
+Configured with `FREELIB_PUBLIC_URL` and `FREELIB_OIDC_*` (DOCKER.md). All endpoints answer 404 when it is not
+configured. The flow is the authorization code flow with PKCE (S256), `state` and `nonce`; see ARCHITECTURE.md
+"Single sign-on" for the validation rules.
+
+| Method & path | Body / query | Response |
+|---|---|---|
+| `GET /auth/oidc/login` | `return=/path` (optional; only same-origin relative paths, anything else becomes `/`) | 303 to the provider's authorization endpoint, with an HttpOnly `freelib_oidc` state cookie (`Path=/api/v1/auth/oidc`, `SameSite=Lax`, 10 min, `Secure` when `FREELIB_PUBLIC_URL` is https or `X-Forwarded-Proto: https`). A full page navigation, not a fetch. When the provider cannot be reached: 303 to `/login?ssoError=unavailable` |
+| `GET /auth/oidc/callback` | `code`, `state` (or `error`, `error_description`) from the provider | success: 303 to the return path with a new session cookie (the old session, if any, is invalidated). Failure: 303 to `/login?ssoError=<code>` (link flow: `/settings/account?ssoError=<code>`). Codes: `state` (unknown, expired, used, or not this browser's sign-in), `provider` (the provider returned an error, e.g. the user cancelled), `token` (code exchange or ID token validation failed; details in the server log), `unavailable`, `not_linked` (no account and `FREELIB_OIDC_AUTO_CREATE=false`), `already_linked`, `session` (link flow finished in a browser not signed in as that user), `rate_limited` (failed callbacks count against the login rate limit per address), `busy` |
+| `POST /auth/oidc/link` | – (signed in) | `{ url }`: the web app navigates there to link the provider identity to the current account; the callback returns to `/settings/account?sso=linked` with a new session id |
+| `GET /me/account` | – | `{ user, hasPassword: boolean, passwordLogin: boolean, sso: { label, linked: boolean, email: string \| null, lastLogin: string \| null } \| null }` (`sso` is null without single sign-on) |
+| `PUT /me/password` | `{password, current?}` | 204 + a new session cookie; `current` is required (403 when wrong, rate limited like `/login`) when the account has a password. Accounts created by single sign-on have none: this sets one for OPDS apps. Other sessions of the user are signed out |
+| `DELETE /me/oidc` | – | 204; 409 when the account has no password or password sign-in is disabled (it would lock the user out); 404 when nothing is linked |
+
+Accounts are matched by (issuer, `sub`) only, never by user name or e-mail. OPDS keeps HTTP Basic auth with local
+passwords: a user created by single sign-on sets a password in Settings → Account to use OPDS apps.
 
 ## Libraries
 
@@ -183,7 +209,7 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | `GET /settings` **(admin)** | – | `{ smtp: {host, port, security: "none"\|"starttls"\|"tls", username, from, passwordSet: boolean, pauseSeconds, allowedRecipients: string[], dailyLimitPerUser: number, subject: string (mail subject template: `%b` title, `%a` author; default `%b`)}, opds: {enabled: boolean, requireAuth: boolean}, calibre: {available: boolean, version: string\|null} }` |
 | `PUT /settings` **(admin)** | same shape; `smtp.password` write-only (omit to keep, `""` to remove). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100) | same as GET |
 | `POST /settings/smtp/test` **(admin)** | `{to}` | 204 or 400 with message |
-| `GET /users` **(admin)** | – | `[{id, username, role}]` |
+| `GET /users` **(admin)** | – | `[{id, username, role, hasPassword: boolean, sso: {issuer, email, createdAt, lastLogin} \| null}]` (`sso`: the linked single sign-on identity) |
 | `POST /users` **(admin)** | `{username, password, role}` | user; 409 when the name exists (case-insensitive). User ids are never reused |
 | `PATCH /users/:id` **(admin)** | `{password?, role?}` | user |
 | `DELETE /users/:id` **(admin)** | – | 204 (also cancels and removes the user's jobs and their files) |

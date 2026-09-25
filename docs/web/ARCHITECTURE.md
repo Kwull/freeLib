@@ -36,7 +36,7 @@ Browser (Svelte 5 SPA) ──HTTP/JSON + SSE──▶ freelib-server (Rust, axum
 | `FREELIB_BOOKS_DIR` | `/books` | Root under which library folders and INPX files must live (folder picker is limited to it) |
 | `FREELIB_CACHE_DIR` | `/cache` (dev: `./cache`) | Previews and converted books; safe to delete |
 | `FREELIB_EXPORT_DIR` | `/export` | Target of the "Server folder" device |
-| `FREELIB_ADMIN_USER` / `FREELIB_ADMIN_PASSWORD` | `admin` / unset | Creates/updates the admin on start. If no users exist and no password is set, the server runs in **open mode** (no login, everyone is admin) and logs a warning |
+| `FREELIB_ADMIN_USER` / `FREELIB_ADMIN_PASSWORD` | `admin` / unset | Creates/updates the admin on start. If no users exist, no password is set and single sign-on is not configured, the server runs in **open mode** (no login, everyone is admin) and logs a warning |
 | `FREELIB_AUTOIMPORT` | unset | Comma-separated INPX paths; on start, a library is created for each one not yet known and imported |
 | `FREELIB_CALIBRE` | `ebook-convert` if on PATH | Calibre converter used for AZW3 / MOBI / PDF (EPUB input only; versions before 6.19 are refused, CVE-2023-46303) |
 | `FREELIB_WEB_DIR` | unset | Serve the SPA from this folder instead of the embedded copy (development) |
@@ -44,6 +44,14 @@ Browser (Svelte 5 SPA) ──HTTP/JSON + SSE──▶ freelib-server (Rust, axum
 | `FREELIB_BIND` | `0.0.0.0` | Listen address |
 | `FREELIB_TRUST_PROXY` | unset | `1`: the server is only reachable through one reverse proxy; the client address for login rate limiting is `X-Real-IP`, else the rightmost `X-Forwarded-For` entry |
 | `FREELIB_ALLOWED_HOSTS` | unset | Comma-separated host names (`books.example.org`, `*.lan`) accepted in the `Host` header besides `localhost` and IP literals. Checked in open mode always (DNS rebinding protection: other names get 421) and in every mode once set |
+| `FREELIB_PUBLIC_URL` | unset | External base URL (`https://books.example.org`, no trailing slash). Required for single sign-on (redirect URI `<FREELIB_PUBLIC_URL>/api/v1/auth/oidc/callback`); an `https://` URL also makes every cookie `Secure` |
+| `FREELIB_OIDC_ISSUER` / `FREELIB_OIDC_CLIENT_ID` | unset | Enable OpenID Connect sign-in (both required; the server refuses to start with only one, or without `FREELIB_PUBLIC_URL`). The issuer must match the provider's discovery document exactly |
+| `FREELIB_OIDC_CLIENT_SECRET` | unset | For confidential clients; public clients rely on PKCE alone |
+| `FREELIB_OIDC_SCOPES` | `openid profile email` | Space- or comma-separated; `openid` is always added. Add `groups` for providers that only send the claim when asked (Pocket ID, Authentik) |
+| `FREELIB_OIDC_BUTTON` | `Sign in with SSO` | Label of the sign-in button |
+| `FREELIB_OIDC_ADMIN_GROUP` | unset | Members of this group (`groups` claim, from the ID token or userinfo) become administrators, everybody else a reader; re-evaluated at every SSO sign-in (the `FREELIB_ADMIN_USER` account is never demoted) |
+| `FREELIB_OIDC_AUTO_CREATE` | `true` | Create a reader account on the first sign-in of an unknown identity; `false`: only identities an administrator's users linked themselves can sign in |
+| `FREELIB_OIDC_DISABLE_PASSWORD` | `false` | Hide and refuse password sign-in in the web app, except for the `FREELIB_ADMIN_USER` account while `FREELIB_ADMIN_PASSWORD` is set (the way back in). OPDS keeps Basic auth |
 | `FREELIB_CACHE_MAX_MB` | `2048` | Size bound of `cache/{out,covers,info}`; least recently used files are evicted (`0` = unbounded) |
 | `FREELIB_CALIBRE_TIMEOUT` | `300` | Seconds before a Calibre conversion is killed (`FREELIB_CALIBRE=none` disables Calibre) |
 | `RUST_LOG` | `info` | Logging |
@@ -160,10 +168,46 @@ Migration v2: unique index `user(username COLLATE NOCASE)` (older case-only dupl
 `user_state.prev_visit` (start of the previous visit, the `newSinceLastVisit` baseline; books dated on or after
 its server-local day count as new), and
 `mail_count(user_id, day, count)` for `smtp.dailyLimitPerUser`.
+Migration v3: `user_identity(issuer, subject, user_id, email, created_at, last_login)`, primary key
+`(issuer, subject)`, unique `(user_id, issuer)`: the single sign-on identity linked to an account. Accounts
+created by single sign-on have an empty `password_hash` (no password sign-in, no OPDS) until the user sets one.
 Migrations: `freelib_catalog::schema::APP_MIGRATIONS` is an append-only list of SQL batches; `PRAGMA user_version`
 holds how many were applied; `open_app_db()` applies the missing ones, each in a transaction, and refuses a newer database.
 
 User data is keyed by `(library_id, book_key)`, so it survives re-imports.
+
+## Single sign-on (OpenID Connect)
+
+`server/crates/server/src/oidc.rs` (flow, validation, accounts) and `api/oidc.rs` (endpoints, cookies), built on
+the `openidconnect` crate with `reqwest` + rustls (web PKI and system roots, `SSL_CERT_FILE` honoured).
+
+* **Discovery** `<issuer>/.well-known/openid-configuration` and the JWKS are fetched on start (failure is only
+  logged) and cached for an hour; a failed refresh keeps the cached copy. An ID token signed with a key that is not
+  in the cached JWKS triggers one immediate refetch (key rotation). The HTTP client follows no redirects (SSRF) and
+  times out after 20 s.
+* **Start** (`GET /auth/oidc/login`): PKCE S256 verifier, random `state` and `nonce`. The pending sign-in
+  (nonce, verifier, return path, user id for the link flow) is kept in server memory for 10 minutes (at most 10 000;
+  lost on restart, the user simply retries); the browser gets `state` in an HttpOnly, `SameSite=Lax` cookie scoped to
+  `/api/v1/auth/oidc`. The return path is reduced to a same-origin relative path (`/…`, not `//…`, no backslashes,
+  control characters, `/api/`, `/opds`, `/login`), else `/`.
+* **Callback**: the `state` parameter must equal the cookie (constant-time) and name a pending sign-in, which is
+  removed (single use) — this binds the callback to the browser that started it (login CSRF). Then the code is
+  exchanged with the PKCE verifier (client secret via `client_secret_basic`, or `client_secret_post` when the
+  provider lists only that). ID token checks: signature with an allowed asymmetric algorithm (RS/PS 256–512,
+  ES256/384, EdDSA; no `none`, no HMAC), `iss` equals the issuer, `aud` contains the client id (other audiences
+  refused), `exp` with 60 s leeway, `iat` not more than 60 s in the future nor older than 10 minutes, `nonce`, and
+  `at_hash` when present. Userinfo is fetched (and its `sub` must match) when the ID token lacks `groups` while
+  `FREELIB_OIDC_ADMIN_GROUP` is set, or lacks all of `preferred_username`, `email`, `name`.
+* **Accounts**: found by (issuer, `sub`) in `user_identity`, never by name or e-mail. A new identity creates a reader
+  (with `FREELIB_OIDC_AUTO_CREATE`) named after `preferred_username`, else `email`, else `name`, made unique with
+  ` (2)`, ` (3)`… — a provider user called `admin` becomes `admin (2)`, never the local admin. The admin group sets
+  the role at every sign-in. Linking (`POST /auth/oidc/link`, a same-origin JSON request, so CSRF-protected) stores the
+  user id in the pending sign-in; the callback links only when the browser is still signed in as that user.
+* **Sessions**: the existing `session` table and cookie; every sign-in (password or SSO) and every link issues a new
+  session id and invalidates the one the browser sent (session fixation). Failed callbacks count against the login
+  rate limiter per client address. Cookies are `Secure` when `FREELIB_PUBLIC_URL` is https or the proxy sends
+  `X-Forwarded-Proto: https`. Request spans log the path only (no `code`/`state`); tokens are never logged.
+* With single sign-on configured the server never runs in open mode. OPDS keeps HTTP Basic with local passwords.
 
 ## Import (swap-in)
 
@@ -179,6 +223,11 @@ User data is keyed by `(library_id, book_key)`, so it survives re-imports.
    `ANALYZE`, write `meta`, switch to `journal_mode=DELETE`, fsync.
 4. `rename(new, lib_<id>.db)`; the server calls `CatalogHandle::reload()`. Readers of the old file finish undisturbed.
    On error or cancellation the `.new.db` is deleted and the current catalog is untouched.
+
+While a library has no usable catalog (first import, or a catalog of another schema version being rebuilt on start —
+`status.reason: "upgrade"`), it cannot be browsed: the web app shows the import card with the live progress from
+`library` events (polling `GET /libraries` when the event stream is down) and continues by itself when the import
+ends. A re-import of a browsable library keeps serving the old catalog until the swap.
 
 Progress is reported through a callback `(done, total, message)` with `total = parts + 5` (the finishing steps count
 as one each); the server turns it into job events. Cancellation: an `AtomicBool` checked per part and between steps.

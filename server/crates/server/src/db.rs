@@ -218,6 +218,7 @@ pub fn delete_user(c: &Connection, id: i64) -> ApiResult<bool> {
     c.execute("DELETE FROM device WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM user_state WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM mail_count WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM user_identity WHERE user_id=?1", [id])?;
     Ok(c.execute("DELETE FROM user WHERE id=?1", [id])? > 0)
 }
 
@@ -264,6 +265,152 @@ pub fn delete_session(c: &Connection, token: &str) -> ApiResult<()> {
         [sha256_hex(token.as_bytes())],
     )?;
     Ok(())
+}
+
+/// Deletes all sessions of a user except `keep` (a raw token).
+pub fn delete_other_sessions(c: &Connection, user_id: i64, keep: &str) -> ApiResult<()> {
+    c.execute(
+        "DELETE FROM session WHERE user_id=?1 AND token<>?2",
+        params![user_id, sha256_hex(keep.as_bytes())],
+    )?;
+    Ok(())
+}
+
+/// Whether the user can sign in with a password (single sign-on accounts start without one).
+pub fn has_password(c: &Connection, user_id: i64) -> ApiResult<bool> {
+    Ok(c.query_row(
+        "SELECT password_hash <> '' FROM user WHERE id=?1",
+        [user_id],
+        |r| r.get::<_, bool>(0),
+    )
+    .optional()?
+    .unwrap_or(false))
+}
+
+pub fn password_hash(c: &Connection, user_id: i64) -> ApiResult<Option<String>> {
+    Ok(c.query_row(
+        "SELECT password_hash FROM user WHERE id=?1",
+        [user_id],
+        |r| r.get(0),
+    )
+    .optional()?)
+}
+
+// ---------------------------------------------------------------- single sign-on identities
+
+/// A linked OpenID Connect identity.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Identity {
+    #[serde(skip)]
+    pub user_id: i64,
+    pub issuer: String,
+    #[serde(skip)]
+    pub subject: String,
+    pub email: Option<String>,
+    pub created_at: String,
+    pub last_login: Option<String>,
+}
+
+fn identity_row(r: &rusqlite::Row) -> rusqlite::Result<Identity> {
+    Ok(Identity {
+        user_id: r.get(0)?,
+        issuer: r.get(1)?,
+        subject: r.get(2)?,
+        email: r.get(3)?,
+        created_at: r.get(4)?,
+        last_login: r.get(5)?,
+    })
+}
+
+const IDENTITY_COLS: &str = "user_id, issuer, subject, email, created_at, last_login";
+
+/// The user linked to (`issuer`, `subject`).
+pub fn identity_user(c: &Connection, issuer: &str, subject: &str) -> ApiResult<Option<User>> {
+    Ok(c.query_row(
+        "SELECT u.id, u.username, u.role FROM user_identity i JOIN user u ON u.id = i.user_id \
+         WHERE i.issuer=?1 AND i.subject=?2",
+        params![issuer, subject],
+        |r| {
+            Ok(User {
+                id: r.get(0)?,
+                username: r.get(1)?,
+                role: r.get(2)?,
+            })
+        },
+    )
+    .optional()?)
+}
+
+/// The identity of `user_id` at `issuer`.
+pub fn user_identity(c: &Connection, user_id: i64, issuer: &str) -> ApiResult<Option<Identity>> {
+    Ok(c.query_row(
+        &format!("SELECT {IDENTITY_COLS} FROM user_identity WHERE user_id=?1 AND issuer=?2"),
+        params![user_id, issuer],
+        identity_row,
+    )
+    .optional()?)
+}
+
+/// All identities by user id (the admin's user list).
+pub fn identities(c: &Connection) -> ApiResult<HashMap<i64, Identity>> {
+    let mut st = c.prepare(&format!("SELECT {IDENTITY_COLS} FROM user_identity"))?;
+    let rows = st.query_map([], identity_row)?;
+    let mut out = HashMap::new();
+    for r in rows {
+        let r = r?;
+        out.insert(r.user_id, r);
+    }
+    Ok(out)
+}
+
+/// Links (`issuer`, `subject`) to `user_id`, replacing the user's previous identity at that
+/// issuer. 409 when the identity belongs to another user.
+pub fn link_identity(
+    c: &Connection,
+    user_id: i64,
+    issuer: &str,
+    subject: &str,
+    email: Option<&str>,
+) -> ApiResult<()> {
+    if let Some(u) = identity_user(c, issuer, subject)? {
+        if u.id != user_id {
+            return Err(ApiError::conflict(
+                "this sign-in is already linked to another account",
+            ));
+        }
+        return Ok(());
+    }
+    let tx = c.unchecked_transaction()?;
+    tx.execute(
+        "DELETE FROM user_identity WHERE user_id=?1 AND issuer=?2",
+        params![user_id, issuer],
+    )?;
+    tx.execute(
+        "INSERT INTO user_identity(issuer, subject, user_id, email, created_at) VALUES (?1,?2,?3,?4,?5)",
+        params![issuer, subject, user_id, email, now_rfc3339()],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Records a sign-in through (`issuer`, `subject`).
+pub fn touch_identity(
+    c: &Connection,
+    issuer: &str,
+    subject: &str,
+    email: Option<&str>,
+) -> ApiResult<()> {
+    c.execute(
+        "UPDATE user_identity SET last_login=?3, email=coalesce(?4, email) WHERE issuer=?1 AND subject=?2",
+        params![issuer, subject, now_rfc3339(), email],
+    )?;
+    Ok(())
+}
+
+/// Removes the identities of `user_id`; whether there was one.
+pub fn unlink_identity(c: &Connection, user_id: i64) -> ApiResult<bool> {
+    Ok(c.execute("DELETE FROM user_identity WHERE user_id=?1", [user_id])? > 0)
 }
 
 // ---------------------------------------------------------------- user state

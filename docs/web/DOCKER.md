@@ -225,6 +225,15 @@ All environment variables from [ARCHITECTURE.md](./ARCHITECTURE.md#runtime-confi
 | `FREELIB_CALIBRE_TIMEOUT` | `300` | Seconds before a Calibre conversion is killed |
 | `FREELIB_TRUST_PROXY` | unset | `1`: behind exactly one reverse proxy; the client address for login rate limiting is `X-Real-IP`, else the rightmost `X-Forwarded-For` entry (see [Reverse Proxy Setup](#reverse-proxy-setup)) |
 | `FREELIB_ALLOWED_HOSTS` | unset | Comma-separated host names accepted besides `localhost` and IP addresses (`*.lan` for sub-domains). Required to reach an **open-mode** server by name (DNS rebinding protection); enforced in every mode once set |
+| `FREELIB_PUBLIC_URL` | unset | External base URL, e.g. `https://books.example.org` (no trailing slash). Required for single sign-on; an `https://` URL makes cookies `Secure` |
+| `FREELIB_OIDC_ISSUER` | unset | OpenID Connect issuer URL, exactly as in the provider's `/.well-known/openid-configuration` (see [Single sign-on](#single-sign-on-openid-connect)) |
+| `FREELIB_OIDC_CLIENT_ID` | unset | Client id registered at the provider (required with the issuer) |
+| `FREELIB_OIDC_CLIENT_SECRET` | unset | Client secret; leave unset for a public client (PKCE only) |
+| `FREELIB_OIDC_SCOPES` | `openid profile email` | Requested scopes; add `groups` when using `FREELIB_OIDC_ADMIN_GROUP` with Pocket ID or Authentik |
+| `FREELIB_OIDC_BUTTON` | `Sign in with SSO` | Text of the sign-in button, e.g. `Sign in with Pocket ID` |
+| `FREELIB_OIDC_ADMIN_GROUP` | unset | Group whose members are administrators (everyone else: reader), re-checked at every sign-in |
+| `FREELIB_OIDC_AUTO_CREATE` | `true` | Create a reader account at a first sign-in; `false`: only accounts whose owner linked SSO in Settings → Account |
+| `FREELIB_OIDC_DISABLE_PASSWORD` | `false` | Password sign-in off in the web app, except for `FREELIB_ADMIN_USER` while `FREELIB_ADMIN_PASSWORD` is set |
 | `FREELIB_CACHE_MAX_MB` | `2048` | Size limit of the conversion / cover cache in `/cache`; least recently used files are evicted (`0` = no limit) |
 | `FREELIB_WORKERS` | CPU core count | Conversion worker count |
 | `FREELIB_WEB_DIR` | unset | Serve the SPA from this folder instead of the embedded copy (development) |
@@ -237,7 +246,80 @@ Settings → Mail limits where books can be mailed: **Allowed recipients** (defa
 **Mails per user per day** (default 100). The rules apply to every user, administrators included,
 so the server's SMTP account cannot be used to mail arbitrary people.
 
+## Single sign-on (OpenID Connect)
+
+Users can sign in through an OpenID Connect provider — [Pocket ID](https://pocket-id.org), Authelia,
+Authentik, Keycloak, Google, … — in addition to local accounts, which stay as the fallback. The flow is
+the authorization code flow with PKCE; the server talks to the provider directly (it needs outbound
+HTTPS to it).
+
+### Pocket ID, step by step
+
+1. In Pocket ID, open **Administration → OIDC Clients → Add OIDC Client**.
+2. **Name**: `freeLib` (optionally a logo).
+3. **Callback URLs**: `https://books.example.org/api/v1/auth/oidc/callback` — your
+   `FREELIB_PUBLIC_URL` followed by `/api/v1/auth/oidc/callback`, character for character.
+4. **Public client**: either
+   * off (confidential client, recommended): keep the **client secret** Pocket ID shows after saving, or
+   * on: no secret; freeLib always uses PKCE (leave the PKCE switch on).
+5. Optionally restrict who may sign in with **Allowed user groups**, and create a group such as
+   `freelib-admins` for administrators (Administration → User Groups).
+6. Save; copy the **Client ID** (and secret).
+7. Configure freeLib:
+
+```yaml
+    environment:
+      - FREELIB_ADMIN_PASSWORD=change-me            # keeps a local way in
+      - FREELIB_PUBLIC_URL=https://books.example.org
+      - FREELIB_OIDC_ISSUER=https://id.example.org  # the Pocket ID URL, no trailing slash
+      - FREELIB_OIDC_CLIENT_ID=<client id>
+      - FREELIB_OIDC_CLIENT_SECRET=<client secret>  # omit for a public client
+      - FREELIB_OIDC_SCOPES=openid profile email groups
+      - FREELIB_OIDC_BUTTON=Sign in with Pocket ID
+      - FREELIB_OIDC_ADMIN_GROUP=freelib-admins
+```
+
+8. Restart. The log says `single sign-on ready` with the redirect URI; the login page shows the button.
+   The first sign-in creates an account named after the Pocket ID user name (a reader, or an administrator
+   for members of `freelib-admins`).
+
+Existing local users link their provider account in **Settings → Account → Link single sign-on** (and can
+unlink it there once they have a password). Administrators see which users are linked in Settings → Users.
+
+### Other providers
+
+* **Authelia**: register a client with `redirect_uris: [https://books.example.org/api/v1/auth/oidc/callback]`,
+  `scopes: [openid, profile, email, groups]`, `require_pkce: true`, `pkce_challenge_method: S256`;
+  issuer = your Authelia URL. Groups are read from userinfo when the ID token has none.
+* **Authentik**: an OAuth2/OpenID provider + application; redirect URI as above; issuer is
+  `https://auth.example.org/application/o/<slug>/` (with the trailing slash).
+* **Keycloak**: a client with *Standard flow*, valid redirect URI as above; issuer
+  `https://kc.example.org/realms/<realm>`. For groups add a *Group Membership* mapper (claim `groups`,
+  full group path off).
+* **Google**: issuer `https://accounts.google.com`, an OAuth client of type *Web application*. Anybody
+  with a Google account can sign in, so set `FREELIB_OIDC_AUTO_CREATE=false` and let users link their
+  accounts from Settings → Account.
+
+### Notes
+
+* Accounts are matched by the provider's subject id, never by user name or e-mail: a provider user called
+  `admin` becomes `admin (2)`, not your local administrator.
+* With single sign-on configured the server never runs in open mode. If there is no administrator,
+  set `FREELIB_ADMIN_PASSWORD` or `FREELIB_OIDC_ADMIN_GROUP`.
+* `FREELIB_OIDC_DISABLE_PASSWORD=true` hides the password form; the `FREELIB_ADMIN_USER` account can still
+  sign in with a password ("Sign in with a local administrator account") while `FREELIB_ADMIN_PASSWORD` is set.
+* **OPDS** apps cannot do single sign-on: they keep using HTTP Basic auth with a local password. Users
+  whose account was created by single sign-on set one in **Settings → Account** ("Set a password for apps").
+* A provider with a private CA: mount its certificate and set `SSL_CERT_FILE` to a bundle containing it.
+* Errors are shown on the login page; the server log has the details (`single sign-on failed: …`).
+
 ## Troubleshooting
+
+### "Rebuilding the catalog" after an update
+
+When an update changes the catalog format, each library is re-imported from its INPX on start (about a
+minute for a Flibusta-size library). The library cannot be browsed until then: the web app shows the
+progress and continues by itself when it is done; other, ready libraries can be opened meanwhile.
 
 ### Container exits immediately
 

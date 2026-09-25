@@ -2,7 +2,7 @@
   import { api, errorText } from '../api/client';
   import { librariesState, loadLibraries, upsertLibrary, removeLibrary, setCurrentLibrary } from '../stores/libraries.svelte';
   import { showToast } from '../stores/toast.svelte';
-  import { navigate } from '../router.svelte';
+  import { navigate, routerState } from '../router.svelte';
   import Icon from '../components/Icon.svelte';
   import Dialog from '../components/Dialog.svelte';
   import QrCode from '../components/QrCode.svelte';
@@ -12,7 +12,8 @@
   import { sessionState } from '../stores/session.svelte';
   import type { Library } from '../api/types';
 
-  let addOpen = $state(false);
+  // `/libraries?add=1` (the first-run card) opens the add dialog
+  let addOpen = $state(new URLSearchParams(routerState.search).get('add') === '1');
   let editing = $state<Library | null>(null);
   let deleting = $state<Library | null>(null);
   let qrFor = $state<Library | null>(null);

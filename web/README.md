@@ -25,6 +25,12 @@ names for the letter index — jobs that progress over a few
 seconds and stream through `/api/v1/events`), so the whole app — including the
 50k-row authors list — can be exercised without the Rust server.
 
+The mock can simulate server states (a library importing or rebuilding after an update, failed
+imports, no libraries, errors, slow lists, a reader or signed-out session, single sign-on): open
+`http://localhost:5173/__mock?s=rebuild,slow` (flags and parameters are listed at the top of
+`web/mock/scenario.ts`), or start the dev server with `MOCK_SCENARIO=rebuild`; `/__mock` alone resets.
+`tests/loading-states.spec.ts` uses the same switch (a `freelib_mock` cookie per test).
+
 Other scripts:
 
 ```sh

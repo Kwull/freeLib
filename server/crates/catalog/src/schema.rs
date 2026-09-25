@@ -106,6 +106,12 @@ INSERT OR REPLACE INTO setting(key, value) SELECT 'last_user_id', CAST(coalesce(
 ALTER TABLE user_state ADD COLUMN prev_visit TEXT;
 CREATE TABLE mail_count (user_id INTEGER NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (user_id, day)) WITHOUT ROWID;
 "#,
+    // v3: single sign-on identities (OpenID Connect issuer + subject → user), at most one per
+    // user and issuer
+    r#"
+CREATE TABLE user_identity (issuer TEXT NOT NULL, subject TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE, email TEXT, created_at TEXT NOT NULL, last_login TEXT, PRIMARY KEY (issuer, subject)) WITHOUT ROWID;
+CREATE UNIQUE INDEX user_identity_user ON user_identity(user_id, issuer);
+"#,
 ];
 
 /// Current `app.db` schema version (`PRAGMA user_version` after migrating).

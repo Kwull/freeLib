@@ -1,11 +1,13 @@
 import { api } from '../api/client';
 import { connectEvents } from '../api/events';
 import type { Job } from '../api/types';
-import { upsertLibrary } from './libraries.svelte';
+import { upsertLibrary, loadLibraries } from './libraries.svelte';
 import { showToast } from './toast.svelte';
 import { t } from '../i18n';
 
-export const jobsState = $state<{ items: Job[]; activityOpen: boolean }>({ items: [], activityOpen: false });
+export const jobsState = $state<{ items: Job[]; activityOpen: boolean; eventsConnected: boolean }>({
+  items: [], activityOpen: false, eventsConnected: false,
+});
 
 export const runningCount = () => jobsState.items.filter((j) => j.state === 'running' || j.state === 'queued').length;
 
@@ -53,9 +55,20 @@ let unsubscribe: (() => void) | null = null;
 
 export function startJobEvents() {
   if (unsubscribe) return;
+  let everOpen = false;
   unsubscribe = connectEvents({
     onJob: upsertJob,
     onLibrary: upsertLibrary,
+    onOpen: () => {
+      jobsState.eventsConnected = true;
+      // after a reconnect, catch up with what happened while the stream was down
+      if (everOpen) {
+        loadLibraries().catch(() => {});
+        loadJobs().catch(() => {});
+      }
+      everOpen = true;
+    },
+    onError: () => { jobsState.eventsConnected = false; },
   });
 }
 

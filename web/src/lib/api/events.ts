@@ -4,6 +4,8 @@ export type EventHandlers = {
   onJob?: (job: Job) => void;
   onLibrary?: (lib: Library) => void;
   onOpen?: () => void;
+  /** The stream dropped (it reconnects with backoff). */
+  onError?: () => void;
 };
 
 /** Subscribes to GET /api/v1/events (SSE) with automatic reconnect + backoff. */
@@ -28,6 +30,7 @@ export function connectEvents(handlers: EventHandlers): () => void {
     });
     es.addEventListener('error', () => {
       es?.close();
+      handlers.onError?.();
       if (closed) return;
       attempt += 1;
       const delay = Math.min(1000 * 2 ** attempt, 15000);
