@@ -16,6 +16,11 @@ on:
       - 'docs/web/**'
       - '.github/workflows/web-edition.yml'
 
+# A newer push to the same branch supersedes an older run (and its image publish).
+concurrency:
+  group: web-edition-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust:
     runs-on: ubuntu-latest

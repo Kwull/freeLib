@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
-FROM node:22-trixie-slim AS web
+# The web app is platform-independent: build it once on the build machine.
+FROM --platform=$BUILDPLATFORM node:22-trixie-slim AS web
 RUN npm install -g pnpm@10
 WORKDIR /build
 COPY web/package.json web/pnpm-lock.yaml ./
@@ -7,15 +8,34 @@ RUN pnpm install --frozen-lockfile
 COPY web/ ./
 RUN pnpm build
 
-# the runtime is Debian trixie: build against the same glibc
-FROM rust:1-trixie AS build
+# The runtime is Debian trixie: build against the same glibc. Rust is
+# cross-compiled on the build machine instead of running the compiler under
+# QEMU emulation, which makes the arm64 image build take minutes, not hours.
+FROM --platform=$BUILDPLATFORM rust:1-trixie AS build
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) echo x86_64-unknown-linux-gnu > /rust-target; pkgs="gcc-x86-64-linux-gnu libc6-dev-amd64-cross" ;; \
+      arm64) echo aarch64-unknown-linux-gnu > /rust-target; pkgs="gcc-aarch64-linux-gnu libc6-dev-arm64-cross" ;; \
+      *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && if [ "$(dpkg --print-architecture)" != "$TARGETARCH" ]; then \
+         apt-get update && apt-get install -y --no-install-recommends $pkgs && rm -rf /var/lib/apt/lists/*; \
+       fi \
+    && rustup target add "$(cat /rust-target)"
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+    AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
+    CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc \
+    AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar
 COPY server/ /src/server/
 COPY --from=web /build/dist /src/web/dist
 WORKDIR /src/server
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/server/target \
-    cargo build --release --locked -p freelib-server \
-    && cp /src/server/target/release/freelib-server /tmp/freelib-server
+    target="$(cat /rust-target)" \
+    && cargo build --release --locked -p freelib-server --target "$target" \
+    && cp "/src/server/target/$target/release/freelib-server" /tmp/freelib-server
 
 FROM debian:trixie-slim AS slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
