@@ -156,33 +156,51 @@ pub async fn series(
     name_list(st, lib, "series", q.v, headers).await
 }
 
+#[derive(Deserialize)]
+pub struct GenresQuery {
+    v: Option<i64>,
+    lang: Option<String>,
+}
+
+/// Normalizes to "en", "ru" or "uk"; anything else (or missing) is "en".
+fn genre_lang(lang: Option<&str>) -> &'static str {
+    match lang {
+        Some("ru") => "ru",
+        Some("uk") => "uk",
+        _ => "en",
+    }
+}
+
 pub async fn genres(
     State(st): State<AppState>,
     _: Auth,
     Path(lib): Path<i64>,
-    Query(q): Query<VersionQuery>,
+    Query(q): Query<GenresQuery>,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
     let rt = st.lib(lib)?;
     let cat = rt.handle.get();
     let version = cat.as_ref().map(|c| c.catalog_version()).unwrap_or(0);
+    let lang = genre_lang(q.lang.as_deref());
     let cache = if q.v == Some(version) && version > 0 {
         IMMUTABLE
     } else {
         REVALIDATE
     };
-    let etag = format!("W/\"genres-{lib}-{version}\"");
+    let etag = format!("W/\"genres-{lib}-{version}-{lang}\"");
     if etag_matches(&headers, &etag) {
         return Ok(not_modified(&etag, cache));
     }
     let list = tokio::task::spawn_blocking(move || -> ApiResult<serde_json::Value> {
         match cat {
-            Some(c) => Ok(serde_json::to_value(c.genres()?).unwrap_or_default()),
+            Some(c) => Ok(serde_json::to_value(c.genres(lang)?).unwrap_or_default()),
             None => Ok(serde_json::to_value(
                 freelib_catalog::genres()
                     .all()
                     .iter()
-                    .map(|g| json!({"id": g.id, "name": g.name, "parent": g.parent, "count": 0}))
+                    .map(|g| {
+                        json!({"id": g.id, "name": g.localized(lang), "parent": g.parent, "count": 0})
+                    })
                     .collect::<Vec<_>>(),
             )
             .unwrap_or_default()),

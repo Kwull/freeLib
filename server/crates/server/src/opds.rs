@@ -899,17 +899,30 @@ async fn author_books(
     .await
 }
 
-async fn genres_root(State(st): State<AppState>, Path(lib): Path<i64>) -> ApiResult<Response> {
-    genre_nav(&st, lib, 0).await
+async fn genres_root(
+    State(st): State<AppState>,
+    Path(lib): Path<i64>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    genre_nav(&st, lib, 0, crate::util::preferred_lang(&headers)).await
 }
 
-async fn genre_nav(st: &AppState, lib: i64, parent: u16) -> ApiResult<Response> {
-    let counts = st.catalog_call(lib, |cat| Ok(cat.genres()?)).await?;
+async fn genre_nav(
+    st: &AppState,
+    lib: i64,
+    parent: u16,
+    lang: &'static str,
+) -> ApiResult<Response> {
+    let counts = st
+        .catalog_call(lib, move |cat| Ok(cat.genres(lang)?))
+        .await?;
     let g = freelib_catalog::genres();
     let title = if parent == 0 {
         "Genres".to_string()
     } else {
-        g.get(parent).map(|d| d.name.clone()).unwrap_or_default()
+        g.get(parent)
+            .map(|d| d.localized(lang).to_string())
+            .unwrap_or_default()
     };
     let self_href = if parent == 0 {
         format!("/opds/{lib}/genres")
@@ -957,19 +970,21 @@ async fn genre(
     State(st): State<AppState>,
     Path((lib, id)): Path<(i64, u16)>,
     Query(q): Query<GenreQ>,
+    headers: HeaderMap,
 ) -> ApiResult<Response> {
+    let lang = crate::util::preferred_lang(&headers);
     let g = freelib_catalog::genres();
     let def = g
         .get(id)
         .ok_or_else(|| ApiError::not_found("genre not found"))?;
     if !g.children(id).is_empty() && q.all.is_none() {
-        return genre_nav(&st, lib, id).await;
+        return genre_nav(&st, lib, id, lang).await;
     }
     books_feed(
         &st,
         lib,
         BookSelector::Genre(id),
-        &def.name,
+        def.localized(lang),
         &format!("/opds/{lib}/genres/{id}"),
         q.cursor,
     )

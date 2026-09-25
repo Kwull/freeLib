@@ -6,6 +6,7 @@ import path from 'node:path';
 import { store, catalog, createJob, runJobProgress, broadcast } from './store';
 import { placeholderCover } from './covers';
 import { normalize } from './normalize';
+import { genreName } from './names';
 import type { Book, BookDetail, AuthorRef, SeriesRef } from '../src/lib/api/types';
 import type { MockBook, MockLibrary } from './gen';
 
@@ -74,7 +75,7 @@ function toBook(lib: MockLibrary, b: MockBook): Book {
 function toDetail(lib: MockLibrary, b: MockBook): BookDetail {
   return {
     ...toBook(lib, b),
-    annotation: `<p>Аннотация к книге «${b.title}» появится здесь после первого открытия файла и будет закэширована на сервере.</p>`,
+    annotation: b.annotation ?? `<p>The annotation for &laquo;${b.title}&raquo; will appear here after the file is first opened, and will be cached on the server.</p>`,
     hasCover: true,
     file: `${b.key.split(':')[0]}-archive.zip / ${b.id}.${b.ext}`,
     keywords: '',
@@ -206,7 +207,10 @@ export function installMockApi(server: Connect.Server) {
       m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/genres$/);
       if (m && method === 'GET') {
         const lib = catalog(Number(m[1]));
-        return send(res, 200, lib.genres);
+        const lang = url.searchParams.get('lang') ?? 'en';
+        return send(res, 200, lib.genres.map((g) => ({
+          id: g.id, name: genreName(g, lang), parent: g.parent, count: g.count,
+        })));
       }
       m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/books$/);
       if (m && method === 'GET') {
@@ -315,7 +319,7 @@ export function installMockApi(server: Connect.Server) {
           ? lib.series.filter((s) => matchWords(s.sortKey)).slice(0, 20).map((s) => {
               const bookIds = lib.booksBySeries.get(s.id) ?? [];
               const authorNames = [...new Set(bookIds.flatMap((id) => lib.bookById.get(id)!.authorIds.map((aid) => lib.authors[aid - 1].name)))];
-              return { id: s.id, name: s.name, count: s.bookCount, authors: authorNames.slice(0, 3).join(', ') || 'разные авторы' };
+              return { id: s.id, name: s.name, count: s.bookCount, authors: authorNames.slice(0, 3).join(', ') || 'various authors' };
             })
           : [];
         let books = kind === 'all' || kind === 'books' ? lib.books.filter((b) => matchWords(b.sortKey)) : [];

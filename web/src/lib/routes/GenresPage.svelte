@@ -6,7 +6,7 @@
   import SendDialog from '../components/SendDialog.svelte';
   import ShelfDialog from '../components/ShelfDialog.svelte';
   import { navigate } from '../router.svelte';
-  import { t } from '../i18n';
+  import { t, i18nState } from '../i18n';
 
   let { lib, id }: { lib: number; id: number | null } = $props();
 
@@ -15,7 +15,7 @@
   let sendIds = $state<number[] | null>(null);
   let shelfIds = $state<number[] | null>(null);
 
-  $effect(() => { api.genres(lib).then((g) => (genres = g)); });
+  $effect(() => { const lang = i18nState.lang; api.genres(lib, lang).then((g) => (genres = g)); });
   $effect(() => { selectedBookId = null; });
 
   const top = $derived(genres.filter((g) => g.parent === 0));

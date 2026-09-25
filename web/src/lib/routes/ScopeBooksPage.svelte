@@ -37,4 +37,9 @@
 
 <style>
   .scope-page { display: flex; flex-grow: 1; min-width: 0; min-height: 0; }
+  @media (max-width: 900px) {
+    /* Book selection navigates to its own /book/:id route on phone (see pickBook above),
+       so the side-by-side details pane would only squeeze the book list; hide it. */
+    .scope-page :global(.details) { display: none; }
+  }
 </style>

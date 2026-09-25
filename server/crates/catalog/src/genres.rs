@@ -12,12 +12,31 @@ pub const GENRE_OTHER: u16 = 11;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenreDef {
     pub id: u16,
+    /// Russian name (the original, from the Qt app export).
     pub name: String,
+    /// English name.
+    #[serde(default)]
+    pub name_en: String,
+    /// Ukrainian name.
+    #[serde(default)]
+    pub name_uk: String,
     pub parent: u16,
     /// FB2 genre codes mapped to this genre.
     pub keys: Vec<String>,
     /// Display order inside the parent (Qt `sort_index`), `None` for groups.
     pub sort: Option<i32>,
+}
+
+impl GenreDef {
+    /// Localized name for `lang` ("en" / "ru" / "uk"), falling back to English then Russian.
+    pub fn localized(&self, lang: &str) -> &str {
+        match lang {
+            "ru" => &self.name,
+            "uk" if !self.name_uk.is_empty() => &self.name_uk,
+            _ if !self.name_en.is_empty() => &self.name_en,
+            _ => &self.name,
+        }
+    }
 }
 
 /// The loaded genre table with lookup maps.
@@ -206,6 +225,19 @@ mod tests {
         // completely unknown
         assert_eq!(g.resolve("zzz_qqq"), Some(GENRE_OTHER));
         assert_eq!(g.resolve("  "), None);
+    }
+
+    #[test]
+    fn localized_names() {
+        let g = genres();
+        for def in g.all() {
+            assert!(!def.name.is_empty(), "genre {} has no ru name", def.id);
+            assert!(!def.name_en.is_empty(), "genre {} has no en name", def.id);
+            assert!(!def.name_uk.is_empty(), "genre {} has no uk name", def.id);
+            assert!(!def.localized("en").is_empty());
+            assert!(!def.localized("ru").is_empty());
+            assert!(!def.localized("uk").is_empty());
+        }
     }
 
     #[test]

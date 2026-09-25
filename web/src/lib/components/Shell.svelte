@@ -91,35 +91,35 @@
     {#if lib}
       <nav aria-label="Main" class="sidenav">
         <a class="nav" href="/l/{lib.id}/new" data-link aria-current={isActive('new') ? 'page' : undefined} class:active={isActive('new')}>
-          <Icon name="newArrivals" size={18} />{t('nav.newArrivals')}
+          <Icon name="newArrivals" size={18} /><span class="label">{t('nav.newArrivals')}</span>
           {#if lib.newSinceLastVisit > 0}<span class="count">{lib.newSinceLastVisit}</span>{/if}
         </a>
         <a class="nav" href="/l/{lib.id}/authors" data-link aria-current={isActive('authors') ? 'page' : undefined} class:active={isActive('authors')}>
-          <Icon name="authors" size={18} />{t('nav.authors')}
+          <Icon name="authors" size={18} /><span class="label">{t('nav.authors')}</span>
         </a>
         <a class="nav" href="/l/{lib.id}/series" data-link aria-current={isActive('series') ? 'page' : undefined} class:active={isActive('series')}>
-          <Icon name="series" size={18} />{t('nav.series')}
+          <Icon name="series" size={18} /><span class="label">{t('nav.series')}</span>
         </a>
         <a class="nav" href="/l/{lib.id}/genres" data-link aria-current={isActive('genres') ? 'page' : undefined} class:active={isActive('genres')}>
-          <Icon name="genres" size={18} />{t('nav.genres')}
+          <Icon name="genres" size={18} /><span class="label">{t('nav.genres')}</span>
         </a>
         <a class="nav" href="/l/{lib.id}/shelves" data-link aria-current={isActive('shelf') ? 'page' : undefined} class:active={isActive('shelf')}>
-          <Icon name="shelves" size={18} />{t('nav.shelves')}
+          <Icon name="shelves" size={18} /><span class="label">{t('nav.shelves')}</span>
         </a>
         <div class="sep"></div>
         <div class="section-label">{t('nav.myShelves')}</div>
         {#each shelvesState.items as s (s.id)}
           <a class="nav" href="/l/{lib.id}/shelves/{s.id}" data-link>
-            <span class="dot" style="background:{s.color}"></span>{s.name}
+            <span class="dot" style="background:{s.color}"></span><span class="label">{s.name}</span>
             <span class="count">{s.count}</span>
           </a>
         {/each}
         <div class="grow"></div>
         <a class="nav" href="/libraries" data-link aria-current={isActive('libraries') ? 'page' : undefined} class:active={isActive('libraries')}>
-          <Icon name="library" size={18} />{t('nav.libraries')}
+          <Icon name="library" size={18} /><span class="label">{t('nav.libraries')}</span>
         </a>
         <a class="nav" href="/settings" data-link aria-current={isActive('settings') ? 'page' : undefined} class:active={isActive('settings')}>
-          <Icon name="settings" size={18} />{t('nav.settings')}
+          <Icon name="settings" size={18} /><span class="label">{t('nav.settings')}</span>
         </a>
       </nav>
     {/if}
@@ -176,7 +176,9 @@
   .nav { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-radius: 8px; color: var(--muted-2); font-size: 14px; text-decoration: none; }
   .nav:hover { background: var(--surface-hover); text-decoration: none; color: var(--ink); }
   .nav.active { background: var(--accent-soft); color: var(--accent-soft-ink); font-weight: 500; }
-  .nav .count { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .nav .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .nav .dot { flex-shrink: 0; }
+  .nav .count { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--muted); }
   .sep { height: 1px; background: var(--line); margin: 12px 4px; }
   .section-label { padding: 0 12px 6px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; }
   .content { flex-grow: 1; min-width: 0; display: flex; min-height: 0; }

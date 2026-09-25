@@ -243,6 +243,43 @@ pub fn join_safe(dir: &Path, rel: &str) -> Option<PathBuf> {
     Some(dir.join(sub))
 }
 
+/// Picks "ru", "uk" or "en" from `Accept-Language`, highest `q` first; defaults to "en".
+pub fn preferred_lang(headers: &HeaderMap) -> &'static str {
+    let Some(v) = headers
+        .get(header::ACCEPT_LANGUAGE)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return "en";
+    };
+    let mut best: Option<(&'static str, f32)> = None;
+    for part in v.split(',') {
+        let mut it = part.split(';');
+        let name = it.next().unwrap_or("").trim().to_ascii_lowercase();
+        let q = it
+            .find_map(|p| {
+                p.trim()
+                    .strip_prefix("q=")
+                    .and_then(|q| q.parse::<f32>().ok())
+            })
+            .unwrap_or(1.0);
+        let lang = if name.starts_with("ru") {
+            Some("ru")
+        } else if name.starts_with("uk") {
+            Some("uk")
+        } else if name.starts_with("en") {
+            Some("en")
+        } else {
+            None
+        };
+        if let Some(lang) = lang
+            && best.map(|(_, bq)| q > bq).unwrap_or(true)
+        {
+            best = Some((lang, q));
+        }
+    }
+    best.map(|(l, _)| l).unwrap_or("en")
+}
+
 /// Parses `Accept-Encoding`: returns "br", "gzip" or "" (identity).
 pub fn preferred_encoding(headers: &HeaderMap) -> &'static str {
     let Some(v) = headers

@@ -4,9 +4,9 @@ test('reader opens an EPUB and turns a page', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Authors' })).toBeVisible({ timeout: 15000 });
 
-  await page.getByLabel('Filter authors').fill('Стругацкий Аркадий Натанович');
-  await page.getByRole('button', { name: /Стругацкий Аркадий Натанович/ }).first().click();
-  await page.getByText('Трудно быть богом').first().click();
+  await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');
+  await page.getByRole('button', { name: /Doyle Arthur Conan/ }).first().click();
+  await page.getByText('The Hound of the Baskervilles').first().click();
 
   await page.getByRole('button', { name: 'Read' }).click();
   await expect(page).toHaveURL(/\/read\//);

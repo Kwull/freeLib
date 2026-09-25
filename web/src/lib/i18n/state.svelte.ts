@@ -1,10 +1,13 @@
+// The default UI language is English. We only ever deviate from it when the user
+// explicitly picked a language before (stored in localStorage), never from the
+// browser's navigator.language — a browser set to Russian should not silently
+// flip a first-time visitor's UI to Russian.
 function readStored(has: (lang: string) => boolean): string {
   try {
     const v = localStorage.getItem('freelib.lang');
     if (v && has(v)) return v;
   } catch { /* ignore */ }
-  const nav = navigator.language.slice(0, 2);
-  return has(nav) ? nav : 'en';
+  return 'en';
 }
 
 export function createI18nState(has: (lang: string) => boolean) {

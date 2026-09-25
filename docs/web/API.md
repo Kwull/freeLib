@@ -117,7 +117,7 @@ their separator. Result is sanitised for file systems; `transliterate` applies R
 |---|---|---|
 | `GET /libraries/:lib/authors` | `v?` | `{ version, columns: ["id","name","count"], rows: [[1,"Стругацкий Аркадий Натанович",12], …], letters: [["А", count, firstRowIndex], …] }` sorted by sort key |
 | `GET /libraries/:lib/series` | `v?` | same shape as authors |
-| `GET /libraries/:lib/genres` | `v?` | `Genre[]` (all 322 genres, with counts for this library; zero-count leaves included) |
+| `GET /libraries/:lib/genres` | `v?`, `lang=en\|ru\|uk` (default `en`) | `Genre[]` (all 322 genres, with counts for this library; zero-count leaves included). `name` is localized to `lang`; the ETag includes `lang`, so switching the SPA's language triggers a refetch |
 | `GET /libraries/:lib/books` | exactly one of `author`, `series`, `genre`, `shelf`, `since` (YYYY-MM-DD) plus optional `lang`, `ext`, `deleted=1`, `cursor`, `limit` (default 2000, max 5000) | `{ books: Book[], nextCursor: string \| null, total: number }`. Order: author → series name, serno, title; series → serno, title; genre/shelf/since → date desc, title |
 | `GET /libraries/:lib/books/:id` | – | `BookDetail` (first call may take up to ~150 ms, then cached) |
 | `GET /libraries/:lib/books/:id/cover` | `size=thumb\|full` | image (`image/webp` or original jpeg/png); `full` is 404 when the book has no cover. `thumb` = 240 px high; when the book has no cover, a generated SVG placeholder tile (background colour from the title, author + title text, like the SPA's own placeholder) is returned instead of 404, with header `X-Cover: generated` |
@@ -183,6 +183,7 @@ Basic auth when `opds.requireAuth` (same users and the same login rate limits). 
 - `/opds/:lib/author/:id`, `/opds/:lib/series[/:prefix]`, `/opds/:lib/series/:id`, `/opds/:lib/genres[/:id]`, `/opds/:lib/new`
 - Acquisition links: `/opds/:lib/book/:id/:format` for `original`, `epub`, `kepub`, and `azw3` when Calibre is present; covers `…/cover`, thumbnails `…/cover?size=thumb`
 - Legacy Qt paths `/opds_<lib>/…` redirect (301) to the new ones for the root, authors, series, genres, search.
+- Genre names are localized from the request's `Accept-Language` (`ru` or `uk` recognized, highest `q` wins); anything else, including no header, is served in English.
 - Pagination: 100 entries per page with `rel="next"`.
 
 ## Web app

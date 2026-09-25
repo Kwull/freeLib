@@ -8,7 +8,7 @@
   import SelectionBar from './SelectionBar.svelte';
   import VirtualList from './VirtualList.svelte';
   import { formatSize, formatDate } from '../utils/format';
-  import { t, i18nState } from '../i18n';
+  import { t, tn, i18nState } from '../i18n';
   import {
     isSelected, selectedCount, toggle, toggleMany, clear as clearSelection, selectedIds,
   } from '../stores/selection.svelte';
@@ -48,7 +48,7 @@
   let books = $state<Book[]>([]);
   let loading = $state(true);
   let genreNames = $state<Map<number, string>>(new Map());
-  $effect(() => { api.genres(lib).then((gs) => (genreNames = new Map(gs.map((g) => [g.id, g.name])))); });
+  $effect(() => { const lang = i18nState.lang; api.genres(lib, lang).then((gs) => (genreNames = new Map(gs.map((g) => [g.id, g.name])))); });
   let view = $state<'table' | 'grid'>('table');
   let grouping = $state(true);
   let hideDeleted = $state(true);
@@ -249,9 +249,9 @@
       <h1>{header.name}</h1>
       <div class="counts">
         {#if header.seriesCount}
-          {t('browse.booksAndSeries', { books: header.booksCount, series: header.seriesCount })}
+          {tn('browse.booksCount', header.booksCount)} · {tn('browse.seriesCount', header.seriesCount)}
         {:else}
-          {t('browse.booksCount', { count: header.booksCount })}
+          {tn('browse.booksCount', header.booksCount)}
         {/if}
         {#if header.alsoWith?.length}
           &nbsp;·&nbsp;{t('authors.alsoWith')}
@@ -295,9 +295,9 @@
         <span class="ph-name">{header.name}</span>
         <span class="ph-counts">
           {#if header.seriesCount}
-            {t('browse.booksAndSeries', { books: header.booksCount, series: header.seriesCount })}
+            {tn('browse.booksCount', header.booksCount)} · {tn('browse.seriesCount', header.seriesCount)}
           {:else}
-            {t('browse.booksCount', { count: header.booksCount })}
+            {tn('browse.booksCount', header.booksCount)}
           {/if}
         </span>
       </div>

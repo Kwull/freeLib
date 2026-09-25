@@ -128,7 +128,7 @@ fn generated_catalog_end_to_end() {
     assert!(authors.rows.iter().map(|r| r.2).max().unwrap() > 5);
 
     // --- genres / languages
-    let g = cat.genres().unwrap();
+    let g = cat.genres("ru").unwrap();
     assert_eq!(g.len(), 322);
     for top in g.iter().filter(|x| x.parent == 0) {
         let kids: Vec<i64> = g

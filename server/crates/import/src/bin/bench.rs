@@ -188,7 +188,7 @@ fn main() {
     s.report();
     let mut s = Series::new("genres with counts");
     for _ in 0..20 {
-        s.time(|| cat.genres().unwrap());
+        s.time(|| cat.genres("ru").unwrap());
     }
     s.report();
     let mut s = Series::new("languages");
@@ -227,7 +227,7 @@ fn main() {
     }
     s.report();
 
-    let genres = cat.genres().unwrap();
+    let genres = cat.genres("ru").unwrap();
     let mut s = Series::new("books by genre (leaf, first 2000)");
     let mut biggest = 0;
     for g in genres.iter().filter(|g| g.parent != 0 && g.count > 0) {
