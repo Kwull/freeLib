@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { api } from '../api/client';
-  import { librariesState, loadLibraries, upsertLibrary, removeLibrary } from '../stores/libraries.svelte';
+  import { api, errorText } from '../api/client';
+  import { librariesState, loadLibraries, upsertLibrary, removeLibrary, setCurrentLibrary } from '../stores/libraries.svelte';
+  import { showToast } from '../stores/toast.svelte';
+  import { navigate } from '../router.svelte';
   import Icon from '../components/Icon.svelte';
   import Dialog from '../components/Dialog.svelte';
   import QrCode from '../components/QrCode.svelte';
@@ -45,30 +47,42 @@
     browsing = false;
   }
 
-  async function submitAdd() {
+  async function guarded(fn: () => Promise<void>) {
+    try { await fn(); } catch (e) { showToast(errorText(e), 'error'); }
+  }
+
+  const submitAdd = () => guarded(async () => {
     const lib = await api.createLibrary({ name, path, inpx: inpx || undefined, firstAuthorOnly, skipDeleted, isDefault });
     upsertLibrary(lib);
     addOpen = false;
     name = ''; path = ''; inpx = ''; firstAuthorOnly = false; skipDeleted = false; isDefault = false;
-  }
+  });
 
-  async function saveEdit() {
+  const saveEdit = () => guarded(async () => {
     if (!editing) return;
     const lib = await api.updateLibrary(editing.id, editing);
     upsertLibrary(lib);
     editing = null;
-  }
+  });
 
-  async function confirmDelete() {
+  const confirmDelete = () => guarded(async () => {
     if (!deleting) return;
     await api.deleteLibrary(deleting.id);
     removeLibrary(deleting.id);
     deleting = null;
-  }
+  });
 
-  async function reimport(lib: Library, mode: 'full' | 'new') {
-    await api.importLibrary(lib.id, mode);
+  // "new" and "full" run the same full import on the server, so one button is enough.
+  const reimport = (lib: Library) => guarded(async () => {
+    await api.importLibrary(lib.id, 'full');
+    showToast(t('libraries.reimportStarted', { name: lib.name }));
+  });
+
+  function open(lib: Library) {
+    setCurrentLibrary(lib.id);
+    navigate(`/l/${lib.id}/authors`);
   }
+  const num = (n: number) => n.toLocaleString(i18nState.lang);
 
   $effect(() => { loadLibraries(); });
 </script>
@@ -87,12 +101,12 @@
         <div class="card-head">
           <span class="dot" style="background:{lib.status.state === 'error' ? 'var(--danger)' : lib.status.state === 'importing' ? 'var(--amber)' : '#2E7D4F'}"></span>
           <h2>{lib.name}</h2>
-          {#if lib.isDefault}<span class="badge">default</span>{/if}
+          {#if lib.isDefault}<span class="badge">{t('libraries.default')}</span>{/if}
         </div>
         <div class="stats">
-          <span>{lib.bookCount.toLocaleString()} {tn('libraries.books', lib.bookCount)}</span>
-          <span>{lib.authorCount.toLocaleString()} {tn('libraries.authors', lib.authorCount)}</span>
-          <span>{lib.seriesCount.toLocaleString()} {tn('libraries.series', lib.seriesCount)}</span>
+          <span><b>{num(lib.bookCount)}</b> {tn('libraries.books', lib.bookCount)}</span>
+          <span><b>{num(lib.authorCount)}</b> {tn('libraries.authors', lib.authorCount)}</span>
+          <span><b>{num(lib.seriesCount)}</b> {tn('libraries.series', lib.seriesCount)}</span>
         </div>
         <div class="muted">
           {lib.importedAt ? `${t('libraries.imported')} ${formatDate(lib.importedAt.slice(0, 10), i18nState.lang)}` : t('libraries.never')}
@@ -100,21 +114,23 @@
         {#if lib.status.state === 'importing'}
           <div class="bar"><div class="fill" style="width:{Math.round((lib.status.progress ?? 0) * 100)}%"></div></div>
           <div class="muted small">{lib.status.message ?? t('libraries.status.importing')}</div>
+        {:else if lib.status.state === 'error'}
+          <div class="error small">{t('libraries.status.error')}: {lib.status.message ?? ''}</div>
         {/if}
         <div class="opds-row">
           <button type="button" class="link-btn" onclick={() => (qrFor = lib)}><Icon name="opds" size={14} />{t('libraries.opds')}</button>
           <a href={lib.opdsUrl} target="_blank" rel="noreferrer"><Icon name="external" size={14} /></a>
         </div>
-        {#if isAdmin}
-          <div class="actions">
-            <div class="reimport">
-              <button type="button" onclick={() => reimport(lib, 'new')}>{t('libraries.reimport')}: {t('libraries.reimport.new')}</button>
-              <button type="button" onclick={() => reimport(lib, 'full')}>{t('libraries.reimport.full')}</button>
-            </div>
+        <div class="actions">
+          {#if lib.catalogVersion > 0}
+            <button type="button" class="open" onclick={() => open(lib)}>{t('libraries.open')}</button>
+          {/if}
+          {#if isAdmin}
+            <button type="button" disabled={lib.status.state === 'importing' || !lib.inpx} title={t('libraries.reimportHint')} onclick={() => reimport(lib)}><Icon name="refresh" size={13} />{t('libraries.reimport')}</button>
             <button type="button" onclick={() => (editing = { ...lib })}>{t('libraries.edit')}</button>
             <button type="button" class="danger" onclick={() => (deleting = lib)}>{t('libraries.delete')}</button>
-          </div>
-        {/if}
+          {/if}
+        </div>
       </div>
     {/each}
   </div>
@@ -201,7 +217,13 @@
   .dot { width: 8px; height: 8px; border-radius: 4px; }
   h2 { margin: 0; font-size: 16px; flex-grow: 1; }
   .badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-soft-ink); }
-  .stats { display: flex; gap: 12px; font-size: 13px; color: var(--muted-2); }
+  .stats { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 13px; color: var(--muted-2); }
+  .stats span { white-space: nowrap; }
+  .stats b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .error { color: var(--danger); font-size: 12px; }
+  .actions .open { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .actions button { display: inline-flex; align-items: center; gap: 5px; }
+  .actions button:disabled { opacity: .5; cursor: default; }
   .muted { color: var(--muted); font-size: 13px; }
   .muted.small { font-size: 12px; }
   .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
@@ -209,9 +231,8 @@
   .opds-row { display: flex; align-items: center; gap: 8px; }
   .link-btn { all: unset; display: flex; align-items: center; gap: 6px; color: var(--accent); font-size: 13px; cursor: pointer; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-  .actions button, .reimport button { height: 30px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; white-space: nowrap; }
+  .actions button { height: 30px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; white-space: nowrap; }
   .actions .danger { color: var(--danger); }
-  .reimport { display: flex; flex-wrap: wrap; gap: 4px; }
   @media (max-width: 900px) {
     .libraries-page { padding: 16px; }
     .head { flex-wrap: wrap; gap: 10px; }

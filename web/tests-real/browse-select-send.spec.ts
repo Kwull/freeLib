@@ -21,6 +21,6 @@ test('browse an author, select books, open send dialog', async ({ page, request 
   await page.getByRole('button', { name: 'Send to…' }).click();
 
   await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByText(`${books[0].title}, ${books[1].title}`)).toBeVisible();
+  await expect(page.getByText(`«${books[0].title}», «${books[1].title}»`)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Kindle Send by email EPUB' })).toBeVisible();
 });

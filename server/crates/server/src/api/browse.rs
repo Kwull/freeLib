@@ -223,6 +223,7 @@ pub struct BooksQuery {
     lang: Option<String>,
     ext: Option<String>,
     deleted: Option<String>,
+    q: Option<String>,
     cursor: Option<String>,
     limit: Option<usize>,
 }
@@ -263,6 +264,7 @@ pub async fn books(
             .filter(|e| !e.is_empty())
             .map(|e| e.to_lowercase()),
         include_deleted: truthy(&q.deleted),
+        q: q.q.clone().filter(|s| !s.trim().is_empty()),
     };
     let page = Page {
         cursor: q.cursor.clone().filter(|c| !c.is_empty()),
@@ -315,6 +317,49 @@ pub async fn books(
         })
         .await?;
     json_etag(&headers, &out)
+}
+
+/// `GET /libraries/:lib/authors/:id/summary`: counts, series, languages, genres and top
+/// co-authors of one author.
+pub async fn author_summary(
+    State(st): State<AppState>,
+    _: Auth,
+    Path((lib, id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let v = st
+        .catalog_call(lib, move |cat| -> ApiResult<_> {
+            cat.author_summary(id)?
+                .ok_or_else(|| ApiError::not_found("author not found"))
+        })
+        .await?;
+    json_etag(&headers, &v)
+}
+
+/// `GET /libraries/:lib/authors/:id/coauthors`: all co-authors as compact rows
+/// `[id, name, books, direct]`, ranked like the summary's `coauthors`.
+pub async fn coauthors(
+    State(st): State<AppState>,
+    _: Auth,
+    Path((lib, id)): Path<(i64, i64)>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let v = st
+        .catalog_call(lib, move |cat| -> ApiResult<_> {
+            if !cat.author_exists(id)? {
+                return Err(ApiError::not_found("author not found"));
+            }
+            Ok(cat
+                .coauthors(id)?
+                .into_iter()
+                .map(|c| (c.id, c.name, c.books, c.direct))
+                .collect::<Vec<_>>())
+        })
+        .await?;
+    json_etag(
+        &headers,
+        &json!({ "columns": ["id", "name", "books", "direct"], "rows": v }),
+    )
 }
 
 #[derive(Deserialize)]

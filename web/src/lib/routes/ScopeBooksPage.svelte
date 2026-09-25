@@ -8,10 +8,10 @@
 
   type Scope = { kind: 'since'; date: string } | { kind: 'shelf'; id: number };
 
-  let { lib, scope }: { lib: number; scope: Scope } = $props();
+  let { lib, scope, onCounts }: { lib: number; scope: Scope; onCounts?: (c: { books: number }) => void } = $props();
 
   let selectedBookId = $state<number | null>(null);
-  let sendIds = $state<number[] | null>(null);
+  let send = $state<{ ids: number[]; device?: number } | null>(null);
   let shelfIds = $state<number[] | null>(null);
 
   function pickBook(bid: number) {
@@ -26,13 +26,14 @@
     scope={scope.kind === 'since' ? { kind: 'since', date: scope.date, groupable: false } : { kind: 'shelf', id: scope.id, groupable: false }}
     {selectedBookId}
     onPick={pickBook}
-    onOpenSend={(ids) => (sendIds = ids)}
+    onOpenSend={(ids) => (send = { ids })}
     onOpenShelf={(ids) => (shelfIds = ids)}
+    {onCounts}
   />
-  <DetailsPane {lib} bookId={selectedBookId} onSend={(ids) => (sendIds = ids)} onAddShelf={(ids) => (shelfIds = ids)} />
+  <DetailsPane {lib} bookId={selectedBookId} onSend={(ids, device) => (send = { ids, device })} onAddShelf={(ids) => (shelfIds = ids)} />
 </div>
 
-{#if sendIds}<SendDialog {lib} bookIds={sendIds} open={true} onClose={() => (sendIds = null)} />{/if}
+{#if send}<SendDialog {lib} bookIds={send.ids} device={send.device} open={true} onClose={() => (send = null)} />{/if}
 {#if shelfIds}<ShelfDialog {lib} bookIds={shelfIds} open={true} onClose={() => (shelfIds = null)} />{/if}
 
 <style>

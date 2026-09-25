@@ -1442,3 +1442,140 @@ async fn spa_serving() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+async fn author_summary_coauthors_and_text_filter() {
+    let (app, lib) = app_with_library().await;
+    // an author who shares a book with someone
+    let b = find_book(&app, lib, |b| b["authors"].as_array().unwrap().len() >= 2).await;
+    let aid = b["authors"][0]["id"].as_i64().unwrap();
+    let other = b["authors"][1]["id"].as_i64().unwrap();
+
+    let s = app
+        .get(&format!("/api/v1/libraries/{lib}/authors/{aid}/summary"))
+        .await;
+    assert_eq!(s.status, StatusCode::OK, "{}", s.text());
+    let s = s.json();
+    let books = app
+        .get(&format!(
+            "/api/v1/libraries/{lib}/books?author={aid}&limit=5000"
+        ))
+        .await
+        .json();
+    let count = s["count"].as_i64().unwrap();
+    assert_eq!(count, books["total"].as_i64().unwrap());
+    let in_series: i64 = s["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["count"].as_i64().unwrap())
+        .sum();
+    assert_eq!(in_series + s["withoutSeries"].as_i64().unwrap(), count);
+    let langs: i64 = s["langs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x[1].as_i64().unwrap())
+        .sum();
+    assert_eq!(langs, count);
+    let anth = books["books"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|b| b["authors"].as_array().unwrap().len() >= 4)
+        .count() as i64;
+    assert_eq!(s["anthologies"].as_i64().unwrap(), anth);
+    assert!(s["coauthorCount"].as_i64().unwrap() >= 1);
+    for c in s["coauthors"].as_array().unwrap() {
+        assert!(c["direct"].as_i64().unwrap() >= 1 || c["books"].as_i64().unwrap() >= 2);
+    }
+    assert!(s["firstDate"].as_str().unwrap() <= s["lastDate"].as_str().unwrap());
+
+    let c = app
+        .get(&format!("/api/v1/libraries/{lib}/authors/{aid}/coauthors"))
+        .await
+        .json();
+    assert_eq!(c["columns"], json!(["id", "name", "books", "direct"]));
+    let rows = c["rows"].as_array().unwrap();
+    assert_eq!(rows.len() as i64, s["coauthorCount"].as_i64().unwrap());
+    assert!(rows.iter().any(|r| r[0] == other));
+    assert!(rows.windows(2).all(|w| {
+        let k = |r: &Value| (r[3].as_i64().unwrap(), r[2].as_i64().unwrap());
+        k(&w[0]) >= k(&w[1])
+    }));
+    for p in ["summary", "coauthors"] {
+        let r = app
+            .get(&format!("/api/v1/libraries/{lib}/authors/999999/{p}"))
+            .await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND);
+    }
+
+    // `q` narrows any book list like search does (prefix per word)
+    let word: String = b["title"]
+        .as_str()
+        .unwrap()
+        .split(|c: char| !c.is_alphanumeric())
+        .find(|w| w.chars().count() >= 3)
+        .unwrap()
+        .to_string();
+    let r = app
+        .get(&format!(
+            "/api/v1/libraries/{lib}/books?since=1900-01-01&limit=1&q={}",
+            urlencode(&word)
+        ))
+        .await
+        .json();
+    let search = app
+        .get(&format!(
+            "/api/v1/libraries/{lib}/search?kind=books&q={}",
+            urlencode(&word)
+        ))
+        .await
+        .json();
+    assert!(r["total"].as_i64().unwrap() >= 1);
+    assert_eq!(r["total"], search["total"]);
+    let r = app
+        .get(&format!(
+            "/api/v1/libraries/{lib}/books?author={aid}&q={}",
+            urlencode(&word)
+        ))
+        .await
+        .json();
+    assert!(
+        r["books"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["id"] == b["id"])
+    );
+    assert!(r["total"].as_i64().unwrap() <= count);
+}
+
+#[tokio::test]
+async fn outdated_catalog_is_reimported_on_start() {
+    let (app, lib) = app_with_library().await;
+    let books = app.get("/api/v1/libraries").await.json()[0]["bookCount"].clone();
+    let db = app.root().join(format!("data/lib_{lib}.db"));
+    {
+        let c = rusqlite::Connection::open(&db).unwrap();
+        c.execute("UPDATE meta SET value='1' WHERE key='schema_version'", [])
+            .unwrap();
+    }
+    let app = app.restart().await;
+    let mut last = Value::Null;
+    for _ in 0..600 {
+        last = app.get("/api/v1/libraries").await.json()[0].clone();
+        if last["status"]["state"] == "idle" && last["bookCount"] == books {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(last["bookCount"], books, "{last}");
+    let jobs = app.get("/api/v1/jobs").await.json();
+    assert!(
+        jobs.as_array()
+            .unwrap()
+            .iter()
+            .any(|j| j["kind"] == "import")
+    );
+}

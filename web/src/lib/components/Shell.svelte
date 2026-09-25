@@ -11,6 +11,8 @@
   import { themeState, setTheme } from '../stores/theme.svelte';
   import { navigate, currentRoute } from '../router.svelte';
   import { shelvesState } from '../stores/shelves.svelte';
+  import Splitter from './Splitter.svelte';
+  import { PANE_LIMITS, paneWidth, setPaneWidth } from '../stores/layout.svelte';
 
   let { children }: { children: Snippet } = $props();
 
@@ -18,6 +20,9 @@
   let accountMenuOpen = $state(false);
   const lib = $derived(currentLibrary());
   const route = $derived(currentRoute());
+
+  let liveNav = $state<number | null>(null);
+  const navWidth = $derived(liveNav ?? paneWidth('nav'));
 
   function isActive(name: string): boolean {
     return route.name === name;
@@ -34,7 +39,7 @@
       <div class="lib-switch">
         <button type="button" onclick={() => (libMenuOpen = !libMenuOpen)} aria-haspopup="true" aria-expanded={libMenuOpen}>
           <span class="dot" style="background:#2E7D4F"></span>
-          {lib?.name ?? ''}
+          <span class="lib-name">{lib?.name ?? ''}</span>
           <Icon name="chevronDown" size={16} />
         </button>
         {#if libMenuOpen}
@@ -89,7 +94,7 @@
 
   <div class="body">
     {#if lib}
-      <nav aria-label="Main" class="sidenav">
+      <nav aria-label="Main" class="sidenav" style:--w="{navWidth}px">
         <a class="nav" href="/l/{lib.id}/new" data-link aria-current={isActive('new') ? 'page' : undefined} class:active={isActive('new')}>
           <Icon name="newArrivals" size={18} /><span class="label">{t('nav.newArrivals')}</span>
           {#if lib.newSinceLastVisit > 0}<span class="count">{lib.newSinceLastVisit}</span>{/if}
@@ -103,13 +108,14 @@
         <a class="nav" href="/l/{lib.id}/genres" data-link aria-current={isActive('genres') ? 'page' : undefined} class:active={isActive('genres')}>
           <Icon name="genres" size={18} /><span class="label">{t('nav.genres')}</span>
         </a>
-        <a class="nav" href="/l/{lib.id}/shelves" data-link aria-current={isActive('shelf') ? 'page' : undefined} class:active={isActive('shelf')}>
+        <a class="nav" href="/l/{lib.id}/shelves" data-link aria-current={isActive('shelvesIndex') ? 'page' : undefined} class:active={isActive('shelvesIndex')}>
           <Icon name="shelves" size={18} /><span class="label">{t('nav.shelves')}</span>
         </a>
         <div class="sep"></div>
-        <div class="section-label">{t('nav.myShelves')}</div>
+        {#if shelvesState.items.length}<div class="section-label">{t('nav.myShelves')}</div>{/if}
         {#each shelvesState.items as s (s.id)}
-          <a class="nav" href="/l/{lib.id}/shelves/{s.id}" data-link>
+          {@const on = route.name === 'shelf' && route.id === s.id}
+          <a class="nav" href="/l/{lib.id}/shelves/{s.id}" data-link class:active={on} aria-current={on ? 'page' : undefined}>
             <span class="dot" style="background:{s.color}"></span><span class="label">{s.name}</span>
             <span class="count">{s.count}</span>
           </a>
@@ -122,6 +128,15 @@
           <Icon name="settings" size={18} /><span class="label">{t('nav.settings')}</span>
         </a>
       </nav>
+      <Splitter
+        value={navWidth}
+        min={PANE_LIMITS.nav.min}
+        max={PANE_LIMITS.nav.max}
+        label={t('layout.resizeNav')}
+        onInput={(v) => (liveNav = v)}
+        onCommit={(v) => { setPaneWidth('nav', v); liveNav = null; }}
+        onReset={() => { setPaneWidth('nav', null); liveNav = null; }}
+      />
     {/if}
     <div class="content">
       {@render children()}
@@ -148,6 +163,7 @@
     display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid var(--border);
     border-radius: 8px; background: var(--surface); font-size: 14px; color: var(--ink);
   }
+  .lib-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 4px; flex-shrink: 0; }
   .grow { flex-grow: 1; }
   .icon-btn {
@@ -172,7 +188,7 @@
   .menu-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; border: none; background: transparent; font-size: 14px; text-align: left; }
   .menu-item:hover { background: var(--surface-hover); }
   .body { flex-grow: 1; display: flex; min-height: 0; }
-  .sidenav { width: 208px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px; border-right: 1px solid var(--line); overflow-y: auto; }
+  .sidenav { flex: 0 0 var(--w, 208px); min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px; border-right: 1px solid var(--line); overflow-y: auto; }
   .nav { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-radius: 8px; color: var(--muted-2); font-size: 14px; text-decoration: none; }
   .nav:hover { background: var(--surface-hover); text-decoration: none; color: var(--ink); }
   .nav.active { background: var(--accent-soft); color: var(--accent-soft-ink); font-weight: 500; }
@@ -188,7 +204,9 @@
     .sidenav { display: none; }
     .phone-nav-wrap { display: block; }
     .brand span { display: none; }
-    .lib-switch button span:not(.dot) { display: none; }
+    .brand { width: auto; }
+    .topbar { gap: 8px; padding: 0 8px 0 12px; }
+    .lib-name { max-width: 42vw; }
     .lib-switch button { padding: 0 8px; }
     .topbar :global(.wrap) { display: none; }
   }

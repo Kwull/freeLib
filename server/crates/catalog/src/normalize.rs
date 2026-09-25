@@ -34,16 +34,75 @@ fn is_separator(c: char) -> bool {
         )
 }
 
+/// Base letters of accented / special lower-case Latin letters (`č → c`, `ø → o`, `ß → ss`,
+/// `ə → e`), so that the letter index and sorting treat them like their base letter.
+/// Cyrillic is never folded (`й` and `ё` are handled separately). Keep in sync with
+/// `FOLD_GROUPS` in web/src/lib/utils/normalize.ts.
+fn fold_latin(c: char) -> Option<&'static str> {
+    if c < '\u{c0}' {
+        return None;
+    }
+    Some(match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' | 'ǎ' | 'ǟ' | 'ǡ' | 'ǻ' | 'ȁ' | 'ȃ'
+        | 'ȧ' | 'ḁ' | 'ạ' | 'ả' | 'ấ' | 'ầ' | 'ẩ' | 'ẫ' | 'ậ' | 'ắ' | 'ằ' | 'ẳ' | 'ẵ' | 'ặ' => {
+            "a"
+        }
+        'æ' => "ae",
+        'ƀ' | 'ḃ' | 'ḅ' | 'ḇ' => "b",
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' | 'ḉ' => "c",
+        'ð' | 'ď' | 'đ' | 'ḋ' | 'ḍ' | 'ḏ' | 'ḑ' | 'ḓ' => "d",
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' | 'ǝ' | 'ȅ' | 'ȇ' | 'ȩ' | 'ə' | 'ḕ'
+        | 'ḗ' | 'ḙ' | 'ḛ' | 'ḝ' | 'ẹ' | 'ẻ' | 'ẽ' | 'ế' | 'ề' | 'ể' | 'ễ' | 'ệ' => {
+            "e"
+        }
+        'ƒ' | 'ḟ' => "f",
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' | 'ǥ' | 'ǧ' | 'ǵ' | 'ḡ' => "g",
+        'ĥ' | 'ħ' | 'ȟ' | 'ḣ' | 'ḥ' | 'ḧ' | 'ḩ' | 'ḫ' | 'ẖ' => "h",
+        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' | 'ǐ' | 'ȉ' | 'ȋ' | 'ɨ' | 'ḭ' | 'ḯ'
+        | 'ỉ' | 'ị' => "i",
+        'ĵ' | 'ǰ' => "j",
+        'ķ' | 'ĸ' | 'ǩ' | 'ḱ' | 'ḳ' | 'ḵ' => "k",
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' | 'ḷ' | 'ḹ' | 'ḻ' | 'ḽ' => "l",
+        'ḿ' | 'ṁ' | 'ṃ' => "m",
+        'ñ' | 'ń' | 'ņ' | 'ň' | 'ŋ' | 'ǹ' | 'ṅ' | 'ṇ' | 'ṉ' | 'ṋ' => "n",
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' | 'ơ' | 'ǒ' | 'ǫ' | 'ǭ' | 'ȍ' | 'ȏ'
+        | 'ȫ' | 'ȭ' | 'ȯ' | 'ȱ' | 'ṍ' | 'ṏ' | 'ṑ' | 'ṓ' | 'ọ' | 'ỏ' | 'ố' | 'ồ' | 'ổ' | 'ỗ'
+        | 'ộ' | 'ớ' | 'ờ' | 'ở' | 'ỡ' | 'ợ' => "o",
+        'œ' => "oe",
+        'ṕ' | 'ṗ' => "p",
+        'ŕ' | 'ŗ' | 'ř' | 'ȑ' | 'ȓ' | 'ṙ' | 'ṛ' | 'ṝ' | 'ṟ' => "r",
+        'ś' | 'ŝ' | 'ş' | 'š' | 'ș' | 'ṡ' | 'ṣ' | 'ṥ' | 'ṧ' | 'ṩ' => "s",
+        'ß' => "ss",
+        'ţ' | 'ť' | 'ŧ' | 'ț' | 'ṫ' | 'ṭ' | 'ṯ' | 'ṱ' | 'ẗ' => "t",
+        'þ' => "th",
+        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' | 'ư' | 'ǔ' | 'ǖ' | 'ǘ' | 'ǚ'
+        | 'ǜ' | 'ȕ' | 'ȗ' | 'ṳ' | 'ṵ' | 'ṷ' | 'ṹ' | 'ṻ' | 'ụ' | 'ủ' | 'ứ' | 'ừ' | 'ử' | 'ữ'
+        | 'ự' => "u",
+        'ṽ' | 'ṿ' => "v",
+        'ŵ' | 'ẁ' | 'ẃ' | 'ẅ' | 'ẇ' | 'ẉ' | 'ẘ' => "w",
+        'ẋ' | 'ẍ' => "x",
+        'ý' | 'ÿ' | 'ŷ' | 'ȳ' | 'ẏ' | 'ẙ' | 'ỳ' | 'ỵ' | 'ỷ' | 'ỹ' => "y",
+        'ź' | 'ż' | 'ž' | 'ƶ' | 'ȥ' | 'ẑ' | 'ẓ' | 'ẕ' => "z",
+        _ => return None,
+    })
+}
+
 /// Sort key used for authors, series and titles.
 ///
-/// Unicode lower-case, `ё→е`, quotes removed, punctuation turned into spaces,
-/// whitespace collapsed, leading non-alphanumerics (e.g. `- `, `*`, `#`) removed.
-/// `й` is kept distinct from `и`. Comparing two keys with plain byte order
+/// Unicode lower-case, `ё→е`, accented Latin letters folded to their base letters
+/// (`Čapek` → `capek`, `Ødegaard` → `odegaard`, combining accents after a Latin letter dropped),
+/// quotes removed, punctuation turned into spaces, whitespace collapsed, leading
+/// non-alphanumerics (e.g. `- `, `*`, `#`) removed. `й` is kept distinct from `и`. Comparing two keys with plain byte order
 /// (SQLite `BINARY`, Rust `str::cmp`) gives the list order: digits, Latin, Cyrillic.
 pub fn normalize(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut pending_space = false;
     for c in s.chars() {
+        // A combining accent after a (folded) Latin letter: `e\u{301}` → `e`.
+        if ('\u{300}'..='\u{36f}').contains(&c) && out.ends_with(|p: char| p.is_ascii_alphabetic())
+        {
+            continue;
+        }
         if is_dropped(c) {
             continue;
         }
@@ -60,10 +119,13 @@ pub fn normalize(s: &str) -> String {
         }
         pending_space = false;
         for lc in c.to_lowercase() {
-            out.push(match lc {
-                'ё' => 'е',
-                other => other,
-            });
+            match lc {
+                'ё' => out.push('е'),
+                other => match fold_latin(other) {
+                    Some(f) => out.push_str(f),
+                    None => out.push(other),
+                },
+            }
         }
     }
     if out.is_empty() {
@@ -158,6 +220,22 @@ mod tests {
         ];
         v.sort();
         assert_eq!(v, vec!["1984", "zeta", "абрамов", "ежиков", "ежов", "яков"]);
+    }
+
+    #[test]
+    fn latin_diacritics_fold() {
+        assert_eq!(normalize("Čapek Karel"), "capek karel");
+        assert_eq!(normalize("Lem Stanisław"), "lem stanislaw");
+        assert_eq!(normalize("Ødegaard Knut"), "odegaard knut");
+        assert_eq!(normalize("Əlibəyli"), "elibeyli");
+        assert_eq!(normalize("Þórðarson"), "thordarson");
+        assert_eq!(normalize("Straße"), "strasse");
+        assert_eq!(normalize("Ðukić"), "dukic");
+        assert_eq!(normalize("Cafe\u{301}"), "cafe");
+        // Cyrillic is untouched
+        assert_eq!(normalize("Йозеф Їжак Ґанна"), "йозеф їжак ґанна");
+        assert_eq!(letter_of(&normalize("Åsa")), "A");
+        assert_eq!(letter_of(&normalize("Ə")), "E");
     }
 
     #[test]

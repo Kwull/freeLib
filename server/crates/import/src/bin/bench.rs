@@ -214,6 +214,7 @@ fn main() {
         langs: vec!["ru".into()],
         ext: Some("fb2".into()),
         include_deleted: false,
+        q: None,
     };
     for id in &ids {
         s.time(|| cat.books(&BookSelector::Author(*id), &fr, &page).unwrap());

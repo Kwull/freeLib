@@ -92,6 +92,25 @@ export type NameListResponse = {
   letters: [string, number, number][];
 };
 
+export type Coauthor = { id: number; name: string; books: number; direct: number };
+
+export type AuthorSummary = {
+  id: number; name: string;
+  count: number;
+  /** live books with ≥ 4 authors (anthologies / collections) */
+  anthologies: number;
+  series: { id: number; name: string; count: number }[];
+  withoutSeries: number;
+  langs: [string, number][];
+  genres: [number, number][];
+  firstDate: string; lastDate: string;
+  /** top co-authors (≥ 1 direct shared book or ≥ 2 shared books), at most 10 */
+  coauthors: Coauthor[];
+  coauthorCount: number;
+};
+
+export type CoauthorsResponse = { columns: ['id', 'name', 'books', 'direct']; rows: [number, string, number, number][] };
+
 export type BooksResponse = { books: Book[]; nextCursor: string | null; total: number };
 
 export type SearchResponse = {

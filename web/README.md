@@ -19,7 +19,9 @@ VITE_API=http://localhost:8080 pnpm dev
 With `VITE_API` set, Vite proxies `/api` and `/opds` to that server and the mock
 middleware is not installed. Without it, `web/mock/server.ts` serves the full
 `/api/v1` contract from `docs/web/API.md` using deterministic in-memory data
-(50,000 authors, 4,000 series, ~3,000 books, jobs that progress over a few
+(50,000 authors, 4,000 series, ~50,000 books — including "Asimov Isaac", a prolific,
+anthology-heavy author with a real co-author, plus accented, Cyrillic and digit-initial
+names for the letter index — jobs that progress over a few
 seconds and stream through `/api/v1/events`), so the whole app — including the
 50k-row authors list — can be exercised without the Rust server.
 
@@ -47,13 +49,17 @@ web/
       i18n/                    en.json, ru.json, index.ts (t(), setLang)
       stores/                  *.svelte.ts — session, libraries, jobs, devices,
                                 shelves, selection (per-library, in-memory),
-                                theme, toast
+                                theme, toast, prefs (per-user UI prefs: server
+                                /me/prefs + localStorage, debounced), layout
+                                (resizable pane / column widths)
       cache/nameCache.ts       IndexedDB cache for the authors/series lists,
                                 keyed by catalogVersion
       router.svelte.ts         small history-based router (no SvelteKit)
       components/              Shell, NameBrowser, BooksPane, DetailsPane,
                                 SendDialog, ShelfDialog, LibrariesPage's bits,
                                 VirtualList (fixed-row-height virtualizer),
+                                Splitter (drag/keyboard resize handle),
+                                CoauthorsPopover,
                                 Icon (inline stroke-icon set), etc.
       routes/                  one component per SPA route
       utils/                   normalize() (mirrors the server's sort_key

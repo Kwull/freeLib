@@ -29,6 +29,11 @@
   --danger: #B3261E;
   --scrim: rgba(29, 28, 25, 0.55);
   --focus: #1F5F5B;
+  /* inverted surfaces: toasts, the floating selection bar */
+  --row-checked: #F3F7F6;
+  --inverse-bg: #1D1C19;
+  --inverse-ink: #FFFFFF;
+  --inverse-hover: rgba(255, 255, 255, 0.12);
 
   color-scheme: light;
 }
@@ -40,7 +45,7 @@
     --surface: #1D1F21;
     --surface-alt: #202224;
     --surface-hover: #2A2C2E;
-    --row-hover: #24262828;
+    --row-hover: #242628;
     --line: #333536;
     --line-soft: #2A2C2E;
     --border: #3A3C3E;
@@ -57,6 +62,10 @@
     --danger: #E5675F;
     --scrim: rgba(0, 0, 0, 0.65);
     --focus: #59A9A3;
+    --row-checked: #1E3230;
+    --inverse-bg: #EDEBE6;
+    --inverse-ink: #1D1C19;
+    --inverse-hover: rgba(0, 0, 0, 0.08);
     color-scheme: dark;
   }
 }
@@ -83,6 +92,10 @@
   --danger: #E5675F;
   --scrim: rgba(0, 0, 0, 0.65);
   --focus: #59A9A3;
+  --row-checked: #1E3230;
+  --inverse-bg: #EDEBE6;
+  --inverse-ink: #1D1C19;
+  --inverse-hover: rgba(0, 0, 0, 0.08);
   color-scheme: dark;
 }
 

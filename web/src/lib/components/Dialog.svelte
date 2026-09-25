@@ -47,7 +47,7 @@
         <h2 id={titleId}>{title}</h2>
         <button type="button" aria-label="Close" class="close" onclick={onClose}><Icon name="close" size={18} /></button>
       </div>
-      {@render children()}
+      <div class="body">{@render children()}</div>
     </div>
   </div>
 {/if}
@@ -60,6 +60,11 @@
   .dialog {
     background: var(--surface); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden;
     max-height: 90vh;
+  }
+  .body { overflow-y: auto; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
+  @media (max-width: 700px) {
+    .scrim { padding: 10px; align-items: flex-end; }
+    .dialog { max-height: calc(100vh - 20px); width: 100% !important; }
   }
   .head { padding: 22px 24px 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-shrink: 0; }
   h2 { margin: 0; font-family: var(--font-display); font-size: 22px; font-weight: 600; }

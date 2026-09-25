@@ -31,6 +31,14 @@ pub fn router() -> Router<AppState> {
         .route("/libraries/{lib}/import", post(libraries::import))
         .route("/fs", get(libraries::fs))
         .route("/libraries/{lib}/authors", get(browse::authors))
+        .route(
+            "/libraries/{lib}/authors/{id}/summary",
+            get(browse::author_summary),
+        )
+        .route(
+            "/libraries/{lib}/authors/{id}/coauthors",
+            get(browse::coauthors),
+        )
         .route("/libraries/{lib}/series", get(browse::series))
         .route("/libraries/{lib}/genres", get(browse::genres))
         .route("/libraries/{lib}/books", get(browse::books))

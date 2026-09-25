@@ -34,7 +34,8 @@ export const store = {
     opds: { enabled: true, requireAuth: true },
     calibre: { available: true, version: '7.4.0' },
   } as Settings,
-  prefs: {} as Record<string, unknown>,
+  prefs: new Map<string, Record<string, unknown>>(),
+  nextClientId: 1,
   nextJobId: 1,
   nextDeviceId: 7,
   nextShelfId: 4,
@@ -56,7 +57,7 @@ function libMetaFor(id: number, name: string, isDefault: boolean): LibraryMeta {
   return {
     id, name, path: `/books/${name}`, inpx: `${name}.inpx`,
     firstAuthorOnly: false, skipDeleted: false, isDefault,
-    bookCount: c.books.length, authorCount: c.authors.length, seriesCount: c.series.length,
+    bookCount: c.books.filter((b) => !b.deleted).length, authorCount: c.authorRows.length, seriesCount: c.seriesRows.length,
     importedAt: '2026-08-01T10:00:00Z', catalogVersion: 1, newSinceLastVisit: 12,
     status: { state: 'idle' },
     opdsUrl: `/opds/${id}`,

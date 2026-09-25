@@ -4,7 +4,9 @@ use rusqlite::Connection;
 
 /// Bumped whenever the catalog layout changes; [`crate::Catalog::open`] refuses other versions
 /// (the server then triggers a re-import).
-pub const CATALOG_SCHEMA_VERSION: i64 = 1;
+///
+/// 2: sort keys fold accented Latin letters (`Čapek` sorts and indexes under `C`).
+pub const CATALOG_SCHEMA_VERSION: i64 = 2;
 
 /// Catalog tables. Created on an empty database by the importer *before* the bulk load;
 /// indexes ([`CATALOG_INDEXES`]) are created afterwards.

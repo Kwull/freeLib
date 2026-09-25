@@ -664,11 +664,8 @@ async fn names_with_prefix(
                     .collect(),
             ));
         };
-        let first: String = prefix
-            .chars()
-            .next()
-            .map(|c| c.to_uppercase().collect())
-            .unwrap_or_default();
+        // `č`, `Č` and `c` all open the `C` group (sort keys fold Latin diacritics).
+        let first = freelib_catalog::letter_of(&normalize(&prefix));
         let Some((_, count, pos)) = list
             .letters
             .iter()

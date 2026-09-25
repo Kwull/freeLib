@@ -29,8 +29,9 @@
   <form class="card" onsubmit={submit}>
     <div class="brand"><Icon name="library" size={28} strokeWidth={1.8} /><span>{t('app.name')}</span></div>
     <h1>{t('login.title')}</h1>
-    <label>{t('login.username')}<input type="text" bind:value={username} required /></label>
-    <label>{t('login.password')}<input type="password" bind:value={password} required /></label>
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>{t('login.username')}<input type="text" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus bind:value={username} required /></label>
+    <label>{t('login.password')}<input type="password" autocomplete="current-password" bind:value={password} required /></label>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     <button type="submit" disabled={busy}>{t('login.submit')}</button>
   </form>

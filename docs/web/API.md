@@ -52,6 +52,21 @@ type BookDetail = Book & {
   formats: string[];               // formats this server can produce for the book, e.g. ["original","epub","kepub","azw3"]
 };
 type Genre = { id: number; name: string; parent: number /*0 = top*/; count: number };
+type AuthorSummary = {             // GET /libraries/:lib/authors/:id/summary; live books only
+  id: number; name: string;
+  count: number;                   // books
+  anthologies: number;             // books with ≥ 4 authors (anthologies / collections)
+  series: { id: number; name: string; count: number }[];  // series of the author's books, most books first
+  withoutSeries: number;
+  langs: [string, number][];       // most frequent first
+  genres: [number, number][];      // top 8 assigned genres
+  firstDate: string; lastDate: string;  // oldest / newest `date`, "" when unknown
+  coauthors: { id: number; name: string; books: number; direct: number }[];
+                                   // ≤ 10 co-authors with ≥ 1 direct or ≥ 2 shared books, ranked by
+                                   // direct desc, books desc, name. books = shared books, direct = shared
+                                   // books with < 4 authors (real co-authorship, not an anthology)
+  coauthorCount: number;           // everybody sharing a book
+};
 type Shelf = { id: number; name: string; color: string /*#rrggbb*/; count: number };
 type Device = {
   id: number; name: string;
@@ -115,10 +130,12 @@ their separator. Result is sanitised for file systems; `transliterate` applies R
 
 | Method & path | Query | Response |
 |---|---|---|
-| `GET /libraries/:lib/authors` | `v?` | `{ version, columns: ["id","name","count"], rows: [[1,"Стругацкий Аркадий Натанович",12], …], letters: [["А", count, firstRowIndex], …] }` sorted by sort key |
+| `GET /libraries/:lib/authors` | `v?` | `{ version, columns: ["id","name","count"], rows: [[1,"Стругацкий Аркадий Натанович",12], …], letters: [["А", count, firstRowIndex], …] }`. Only names with at least one live (non-deleted) book. Sorted by sort key (accented Latin letters fold to their base letter: `Čapek` sorts and indexes under `C`, see `normalize-vectors.json`), except that names not starting with a letter (digits, symbols) form a `#` group **at the end**. `letters` are in row order, one entry per letter |
 | `GET /libraries/:lib/series` | `v?` | same shape as authors |
+| `GET /libraries/:lib/authors/:id/summary` | – | `AuthorSummary` (below); 404 for an unknown author |
+| `GET /libraries/:lib/authors/:id/coauthors` | – | `{ columns: ["id","name","books","direct"], rows: [[id, name, books, direct], …] }`: everybody sharing a live book with the author, ranked like `AuthorSummary.coauthors` (not filtered); 404 for an unknown author |
 | `GET /libraries/:lib/genres` | `v?`, `lang=en\|ru\|uk` (default `en`) | `Genre[]` (all 322 genres, with counts for this library; zero-count leaves included). `name` is localized to `lang`; the ETag includes `lang`, so switching the SPA's language triggers a refetch |
-| `GET /libraries/:lib/books` | exactly one of `author`, `series`, `genre`, `shelf`, `since` (YYYY-MM-DD) plus optional `lang`, `ext`, `deleted=1`, `cursor`, `limit` (default 2000, max 5000) | `{ books: Book[], nextCursor: string \| null, total: number }`. Order: author → series name, serno, title; series → serno, title; genre/shelf/since → date desc, title |
+| `GET /libraries/:lib/books` | exactly one of `author`, `series`, `genre`, `shelf`, `since` (YYYY-MM-DD) plus optional `lang`, `ext`, `deleted=1`, `q` (text filter: every word is a prefix of a word of the title, authors, series or keywords, like search), `cursor`, `limit` (default 2000, max 5000) | `{ books: Book[], nextCursor: string \| null, total: number }`. Order: author → series name, serno, title; series → serno, title; genre/shelf/since → date desc, title |
 | `GET /libraries/:lib/books/:id` | – | `BookDetail` (first call may take up to ~150 ms, then cached) |
 | `GET /libraries/:lib/books/:id/cover` | `size=thumb\|full` | image (`image/webp` or original jpeg/png); `full` is 404 when the book has no cover. `thumb` = 240 px high; when the book has no cover, a generated SVG placeholder tile (background colour from the title, author + title text, like the SPA's own placeholder) is returned instead of 404, with header `X-Cover: generated` |
 | `GET /libraries/:lib/books/:id/file` | `format` (default `original`), `device?` (device id → its options & file name) , `inline=1` for the web reader | the file with `Content-Disposition: attachment`; `inline=1` is honoured for EPUB only. HTML, XHTML, XML, FB2 and SVG files are sent as `application/octet-stream`. Originals are streamed (no `Content-Length` for deflated zip entries); books above 256 MiB → 413. 501 `unsupported_format` if the format needs Calibre and it is missing, or the book is neither FB2 nor EPUB (other formats are offered as `original` only) |
@@ -170,7 +187,7 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | `POST /users` **(admin)** | `{username, password, role}` | user; 409 when the name exists (case-insensitive). User ids are never reused |
 | `PATCH /users/:id` **(admin)** | `{password?, role?}` | user |
 | `DELETE /users/:id` **(admin)** | – | 204 (also cancels and removes the user's jobs and their files) |
-| `GET /me/prefs`, `PUT /me/prefs` | arbitrary JSON ≤ 64 KB (UI state: columns, view mode, last library/author) | JSON |
+| `GET /me/prefs`, `PUT /me/prefs` | arbitrary JSON ≤ 64 KB (UI state: pane and column widths, visible columns, sort orders, view mode, last library and device…; the SPA writes the whole object) | JSON |
 
 ## OPDS (not under /api)
 
@@ -189,5 +206,5 @@ Basic auth when `opds.requireAuth` (same users and the same login rate limits). 
 ## Web app
 
 `GET /` and any non-`/api`, non-`/opds` path → SPA `index.html` (history routing). Static assets under `/assets/*` with long cache.
-SPA routes: `/`, `/l/:lib/new`, `/l/:lib/authors[/:id]`, `/l/:lib/series[/:id]`, `/l/:lib/genres[/:id]`, `/l/:lib/shelves/:id`,
+SPA routes: `/`, `/l/:lib/new`, `/l/:lib/authors[/:id][?book=:id]`, `/l/:lib/series[/:id][?book=:id]`, `/l/:lib/genres[/:id]`, `/l/:lib/shelves/:id`,
 `/l/:lib/search?q=…`, `/l/:lib/book/:id` (phone), `/l/:lib/read/:id`, `/libraries`, `/settings[/:section]`, `/login`.
