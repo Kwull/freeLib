@@ -5,7 +5,10 @@ use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
-use freelib_catalog::{Book, BookFilter, BookSelector, Catalog, Page, SearchKind, SearchQuery};
+use freelib_catalog::{
+    Book, BookFilter, BookSelector, Catalog, Page, RatingQuery, RatingSort, RatingSource,
+    SearchKind, SearchQuery,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -20,7 +23,15 @@ use super::split_list;
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const REVALIDATE: &str = "private, no-cache";
 
-/// API `Book` (catalog book + the user's rating and shelves).
+/// External rating of a book in lists: Open Library average and vote count.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtRatingOut {
+    pub avg: f64,
+    pub votes: u32,
+}
+
+/// API `Book` (catalog book + the user's rating and shelves + the external rating).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookOut {
@@ -28,9 +39,11 @@ pub struct BookOut {
     pub book: Book,
     pub rating: i64,
     pub shelves: Vec<i64>,
+    /// Open Library rating (only when the book was found and has votes).
+    pub ext_rating: Option<ExtRatingOut>,
 }
 
-/// Adds rating and shelves of `user_id` (blocking).
+/// Adds rating and shelves of `user_id` and the cached external rating (blocking).
 pub fn with_marks(
     st: &AppState,
     user_id: i64,
@@ -47,9 +60,102 @@ pub fn with_marks(
         .map(|b| BookOut {
             rating: ratings.get(&b.key).copied().unwrap_or(0),
             shelves: shelves.remove(&b.key).unwrap_or_default(),
+            ext_rating: st
+                .ext
+                .get(lib, &b.key)
+                .map(|(avg, votes)| ExtRatingOut { avg, votes }),
             book: b,
         })
         .collect())
+}
+
+/// Rating filter / sort query parameters (books, search).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RatingParams {
+    /// `my`, `lib`, `ext` (rating sorts); anything else keeps the list order.
+    pub sort: Option<String>,
+    pub min_my: Option<String>,
+    pub min_lib: Option<String>,
+    pub min_ext: Option<String>,
+    pub min_ext_votes: Option<String>,
+    pub unrated_by_me: Option<String>,
+    pub kids_max_age: Option<String>,
+}
+
+/// Parses an optional number parameter (empty = absent).
+fn num<T: std::str::FromStr>(v: &Option<String>, name: &str) -> ApiResult<Option<T>> {
+    match v.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(s) => s
+            .parse()
+            .map(Some)
+            .map_err(|_| ApiError::bad_request(format!("{name} must be a number"))),
+    }
+}
+
+impl RatingParams {
+    pub fn query(&self) -> ApiResult<RatingQuery> {
+        let stars = |v: &Option<String>, name: &str| -> ApiResult<u8> {
+            match num::<u8>(v, name)? {
+                None => Ok(0),
+                Some(n) if n <= 5 => Ok(n),
+                Some(_) => Err(ApiError::bad_request(format!("{name} must be 0..5"))),
+            }
+        };
+        let min_ext = match num::<f64>(&self.min_ext, "minExt")? {
+            None => 0,
+            Some(x) if (0.0..=5.0).contains(&x) => (x * 100.0).round() as u16,
+            Some(_) => return Err(ApiError::bad_request("minExt must be 0..5")),
+        };
+        Ok(RatingQuery {
+            sort: RatingSort::parse(self.sort.as_deref().unwrap_or("")),
+            min_my: stars(&self.min_my, "minMy")?,
+            min_lib: stars(&self.min_lib, "minLib")?,
+            min_ext,
+            min_ext_votes: num::<u32>(&self.min_ext_votes, "minExtVotes")?.unwrap_or(0),
+            unrated_by_me: truthy(&self.unrated_by_me),
+            kids_max_age: num::<u8>(&self.kids_max_age, "kidsMaxAge")?.map(|a| a.min(18)),
+        })
+    }
+}
+
+/// Runs `f` with the rating sources `rq` needs: the user's ratings of `lib` (by book id) and
+/// the external ratings of this catalog version (blocking).
+pub fn with_rating_source<R>(
+    st: &AppState,
+    user_id: i64,
+    lib: i64,
+    cat: &Catalog,
+    rq: &RatingQuery,
+    f: impl FnOnce(&dyn RatingSource) -> ApiResult<R>,
+) -> ApiResult<R> {
+    let needs_my = rq.min_my > 0 || rq.unrated_by_me || rq.sort == RatingSort::My;
+    let needs_ext = rq.min_ext > 0 || rq.min_ext_votes > 0 || rq.sort == RatingSort::Ext;
+    let mut my = std::collections::HashMap::new();
+    if needs_my {
+        let rows = {
+            let c = st.db.lock();
+            db::user_ratings(&c, user_id, lib)?
+        };
+        let by_key: std::collections::HashMap<String, i64> = rows.into_iter().collect();
+        let keys: Vec<String> = by_key.keys().cloned().collect();
+        for (k, id) in cat.ids_by_keys(&keys)? {
+            if let Some(r) = by_key.get(&k) {
+                my.insert(id, (*r).clamp(0, 5) as u8);
+            }
+        }
+    }
+    let dense = if needs_ext {
+        st.ext.dense(lib, cat)
+    } else {
+        None
+    };
+    let guard = dense
+        .as_ref()
+        .map(|d| d.read().unwrap_or_else(|e| e.into_inner()));
+    let src = crate::extrating::Ratings { my, ext: guard };
+    f(&src)
 }
 
 #[derive(Deserialize)]
@@ -214,6 +320,7 @@ pub async fn genres(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BooksQuery {
     author: Option<i64>,
     series: Option<i64>,
@@ -238,6 +345,7 @@ pub async fn books(
     Auth(u): Auth,
     Path(lib): Path<i64>,
     Query(q): Query<BooksQuery>,
+    Query(rp): Query<RatingParams>,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
     let n = [
@@ -256,6 +364,7 @@ pub async fn books(
         ));
     }
     st.catalog(lib)?;
+    let rq = rp.query()?;
     let filter = BookFilter {
         langs: split_list(q.lang.as_deref()),
         ext: q
@@ -300,22 +409,39 @@ pub async fn books(
         BookSelector::Ids(Vec::new())
     };
     let st2 = st.clone();
-    let out = st
-        .catalog_call(lib, move |cat| -> ApiResult<serde_json::Value> {
-            let sel = match (&sel, &shelf_keys) {
-                (BookSelector::Ids(_), Some(keys)) => BookSelector::Ids(
-                    cat.ids_by_keys(keys)?
-                        .into_iter()
-                        .map(|(_, id)| id)
-                        .collect(),
-                ),
-                (s, _) => s.clone(),
-            };
-            let p = cat.books(&sel, &filter, &page)?;
-            let books = with_marks(&st2, u.id, lib, p.books)?;
-            Ok(json!({"books": books, "nextCursor": p.next_cursor, "total": p.total}))
-        })
+    let browse = matches!(sel, BookSelector::Author(_) | BookSelector::Series(_));
+    let first_page = page.cursor.is_none();
+    let (out, ids) = st
+        .catalog_call(
+            lib,
+            move |cat| -> ApiResult<(serde_json::Value, Vec<i64>)> {
+                let sel = match (&sel, &shelf_keys) {
+                    (BookSelector::Ids(_), Some(keys)) => BookSelector::Ids(
+                        cat.ids_by_keys(keys)?
+                            .into_iter()
+                            .map(|(_, id)| id)
+                            .collect(),
+                    ),
+                    (s, _) => s.clone(),
+                };
+                let p = with_rating_source(&st2, u.id, lib, cat, &rq, |src| {
+                    Ok(cat.books_rated(&sel, &filter, &rq, src, &page)?)
+                })?;
+                let ids: Vec<i64> = p.books.iter().map(|b| b.id).collect();
+                let books = with_marks(&st2, u.id, lib, p.books)?;
+                Ok((
+                    json!({"books": books, "nextCursor": p.next_cursor, "total": p.total}),
+                    ids,
+                ))
+            },
+        )
         .await?;
+    if browse && first_page {
+        // books of an author / series the user browses: look them up next (priority 2)
+        let n = ids.len().min(crate::extrating::BROWSE_ENQUEUE);
+        st.ext
+            .enqueue(crate::extrating::Priority::Browse, lib, &ids[..n]);
+    }
     json_etag(&headers, &out)
 }
 
@@ -363,6 +489,7 @@ pub async fn coauthors(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchParams {
     q: Option<String>,
     kind: Option<String>,
@@ -401,6 +528,7 @@ pub async fn search(
     Auth(u): Auth,
     Path(lib): Path<i64>,
     Query(p): Query<SearchParams>,
+    Query(rp): Query<RatingParams>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let q = p.q.clone().unwrap_or_default();
     if q.trim().chars().count() < 2 {
@@ -438,11 +566,14 @@ pub async fn search(
         to: opt_date(&p.to, "to")?,
         include_deleted: truthy(&p.deleted),
         limit: p.limit.unwrap_or(200).clamp(1, 1000),
+        rating: rp.query()?,
     };
     let st2 = st.clone();
     let v = st
         .catalog_call(lib, move |cat| -> ApiResult<serde_json::Value> {
-            let r = cat.search(&sq)?;
+            let r = with_rating_source(&st2, u.id, lib, cat, &sq.rating, |src| {
+                Ok(cat.search_rated(&sq, src)?)
+            })?;
             let books = with_marks(&st2, u.id, lib, r.books)?;
             Ok(json!({
                 "tookMs": r.took_ms,

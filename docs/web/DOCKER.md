@@ -124,7 +124,9 @@ Add these URLs to your e-reader's OPDS client (e.g., Kindle email, Kobo, FBReade
 ## Reverse Proxy Setup
 
 Running behind a reverse proxy (Caddy, nginx, Apache)? Ensure the proxy does not buffer
-responses to `/api/v1/events` (Server-Sent Events for real-time updates), and set
+responses to `/api/v1/events` (Server-Sent Events for real-time updates) **and to `/mcp`** (the MCP
+endpoint answers with JSON, but switches to an SSE stream when a tool reports progress; treat it
+like the events stream: no buffering, long read timeout, `Authorization` header passed through), and set
 `FREELIB_TRUST_PROXY=1` so login rate limiting uses the real client address instead of the
 proxy's own address. With it, freeLib takes `X-Real-IP` when present, otherwise the **rightmost**
 `X-Forwarded-For` entry (the one your proxy appended; anything to its left comes from the client
@@ -237,7 +239,70 @@ All environment variables from [ARCHITECTURE.md](./ARCHITECTURE.md#runtime-confi
 | `FREELIB_CACHE_MAX_MB` | `2048` | Size limit of the conversion / cover cache in `/cache`; least recently used files are evicted (`0` = no limit) |
 | `FREELIB_WORKERS` | CPU core count | Conversion worker count |
 | `FREELIB_WEB_DIR` | unset | Serve the SPA from this folder instead of the embedded copy (development) |
+| `FREELIB_CONTACT_EMAIL` | unset | Contact address sent in the User-Agent of Open Library requests (recommended by Open Library) |
+| `FREELIB_OPENLIBRARY_URL` | `https://openlibrary.org` | Open Library base URL (tests use a local fake) |
+| `FREELIB_MCP_RATE` | `120` | MCP requests per API token and minute |
 | `RUST_LOG` | `info` | Log level (debug, info, warn, error) |
+
+## Ratings and Open Library (privacy)
+
+Book lists can show three ratings: your own, the library's (the `LIBRATE`/stars field of the INPX) and
+**Open Library**'s (openlibrary.org, average and vote count). For the last one the server looks books up
+in the background — about one request a second, books you open, shelve, rate or send first, then the
+authors and series you browse, then the rest of the library — and caches the answers in `/data/ratings.db`
+(safe to delete; found ratings are refreshed after 90 days).
+
+**What leaves your server:** book titles and author surnames, sent to openlibrary.org with a User-Agent
+naming freeLib (and `FREELIB_CONTACT_EMAIL`, if set). Nothing about users. An administrator can switch it
+off in **Settings → Server → External ratings**; then nothing is sent (cached ratings are still shown).
+Progress is shown there and on the Libraries page.
+
+The "suitable for age" badge and filter (0+, 6+, 12+, 16+, 18+) is a **heuristic** from genres and keywords,
+not a verified age rating.
+
+## AI assistants (MCP)
+
+freeLib includes an MCP server at `<your server>/mcp` so Claude and other MCP clients can search your
+library, look at your shelves, ratings and history, suggest what to read next (with reasons), rate books,
+manage shelves and send books to your devices. An administrator can switch it off in **Settings → Server**.
+
+1. **Settings → Account → API tokens & MCP**: create a token, choose its permissions — `read` (catalog and
+   your profile), `write` (shelves and ratings), `send` (Send to Kindle / devices) — and copy it (it is shown
+   once). The page shows the MCP URL and ready-made snippets; revoke a token there at any time, and see the
+   last 50 tool calls.
+2. Connect a client (replace the URL and token):
+
+   **Claude Code**
+   ```bash
+   claude mcp add --transport http freelib https://books.example.org/mcp --header "Authorization: Bearer fl_…"
+   ```
+
+   **Claude Desktop** — custom connectors added in *Settings → Connectors* only support OAuth, so use
+   [`mcp-remote`](https://github.com/geelen/mcp-remote) (needs Node.js) in `claude_desktop_config.json`
+   (*Settings → Developer → Edit Config*), then restart Claude Desktop:
+   ```json
+   {
+     "mcpServers": {
+       "freelib": {
+         "command": "npx",
+         "args": ["-y", "mcp-remote", "https://books.example.org/mcp", "--header", "Authorization:${FREELIB_AUTH}"],
+         "env": { "FREELIB_AUTH": "Bearer fl_…" }
+       }
+     }
+   }
+   ```
+   (The header value goes through `env` because some clients mangle spaces inside `args`.)
+
+   **Other clients** (Cursor, VS Code, … — Streamable HTTP with headers):
+   ```json
+   { "mcpServers": { "freelib": { "type": "http", "url": "https://books.example.org/mcp",
+     "headers": { "Authorization": "Bearer fl_…" } } } }
+   ```
+3. Try the prompts `suggest_next_book`, `books_for_kid` (age) or `similar_to` (book id), or just ask
+   "what should I read next?".
+
+Use HTTPS for anything beyond your LAN — the token is a password. Tokens only work for `/mcp`, not for the
+web app or OPDS. Requests are limited to `FREELIB_MCP_RATE` per token and minute.
 
 ## Sending by e-mail
 

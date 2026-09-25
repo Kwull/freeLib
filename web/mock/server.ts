@@ -63,6 +63,32 @@ function bookShelves(libId: number, key: string): number[] {
   return out;
 }
 
+// Deterministic mock ratings: a library (INPX) rating for ~40% of books, an Open Library
+// rating for ~35%, and an age estimate from the (mock) genres like the server's heuristic.
+function hash(n: number): number {
+  let x = (n * 2654435761) >>> 0;
+  x ^= x >>> 13; x = Math.imul(x, 0x5bd1e995) >>> 0; x ^= x >>> 15;
+  return x >>> 0;
+}
+export function libRating(b: MockBook): number {
+  if (b.key.startsWith('demo:')) return [5, 5, 4, 4, 5, 4, 3, 4, 3, 5, 3, 2, 4, 3, 3][b.id - 1] ?? 4;
+  const h = hash(b.id);
+  return h % 10 < 4 ? 1 + ((h >>> 8) % 5) : 0;
+}
+export function extRating(b: MockBook): { avg: number; votes: number } | null {
+  if (b.key.startsWith('demo:')) return { avg: [4.2, 4.0, 4.3, 4.2, 4.4, 4.1, 3.9, 4.0, 3.8, 3.9, 3.5, 3.4, 3.7, 3.6, 3.5][b.id - 1] ?? 4, votes: [950, 610, 1210, 480, 2104, 390, 270, 220, 180, 830, 120, 95, 60, 18, 12][b.id - 1] ?? 10 };
+  const h = hash(b.id + 7919);
+  if (h % 100 >= 35) return null;
+  return { avg: Math.round((2.5 + ((h >>> 7) % 250) / 100) * 100) / 100, votes: 1 + ((h >>> 3) % 400) };
+}
+export function kidsAge(b: MockBook): number | null {
+  // mock genres: 18 Children's, 19 Children's Prose, 20 Children's Adventure, 10 Thriller
+  if (b.genreIds.includes(10)) return 16;
+  if (b.genreIds.includes(20)) return 12;
+  if (b.genreIds.includes(19) || b.genreIds.includes(18)) return b.id % 3 === 0 ? 0 : 6;
+  return b.key.startsWith('demo:') ? 12 : null;
+}
+
 function toBook(lib: MockLibrary, b: MockBook): Book {
   return {
     id: b.id, key: b.key, title: b.title,
@@ -70,12 +96,44 @@ function toBook(lib: MockLibrary, b: MockBook): Book {
     series: toSeriesRef(lib, b.seriesId), serno: b.serno,
     genres: b.genreIds, lang: b.lang, ext: b.ext, size: b.size, date: b.date, deleted: b.deleted,
     rating: bookRating(lib.id, b.id), shelves: bookShelves(lib.id, b.key),
+    libRating: libRating(b), extRating: extRating(b), kidsAge: kidsAge(b),
   };
 }
 
+/** The server's rating filters and sorts (`sort=my|lib|ext`, `minMy`, …). */
+function rateFilterSort(lib: MockLibrary, items: MockBook[], sp: URLSearchParams): MockBook[] | string {
+  const n = (k: string) => { const v = sp.get(k); return v === null || v === '' ? 0 : Number(v); };
+  const minMy = n('minMy'), minLib = n('minLib'), minExt = n('minExt'), minVotes = n('minExtVotes');
+  if ([minMy, minLib, minExt, minVotes].some((x) => Number.isNaN(x)) || minMy > 5 || minLib > 5 || minExt > 5) return 'invalid rating filter';
+  const unrated = sp.get('unratedByMe') === '1';
+  const kids = sp.get('kidsMaxAge');
+  let out = items.filter((b) => {
+    const my = bookRating(lib.id, b.id);
+    if (minMy && my < minMy) return false;
+    if (unrated && my > 0) return false;
+    if (minLib && libRating(b) < minLib) return false;
+    const e = extRating(b);
+    if ((minExt || minVotes) && (!e || e.avg < minExt || e.votes < minVotes)) return false;
+    if (kids !== null && kids !== '') { const a = kidsAge(b); if (a === null || a > Number(kids)) return false; }
+    return true;
+  });
+  const sort = sp.get('sort');
+  const key = (b: MockBook) => sort === 'my' ? bookRating(lib.id, b.id) : sort === 'lib' ? libRating(b)
+    : sort === 'ext' ? (extRating(b)?.avg ?? 0) * 1e6 + (extRating(b)?.votes ?? 0) : 0;
+  if (sort === 'my' || sort === 'lib' || sort === 'ext') {
+    out = out.map((b, i) => ({ b, i, k: key(b) })).sort((x, y) => y.k - x.k || x.i - y.i).map((x) => x.b);
+  }
+  return out;
+}
+
 function toDetail(lib: MockLibrary, b: MockBook): BookDetail {
+  const e = extRating(b);
+  const h = hash(b.id + 31);
   return {
     ...toBook(lib, b),
+    extRatingInfo: e
+      ? { source: 'openlibrary', status: 'found', average: e.avg, count: e.votes, workKey: `/works/OL${h % 900000}W`, url: `https://openlibrary.org/works/OL${h % 900000}W`, fetchedAt: '2026-09-01T10:00:00Z' }
+      : h % 3 === 0 ? { source: 'openlibrary', status: 'not_found', average: null, count: 0, workKey: null, url: null, fetchedAt: '2026-09-01T10:00:00Z' } : null,
     annotation: b.annotation ?? `<p>The annotation for &laquo;${b.title}&raquo; will appear here after the file is first opened, and will be cached on the server.</p>`,
     hasCover: true,
     file: `${b.key.split(':')[0]}-archive.zip / ${b.id}.${b.ext}`,
@@ -268,6 +326,9 @@ export function installMockApi(server: Connect.Server) {
         if (lang) items = items.filter((b) => b.lang === lang);
         if (ext) items = items.filter((b) => b.ext === ext);
         if (!showDeleted) items = items.filter((b) => !b.deleted);
+        const rated = rateFilterSort(lib, items, url.searchParams);
+        if (typeof rated === 'string') return fail(res, 400, 'bad_request', rated);
+        items = rated;
 
         const { page, next } = paginate(items, cursor, limit);
         return send(res, 200, { books: page.map((b) => toBook(lib, b)), nextCursor: next, total: items.length });
@@ -398,6 +459,9 @@ export function installMockApi(server: Connect.Server) {
         if (extF) { const es = extF.split(','); books = books.filter((b) => es.includes(b.ext)); }
         if (from) books = books.filter((b) => b.date >= from);
         if (to) books = books.filter((b) => b.date <= to);
+        const ratedBooks = rateFilterSort(lib, books, url.searchParams);
+        if (typeof ratedBooks === 'string') return fail(res, 400, 'bad_request', ratedBooks);
+        books = ratedBooks;
         const limit = Math.min(Number(url.searchParams.get('limit') ?? 200) || 200, 1000);
         const total = books.length;
         books = books.slice(0, limit);
@@ -471,6 +535,13 @@ export function installMockApi(server: Connect.Server) {
         store.devices.push(device);
         return send(res, 200, device);
       }
+      if (path === '/api/v1/devices/order' && method === 'PUT') {
+        const body = await readBody(req);
+        const ids: number[] = body.ids ?? [];
+        if (ids.some((id) => !store.devices.some((d) => d.id === id))) return fail(res, 404, 'not_found', 'device not found');
+        store.devices = [...ids.map((id) => store.devices.find((d) => d.id === id)!), ...store.devices.filter((d) => !ids.includes(d.id))];
+        return send(res, 200, store.devices);
+      }
       m = matchLib(req, /^\/api\/v1\/devices\/(\d+)$/);
       if (m && method === 'PUT') {
         const idx = store.devices.findIndex((d) => d.id === Number(m![1]));
@@ -539,12 +610,57 @@ export function installMockApi(server: Connect.Server) {
         return;
       }
 
+      // ---- API tokens (MCP) ----------------------------------------------
+      if (path === '/api/v1/me/tokens' && method === 'GET') {
+        return send(res, 200, {
+          tokens: store.tokens, scopes: ['read', 'write', 'send'],
+          mcp: { enabled: store.settings.mcp?.enabled ?? true, url: `http://${req.headers.host ?? 'localhost'}/mcp` },
+        });
+      }
+      if (path === '/api/v1/me/tokens' && method === 'POST') {
+        const body = await readBody(req);
+        const scopes = ['read', 'write', 'send'].filter((s) => (body.scopes ?? []).includes(s));
+        if (!String(body.name ?? '').trim()) return fail(res, 400, 'bad_request', 'token name must have 1..100 characters');
+        if (!scopes.length) return fail(res, 400, 'bad_request', 'choose at least one scope');
+        let secret = 'fl_';
+        const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+        for (let i = 0; i < 43; i++) secret += abc[Math.floor(Math.random() * abc.length)];
+        const days = Number(body.expiresInDays) || 0;
+        const token = {
+          id: store.nextTokenId++, name: String(body.name).trim(), prefix: secret.slice(0, 11), scopes,
+          createdAt: new Date().toISOString(), lastUsedAt: null,
+          expiresAt: days ? new Date(Date.now() + days * 86400000).toISOString() : null,
+        };
+        store.tokens.unshift(token);
+        return send(res, 200, { token, secret });
+      }
+      if (path === '/api/v1/me/tokens/audit' && method === 'GET') return send(res, 200, store.audit);
+      m = matchLib(req, /^\/api\/v1\/me\/tokens\/(\d+)$/);
+      if (m && method === 'DELETE') {
+        const before = store.tokens.length;
+        store.tokens = store.tokens.filter((x) => x.id !== Number(m![1]));
+        return before === store.tokens.length ? fail(res, 404, 'not_found', 'token not found') : send(res, 204);
+      }
+
       // ---- Settings / users -------------------------------------------
-      if (path === '/api/v1/settings' && method === 'GET') return send(res, 200, store.settings);
+      if (path === '/api/v1/settings' && method === 'GET') {
+        const total = store.libraries.reduce((n, l) => n + l.bookCount, 0);
+        return send(res, 200, {
+          ...store.settings,
+          externalRatings: {
+            enabled: store.settings.externalRatings?.enabled ?? true, source: 'openlibrary', contactSet: false,
+            progress: { lookedUp: Math.round(total * 0.42), found: Math.round(total * 0.3), rated: Math.round(total * 0.24), total },
+            queued: 3, requests: 12840, pausedFor: 0, lastError: null,
+          },
+          mcp: { enabled: store.settings.mcp?.enabled ?? true, url: null },
+        });
+      }
       if (path === '/api/v1/settings' && method === 'PUT') {
         const body = await readBody(req);
         store.settings = {
           ...body,
+          externalRatings: { enabled: body.externalRatings?.enabled ?? store.settings.externalRatings?.enabled ?? true },
+          mcp: { enabled: body.mcp?.enabled ?? store.settings.mcp?.enabled ?? true },
           smtp: (({ password: _pw, ...rest }) => rest)({ ...store.settings.smtp, ...body.smtp, passwordSet: body.smtp?.password === undefined ? store.settings.smtp.passwordSet : body.smtp.password !== '' }),
         };
         return send(res, 200, store.settings);

@@ -35,6 +35,10 @@ pub struct Book {
     pub size: i64,
     pub date: String,
     pub deleted: bool,
+    /// Library rating: INPX `LIBRATE`/`STARS` (0..5, 0 = none).
+    pub lib_rating: i64,
+    /// Age suitability estimate (`kids::age_for`, a heuristic): 0, 6, 12, 16, 18; `None` = unknown.
+    pub kids_age: Option<u8>,
 }
 
 /// A book with its storage location and remaining INPX fields.

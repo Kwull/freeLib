@@ -275,3 +275,77 @@ pub fn links(xml: &[u8]) -> Vec<(String, String, String)> {
         })
         .collect()
 }
+
+/// A local stand-in for openlibrary.org: every search finds one work with the requested title
+/// by "Test <author>"; its ratings are derived from the title. Records each request.
+pub struct FakeOpenLibrary {
+    pub url: String,
+    pub hits: std::sync::Arc<std::sync::Mutex<Vec<(String, std::time::Instant)>>>,
+}
+
+impl FakeOpenLibrary {
+    pub fn count(&self) -> usize {
+        self.hits.lock().unwrap().len()
+    }
+}
+
+/// Work number of a title (stable, digits only).
+pub fn fake_work(title: &str) -> u64 {
+    let mut h: u64 = 1469598103934665603;
+    for b in title.bytes() {
+        h = (h ^ b as u64).wrapping_mul(1099511628211);
+    }
+    h % 1_000_000 + 1
+}
+
+pub async fn fake_openlibrary() -> FakeOpenLibrary {
+    use axum::extract::{Path as UrlPath, Query, State};
+    use std::collections::HashMap;
+    type Hits = std::sync::Arc<std::sync::Mutex<Vec<(String, std::time::Instant)>>>;
+    let hits: Hits = Default::default();
+    async fn search(
+        State(h): State<Hits>,
+        Query(q): Query<HashMap<String, String>>,
+    ) -> axum::Json<Value> {
+        let title = q.get("title").cloned().unwrap_or_default();
+        let author = q.get("author").cloned().unwrap_or_default();
+        h.lock()
+            .unwrap()
+            .push((format!("search {title}"), std::time::Instant::now()));
+        axum::Json(serde_json::json!({"numFound": 1, "docs": [{
+            "key": format!("/works/OL{}W", fake_work(&title)),
+            "title": title, "author_name": [format!("Test {author}")], "ratings_count": 5
+        }]}))
+    }
+    async fn ratings(State(h): State<Hits>, UrlPath(id): UrlPath<String>) -> axum::Json<Value> {
+        h.lock()
+            .unwrap()
+            .push((format!("ratings {id}"), std::time::Instant::now()));
+        let n: u64 = id
+            .trim_start_matches("OL")
+            .trim_end_matches('W')
+            .parse()
+            .unwrap_or(1);
+        axum::Json(serde_json::json!({"summary": {
+            "average": 1.0 + (n % 40) as f64 / 10.0, "count": 1 + n % 97
+        }}))
+    }
+    let app = axum::Router::new()
+        .route("/search.json", axum::routing::get(search))
+        .route("/works/{id}/ratings.json", axum::routing::get(ratings))
+        .with_state(hits.clone());
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(l, app).await;
+    });
+    FakeOpenLibrary {
+        url: format!("http://{addr}"),
+        hits,
+    }
+}
+
+/// Expected Open Library average of a fake work.
+pub fn fake_avg(title: &str) -> f64 {
+    1.0 + (fake_work(title) % 40) as f64 / 10.0
+}

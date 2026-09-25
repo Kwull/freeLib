@@ -43,25 +43,32 @@ pub struct SearchQuery {
     pub include_deleted: bool,
     /// Max books returned (the API clamps to 1..=1000; default 200).
     pub limit: usize,
+    /// Rating filters (applied before facets are counted) and an optional rating sort
+    /// (instead of relevance; relevance breaks ties).
+    pub rating: crate::rank::RatingQuery,
 }
 
-const FLAG_EXISTS: u8 = 1;
-const FLAG_DELETED: u8 = 2;
+pub(crate) const FLAG_EXISTS: u8 = 1;
+pub(crate) const FLAG_DELETED: u8 = 2;
 
 /// Compact per-book attributes, indexed by book id.
 pub struct BookAttrs {
-    flags: Vec<u8>,
-    lang: Vec<u16>,
-    ext: Vec<u16>,
+    pub(crate) flags: Vec<u8>,
+    pub(crate) lang: Vec<u16>,
+    pub(crate) ext: Vec<u16>,
     /// `yyyymmdd` as an integer, 0 = unknown.
-    date: Vec<u32>,
-    genre_off: Vec<u32>,
-    genre_ids: Vec<u16>,
-    langs: Vec<String>,
-    exts: Vec<String>,
+    pub(crate) date: Vec<u32>,
+    /// INPX stars (library rating) 0..5.
+    pub(crate) stars: Vec<u8>,
+    /// Age estimate (`kids::age_code`), `kids::AGE_UNKNOWN` = unknown.
+    pub(crate) age: Vec<u8>,
+    pub(crate) genre_off: Vec<u32>,
+    pub(crate) genre_ids: Vec<u16>,
+    pub(crate) langs: Vec<String>,
+    pub(crate) exts: Vec<String>,
 }
 
-fn date_num(s: &str) -> u32 {
+pub(crate) fn date_num(s: &str) -> u32 {
     let d: String = s.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
     if d.len() == 8 {
         d.parse().unwrap_or(0)
@@ -80,6 +87,8 @@ impl BookAttrs {
             lang: vec![0; n],
             ext: vec![0; n],
             date: vec![0; n],
+            stars: vec![0; n],
+            age: vec![crate::kids::AGE_UNKNOWN; n],
             genre_off: vec![0; n + 1],
             genre_ids: Vec::new(),
             langs: Vec::new(),
@@ -87,7 +96,10 @@ impl BookAttrs {
         };
         let mut lang_idx: HashMap<String, u16> = HashMap::new();
         let mut ext_idx: HashMap<String, u16> = HashMap::new();
-        let mut st = conn.prepare("SELECT id, lang, ext, date, deleted FROM book")?;
+        // keywords only feed the age estimate; most books have none
+        let mut keywords: Vec<(u32, String)> = Vec::new();
+        let mut st =
+            conn.prepare("SELECT id, lang, ext, date, deleted, stars, keywords FROM book")?;
         let mut q = st.query([])?;
         while let Some(r) = q.next()? {
             let id = r.get::<_, i64>(0)? as usize;
@@ -114,6 +126,11 @@ impl BookAttrs {
             a.lang[id] = li;
             a.ext[id] = ei;
             a.date[id] = date_num(r.get_ref(3)?.as_str().unwrap_or(""));
+            a.stars[id] = r.get::<_, i64>(5)?.clamp(0, 5) as u8;
+            let kw = r.get_ref(6)?.as_str().unwrap_or("");
+            if !kw.is_empty() {
+                keywords.push((id as u32, kw.to_string()));
+            }
             a.flags[id] = FLAG_EXISTS
                 | if r.get::<_, i64>(4)? != 0 {
                     FLAG_DELETED
@@ -142,7 +159,82 @@ impl BookAttrs {
         }
         a.genre_off[n] = off;
         a.genre_ids = pairs.into_iter().map(|(_, g)| g).collect();
+        let mut kw_iter = keywords.into_iter().peekable();
+        for i in 0..n {
+            if a.flags[i] & FLAG_EXISTS == 0 {
+                continue;
+            }
+            let kw = match kw_iter.peek() {
+                Some((k, _)) if *k as usize == i => kw_iter.next().map(|x| x.1),
+                _ => None,
+            };
+            let g = &a.genre_ids[a.genre_off[i] as usize..a.genre_off[i + 1] as usize];
+            if !g.is_empty() || kw.is_some() {
+                a.age[i] = crate::kids::age_code(g, kw.as_deref().unwrap_or(""));
+            }
+        }
         Ok(a)
+    }
+
+    /// Library rating (INPX stars) of book `id`.
+    pub fn stars(&self, id: i64) -> u8 {
+        self.stars.get(id as usize).copied().unwrap_or(0)
+    }
+
+    /// Age estimate of book `id` (`None` = unknown).
+    pub fn age(&self, id: i64) -> Option<u8> {
+        self.age
+            .get(id as usize)
+            .copied()
+            .filter(|a| *a != crate::kids::AGE_UNKNOWN)
+    }
+
+    /// Genre ids of book `id`.
+    pub fn genres(&self, id: i64) -> &[u16] {
+        let i = id as usize;
+        if i + 1 >= self.genre_off.len() {
+            return &[];
+        }
+        self.genres_of(i)
+    }
+
+    /// `yyyymmdd` of book `id`, 0 = unknown.
+    pub fn date(&self, id: i64) -> u32 {
+        self.date.get(id as usize).copied().unwrap_or(0)
+    }
+
+    /// Language code of book `id`.
+    pub fn lang(&self, id: i64) -> &str {
+        self.lang
+            .get(id as usize)
+            .and_then(|l| self.langs.get(*l as usize))
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    /// Whether book `id` exists and is live (not deleted).
+    pub fn is_live(&self, id: i64) -> bool {
+        self.flags
+            .get(id as usize)
+            .is_some_and(|f| f & FLAG_EXISTS != 0 && f & FLAG_DELETED == 0)
+    }
+
+    /// Number of id slots (max id + 1).
+    pub fn len(&self) -> usize {
+        self.flags.len()
+    }
+
+    /// Whether the catalog has no books.
+    pub fn is_empty(&self) -> bool {
+        self.flags.len() <= 1
+    }
+
+    /// Ids of the books matching a genre set / date bound and the list filters (except the text
+    /// filter), in id order.
+    pub(crate) fn scan(&self, sel: &CountSel, f: &BookFilter) -> Vec<i64> {
+        let mut out = Vec::new();
+        self.for_each_match(sel, f, |i| out.push(i as i64));
+        out
     }
 
     fn genres_of(&self, id: usize) -> &[u16] {
@@ -151,6 +243,12 @@ impl BookAttrs {
 
     /// Count books matching a genre set / date lower bound and the list filters.
     pub(crate) fn count(&self, sel: &CountSel, f: &BookFilter) -> i64 {
+        let mut n = 0i64;
+        self.for_each_match(sel, f, |_| n += 1);
+        n
+    }
+
+    fn for_each_match(&self, sel: &CountSel, f: &BookFilter, mut hit: impl FnMut(usize)) {
         let lang_ok: Vec<bool> = self
             .langs
             .iter()
@@ -167,7 +265,6 @@ impl BookAttrs {
             CountSel::Newer(d) => (Vec::new(), date_num(d) + 1),
         };
         gset.sort_unstable();
-        let mut n = 0i64;
         for i in 0..self.flags.len() {
             let fl = self.flags[i];
             if fl & FLAG_EXISTS == 0 || (!f.include_deleted && fl & FLAG_DELETED != 0) {
@@ -187,14 +284,13 @@ impl BookAttrs {
             {
                 continue;
             }
-            n += 1;
+            hit(i);
         }
-        n
     }
 
     /// Approximate heap size in bytes.
     pub fn memory_bytes(&self) -> usize {
-        self.flags.len() * (1 + 2 + 2 + 4 + 4) + self.genre_ids.len() * 2
+        self.flags.len() * (1 + 2 + 2 + 4 + 1 + 1 + 4) + self.genre_ids.len() * 2
     }
 }
 
@@ -224,6 +320,15 @@ impl Catalog {
     /// Full-text search over titles, authors, series and keywords, plus author and series name
     /// matches. `q` must have at least 2 characters, otherwise the result is empty.
     pub fn search(&self, sq: &SearchQuery) -> Result<SearchResult> {
+        self.search_rated(sq, &crate::rank::NoRatings)
+    }
+
+    /// [`search`](Self::search) with the user's and external ratings for `sq.rating`.
+    pub fn search_rated(
+        &self,
+        sq: &SearchQuery,
+        src: &dyn crate::rank::RatingSource,
+    ) -> Result<SearchResult> {
         let started = Instant::now();
         let mut res = SearchResult::default();
         let fts = match fts_query(&sq.q) {
@@ -275,9 +380,33 @@ impl Catalog {
                 st.query_map([&fts], |r| Ok((r.get(0)?, r.get(1)?)))?
                     .collect::<rusqlite::Result<_>>()?
             };
+            let hits: Vec<(i64, f64)> = if sq.rating.has_filter() {
+                hits.into_iter()
+                    .filter(|(id, _)| {
+                        (*id as usize) < attrs.flags.len() && sq.rating.accepts(*id, &attrs, src)
+                    })
+                    .collect()
+            } else {
+                hits
+            };
             let (ranked, total, facets) = filter_and_facet(&attrs, &hits, sq);
             let limit = sq.limit.clamp(1, 1000);
-            let top = top_n(ranked, limit, &attrs);
+            let top = if sq.rating.sort != crate::rank::RatingSort::None {
+                let mut keyed: Vec<(u64, f64, i64)> = ranked
+                    .into_iter()
+                    .map(|(id, score)| (sq.rating.key(id, &attrs, src), score, id))
+                    .collect();
+                keyed.sort_by(|a, b| {
+                    b.0.cmp(&a.0)
+                        .then(a.1.total_cmp(&b.1))
+                        .then_with(|| attrs.date[b.2 as usize].cmp(&attrs.date[a.2 as usize]))
+                        .then(a.2.cmp(&b.2))
+                });
+                keyed.truncate(limit);
+                keyed.into_iter().map(|x| x.2).collect()
+            } else {
+                top_n(ranked, limit, &attrs)
+            };
             res.books = load_books(&conn, &top)?;
             res.total = total;
             res.facets = facets;

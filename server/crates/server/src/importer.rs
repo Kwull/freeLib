@@ -174,6 +174,8 @@ fn finish(
                     st.jobs.done(&job_id, &msg, None);
                     st.emit_library(rt.id);
                     warm(st, rt, cat);
+                    // new books for the rating sweep
+                    st.ext.wake();
                 }
                 Err(e) => {
                     let m = format!("imported catalog cannot be opened: {e}");
@@ -239,7 +241,8 @@ pub fn warm(st: &AppState, rt: &Arc<LibRuntime>, cat: Arc<freelib_catalog::Catal
                 body.encoded("gzip");
             }
         }
-        let _ = &st;
+        // the external-rating index used by rating sorts and filters
+        st.ext.dense(rt.id, &cat);
         tracing::info!(
             lib = rt.id,
             ms = t.elapsed().as_millis() as u64,

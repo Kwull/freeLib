@@ -15,6 +15,7 @@ pub mod oidc;
 pub mod session;
 pub mod settings;
 pub mod shelves;
+pub mod tokens;
 
 /// JSON request bodies above this size are refused.
 pub const BODY_LIMIT: usize = 1024 * 1024;
@@ -62,6 +63,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/shelves/{id}/books", post(shelves::books))
         .route("/devices", get(devices::list).post(devices::create))
+        .route("/devices/order", put(devices::order))
         .route(
             "/devices/{id}",
             put(devices::update).delete(devices::delete),
@@ -79,6 +81,9 @@ pub fn router() -> Router<AppState> {
             "/users/{id}",
             axum::routing::patch(settings::update_user).delete(settings::delete_user),
         )
+        .route("/me/tokens", get(tokens::list).post(tokens::create))
+        .route("/me/tokens/audit", get(tokens::audit))
+        .route("/me/tokens/{id}", axum::routing::delete(tokens::revoke))
         .route(
             "/me/prefs",
             get(settings::get_prefs).put(settings::put_prefs),

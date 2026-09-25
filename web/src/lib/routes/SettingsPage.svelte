@@ -7,11 +7,12 @@
   import { t, i18nState, setLang } from '../i18n';
   import { themeState, setTheme } from '../stores/theme.svelte';
   import { librariesState, loadLibraries, setCurrentLibrary } from '../stores/libraries.svelte';
-  import { devicesState, loadDevices } from '../stores/devices.svelte';
+  import { devicesState, loadDevices, reorderDevices } from '../stores/devices.svelte';
   import { sessionState } from '../stores/session.svelte';
   import Icon from '../components/Icon.svelte';
   import Dialog from '../components/Dialog.svelte';
   import ConvertOptionsEditor from '../components/ConvertOptionsEditor.svelte';
+  import ApiTokens from '../components/ApiTokens.svelte';
   import { showToast } from '../stores/toast.svelte';
 
   let { section }: { section: string | null } = $props();
@@ -89,6 +90,31 @@
     }
   }
   const kindLabel = (k: string) => t(`settings.devices.kind.${k}`);
+
+  // ---- device order (per user; the first device is the default)
+  let dragId = $state<number | null>(null);
+  let dropIndex = $state<number | null>(null);
+  async function moveDevice(id: number, to: number) {
+    const ids = devicesState.items.map((d) => d.id);
+    const from = ids.indexOf(id);
+    if (from < 0 || to < 0 || to >= ids.length || from === to) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, id);
+    try {
+      await reorderDevices(ids);
+    } catch (e) {
+      showToast(errorText(e), 'error');
+      loadDevices();
+    }
+  }
+  function onDrop(e: DragEvent, index: number) {
+    e.preventDefault();
+    if (dragId !== null) {
+      const from = devicesState.items.findIndex((d) => d.id === dragId);
+      moveDevice(dragId, from < index ? index - 1 : index);
+    }
+    dragId = null; dropIndex = null;
+  }
 
   async function saveSettings(opts: { clearPassword?: boolean; quiet?: boolean } = {}): Promise<boolean> {
     if (!settings) return false;
@@ -211,7 +237,7 @@
 <main class="settings-page">
   <nav class="tabs" aria-label={t('settings.title')}>
     {#each sections as s (s)}
-      {#if (s !== 'users' && s !== 'mail' && s !== 'server' || isAdmin) && (s !== 'account' || !sessionState.openMode)}
+      {#if s !== 'users' && s !== 'mail' && s !== 'server' || isAdmin}
         <button type="button" class:active={sec === s} onclick={() => navigate(`/settings/${s}`)}>{t(`settings.${s}`)}</button>
       {/if}
     {/each}
@@ -241,7 +267,9 @@
       </label>
     {:else if sec === 'account'}
       <h2>{t('settings.account')}</h2>
-      {#if accountError}
+      {#if sessionState.openMode}
+        <p class="muted">{t('tokens.openMode')}</p>
+      {:else if accountError}
         <p class="warn">{accountError}</p>
       {:else if account}
         <p class="muted" data-testid="account-user">{t('account.signedInAs', { name: account.user.username })} · {t(`settings.users.role.${account.user.role}`)}</p>
@@ -276,18 +304,43 @@
           </form>
         </section>
       {/if}
+      <ApiTokens />
     {:else if sec === 'devices'}
       <h2>{t('settings.devices')}</h2>
-      <div class="device-list">
-        {#each devicesState.items as d (d.id)}
+      <p class="muted hint">{t('settings.devices.orderHint')}</p>
+      <div class="device-list" role="list" aria-label={t('settings.devices')}>
+        {#each devicesState.items as d, i (d.id)}
           {@const canEdit = isAdmin || (!d.shared && d.kind !== 'folder')}
-          <div class="device-row">
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="device-row"
+            role="listitem"
+            data-testid="device-row"
+            class:dragging={dragId === d.id}
+            class:drop-before={dropIndex === i && dragId !== null && dragId !== d.id}
+            ondragover={(e) => { if (dragId !== null) { e.preventDefault(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); dropIndex = e.clientY > r.top + r.height / 2 ? i + 1 : i; } }}
+            ondrop={(e) => onDrop(e, dropIndex ?? i)}
+          >
+            <span
+              class="handle"
+              draggable="true"
+              role="img"
+              aria-label={t('settings.devices.dragHandle')}
+              title={t('settings.devices.dragHandle')}
+              ondragstart={(e) => { dragId = d.id; e.dataTransfer?.setData('text/plain', String(d.id)); if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'; }}
+              ondragend={() => { dragId = null; dropIndex = null; }}
+            ><Icon name="grip" size={16} strokeWidth={3} /></span>
+            <span class="order-btns">
+              <button type="button" class="mini" disabled={i === 0} aria-label={t('settings.devices.moveUp', { name: d.name })} title={t('settings.devices.moveUp', { name: d.name })} onclick={() => moveDevice(d.id, i - 1)}><Icon name="chevronUp" size={14} /></button>
+              <button type="button" class="mini" disabled={i === devicesState.items.length - 1} aria-label={t('settings.devices.moveDown', { name: d.name })} title={t('settings.devices.moveDown', { name: d.name })} onclick={() => moveDevice(d.id, i + 1)}><Icon name="chevronDown" size={14} /></button>
+            </span>
             <div class="dinfo">
               <span class="name">{d.name}</span>
               <span class="muted">
                 {kindLabel(d.kind)} · {d.format.toUpperCase()}{#if d.kind !== 'download'}{' · '}{#if d.target}<span class="target">{d.target}</span>{:else}<span class="warn">{d.kind === 'email' ? t('settings.devices.noAddress') : t('settings.devices.noFolder')}</span>{/if}{/if}
               </span>
             </div>
+            {#if i === 0}<span class="badge default-badge" title={t('settings.devices.defaultHint')}>{t('settings.devices.default')}</span>{/if}
             {#if d.shared}<span class="badge" title={t('settings.devices.shared')}>{t('settings.devices.sharedShort')}</span>{/if}
             {#if canEdit}
               <button type="button" class="btn" onclick={() => (editingDevice = { ...d, options: { ...d.options } })}>{t('common.edit')}</button>
@@ -344,6 +397,31 @@
       <h2>{t('settings.server')}</h2>
       <label class="checkbox"><input type="checkbox" bind:checked={settings.opds.enabled} />{t('settings.server.opdsEnabled')}</label>
       <label class="checkbox"><input type="checkbox" bind:checked={settings.opds.requireAuth} />{t('settings.server.opdsAuth')}</label>
+      {#if settings.mcp}
+        <label class="checkbox"><input type="checkbox" bind:checked={settings.mcp.enabled} data-testid="mcp-enabled" />{t('settings.server.mcpEnabled')}</label>
+        <p class="muted hint">{t('settings.server.mcpHint')}</p>
+      {/if}
+      {#if settings.externalRatings}
+        {@const er = settings.externalRatings}
+        <section class="acc-block" data-testid="ext-ratings">
+          <h3>{t('settings.server.extTitle')}</h3>
+          <label class="checkbox"><input type="checkbox" bind:checked={er.enabled} data-testid="ext-enabled" />{t('settings.server.extEnabled')}</label>
+          <p class="muted hint">{t('settings.server.extPrivacy')}</p>
+          {#if er.progress}
+            {@const pct = er.progress.total ? Math.min(100, (er.progress.lookedUp / er.progress.total) * 100) : 0}
+            <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(pct)} aria-label={t('settings.server.extProgress')}>
+              <div class="bar" style:width="{pct}%"></div>
+            </div>
+            <p class="small" data-testid="ext-progress">
+              {t('settings.server.extCounts', { looked: er.progress.lookedUp.toLocaleString(), total: er.progress.total.toLocaleString(), found: er.progress.found.toLocaleString(), rated: er.progress.rated.toLocaleString() })}
+              {#if er.queued}· {t('settings.server.extQueued', { n: er.queued })}{/if}
+            </p>
+            {#if er.pausedFor}<p class="warn small">{t('settings.server.extPaused', { s: er.pausedFor })}</p>{/if}
+            {#if er.lastError}<p class="muted small">{t('settings.server.extLastError')}: {er.lastError}</p>{/if}
+            {#if !er.contactSet}<p class="muted small">{t('settings.server.extContact')}</p>{/if}
+          {/if}
+        </section>
+      {/if}
       <div class="row">
         <span>{t('settings.server.calibre')}:</span>
         <span>{settings.calibre.available ? `${t('settings.server.calibreAvailable')} (${settings.calibre.version})` : t('settings.server.calibreMissing')}</span>
@@ -446,6 +524,15 @@
   .device-list { display: flex; flex-direction: column; gap: 4px; }
   .device-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
   .device-row { padding: 10px 12px; }
+  .device-row.dragging { opacity: .5; }
+  .device-row.drop-before { box-shadow: 0 -2px 0 var(--accent); }
+  .handle { cursor: grab; color: var(--muted); display: flex; align-items: center; padding: 4px 2px; }
+  .handle:active { cursor: grabbing; }
+  .order-btns { display: flex; flex-direction: column; gap: 1px; }
+  .mini { width: 22px; height: 16px; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--muted-2); display: flex; align-items: center; justify-content: center; }
+  .mini:disabled { opacity: .35; }
+  .mini:hover:not(:disabled) { background: var(--surface-hover); }
+  .default-badge { background: var(--accent); color: #fff; }
   .dinfo { display: flex; flex-direction: column; gap: 2px; flex-grow: 1; min-width: 0; }
   .device-row .name { font-weight: 500; }
   .device-row .muted { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -473,4 +560,7 @@
   .acc-block p { margin: 0; font-size: 14px; }
   .pw-form { display: flex; flex-direction: column; gap: 10px; }
   h2 + .muted { margin: -8px 0 0; }
+  .hint, .small { font-size: 12px; margin: 0; }
+  .progress { height: 8px; border-radius: 4px; background: var(--surface-hover); overflow: hidden; }
+  .progress .bar { height: 100%; background: var(--accent); }
 </style>

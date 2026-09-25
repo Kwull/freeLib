@@ -18,7 +18,7 @@ test('browse an author, select books, open send dialog', async ({ page, request 
   await page.getByRole('checkbox', { name: `Select ${books[1].title}` }).check();
 
   await expect(page.getByText('2 selected')).toBeVisible();
-  await page.getByRole('button', { name: 'Send to…' }).click();
+  await page.getByTestId('selection-send').click();
 
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.getByText(`«${books[0].title}», «${books[1].title}»`)).toBeVisible();

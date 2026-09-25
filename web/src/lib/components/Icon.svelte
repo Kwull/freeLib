@@ -6,6 +6,8 @@
     search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Zm9 2-3.5-3.5',
     close: 'M6 6l12 12M18 6 6 18',
     chevronDown: 'm6 9 6 6 6-6',
+    chevronUp: 'm6 15 6-6 6 6',
+    grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
     chevronRight: 'm9 6 6 6-6 6',
     chevronLeft: 'm15 6-6 6 6 6',
     send: 'M22 2 11 13M22 2 15 22l-4-9-9-4Z',

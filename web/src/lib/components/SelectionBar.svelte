@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { t } from '../i18n';
-  import { preferredDevice as defaultDevice } from '../stores/devices.svelte';
+  import { defaultDevice, deviceVerb, deviceCaption } from '../stores/devices.svelte';
 
   let {
     count, onSend, onDownload, onShelf, onClear,
@@ -9,6 +9,10 @@
 
   let menuOpen = $state(false);
   const device = $derived(defaultDevice());
+  // the plain verb of the default device (first in the user's order); the dialog lets the
+  // user pick another device
+  const verb = $derived(device ? t(`device.action.${deviceVerb(device)}`) : t('selection.sendTo'));
+  const icon = $derived(device && deviceVerb(device) !== 'send' ? 'download' : 'send');
 
   function act(fn: () => void) {
     menuOpen = false;
@@ -19,13 +23,13 @@
 {#if count > 0}
   <div role="region" aria-label="Selection" class="bar">
     <span class="count"><b>{count}</b> {t('selection.selected')}</span>
-    <button type="button" class="primary desktop-only" onclick={onSend}><Icon name="send" size={16} />{t('selection.sendTo')}</button>
+    <button type="button" class="primary desktop-only" data-testid="selection-send" title={device ? deviceCaption(device) : undefined} onclick={onSend}><Icon name={icon} size={16} />{verb}…</button>
     <button type="button" class="ghost desktop-only" onclick={onDownload}><Icon name="download" size={16} />{t('selection.download')}</button>
     <button type="button" class="ghost desktop-only" onclick={onShelf}><Icon name="shelves" size={16} />{t('selection.shelf')}</button>
 
-    <button type="button" class="primary phone-only" onclick={onSend}>
-      <Icon name="send" size={16} />
-      {device ? t('details.sendToDevice', { device: device.name }) : t('selection.sendTo')}
+    <button type="button" class="primary phone-only" title={device ? deviceCaption(device) : undefined} onclick={onSend}>
+      <Icon name={icon} size={16} />
+      {verb}…
     </button>
     <div class="more phone-only">
       <button type="button" class="icon" aria-label="More" aria-haspopup="true" aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}>⋯</button>

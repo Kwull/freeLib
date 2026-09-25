@@ -1,5 +1,5 @@
 import { generateLibrary, type MockLibrary } from './gen';
-import type { Device, Job, Shelf, Settings, User, Library, ConvertOptions } from '../src/lib/api/types';
+import type { Device, Job, Shelf, Settings, User, Library, ConvertOptions, ApiToken, AuditRow } from '../src/lib/api/types';
 
 const defaultOptions: ConvertOptions = {
   hyphenate: 'soft', footnotes: 'end', dropCaps: false, breakAfterChapter: true,
@@ -35,6 +35,15 @@ export const store = {
     calibre: { available: true, version: '7.4.0' },
   } as Settings,
   prefs: new Map<string, Record<string, unknown>>(),
+  tokens: [
+    { id: 1, name: 'Claude Desktop', prefix: 'fl_Q3v9KmZ2', scopes: ['read', 'send'], createdAt: '2026-09-10T08:12:00Z', lastUsedAt: '2026-09-24T19:40:00Z', expiresAt: null },
+  ] as ApiToken[],
+  nextTokenId: 2,
+  audit: [
+    { id: 3, tokenId: 1, tokenName: 'Claude Desktop', tool: 'send_books', ok: true, detail: '{"book_ids":[5],"device":"default"}', at: '2026-09-24T19:40:00Z' },
+    { id: 2, tokenId: 1, tokenName: 'Claude Desktop', tool: 'suggest_candidates', ok: true, detail: '{"limit":10}', at: '2026-09-24T19:38:10Z' },
+    { id: 1, tokenId: 1, tokenName: 'Claude Desktop', tool: 'rate_book', ok: false, detail: '{"id":5,"rating":5}', at: '2026-09-24T19:37:02Z' },
+  ] as AuditRow[],
   nextClientId: 1,
   nextJobId: 1,
   nextDeviceId: 7,
@@ -61,6 +70,7 @@ function libMetaFor(id: number, name: string, isDefault: boolean): LibraryMeta {
     importedAt: '2026-08-01T10:00:00Z', catalogVersion: 1, newSinceLastVisit: 12,
     status: { state: 'idle' },
     opdsUrl: `/opds/${id}`,
+    externalRatings: { lookedUp: Math.round(c.books.length * 0.42), found: Math.round(c.books.length * 0.3), rated: Math.round(c.books.length * 0.24) },
   };
 }
 

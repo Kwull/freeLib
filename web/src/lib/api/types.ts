@@ -15,7 +15,12 @@ export type Library = {
   newSinceLastVisit: number;
   status: LibraryStatus;
   opdsUrl: string;
+  /** Open Library lookups of this library's books (absent on older servers). */
+  externalRatings?: ExtProgress;
 };
+
+/** Progress of the Open Library enrichment. */
+export type ExtProgress = { lookedUp: number; found: number; rated: number };
 
 export type AuthorRef = { id: number; name: string };
 export type SeriesRef = { id: number; name: string };
@@ -29,11 +34,47 @@ export type Book = {
   lang: string; ext: string; size: number;
   date: string;
   deleted: boolean;
+  /** my rating 0..5 (0 = not rated) */
   rating: number;
   shelves: number[];
+  /** library (INPX) rating 0..5, 0 = none */
+  libRating: number;
+  /** Open Library average and vote count, when known and rated */
+  extRating: { avg: number; votes: number } | null;
+  /** age suitability estimate (heuristic): 0, 6, 12, 16, 18; null = unknown */
+  kidsAge: number | null;
+};
+
+/** The cached Open Library lookup of a book. */
+export type ExtRatingInfo = {
+  source: 'openlibrary';
+  status: 'found' | 'not_found' | 'error';
+  average: number | null;
+  count: number;
+  workKey: string | null;
+  url: string | null;
+  fetchedAt: string;
+};
+
+/** Rating filters / sort of book lists and search (server side). */
+export type RatingParams = {
+  sort?: 'my' | 'lib' | 'ext';
+  minMy?: number; minLib?: number; minExt?: number; minExtVotes?: number;
+  unratedByMe?: boolean; kidsMaxAge?: number;
+};
+
+export type ApiToken = {
+  id: number; name: string; prefix: string; scopes: TokenScope[];
+  createdAt: string; lastUsedAt: string | null; expiresAt: string | null;
+};
+export type TokenScope = 'read' | 'write' | 'send';
+export type TokensResponse = { tokens: ApiToken[]; scopes: TokenScope[]; mcp: { enabled: boolean; url: string } };
+export type AuditRow = {
+  id: number; tokenId: number | null; tokenName: string | null; tool: string; ok: boolean; detail: string; at: string;
 };
 
 export type BookDetail = Book & {
+  extRatingInfo?: ExtRatingInfo | null;
   annotation: string | null;
   hasCover: boolean;
   file: string;
@@ -162,6 +203,14 @@ export type Settings = {
   smtp: SmtpSettings;
   opds: { enabled: boolean; requireAuth: boolean };
   calibre: { available: boolean; version: string | null };
+  /** Open Library ratings: the admin switch and the enrichment progress (read-only parts) */
+  externalRatings?: {
+    enabled: boolean; source?: string; contactSet?: boolean;
+    progress?: ExtProgress & { total: number };
+    queued?: number; requests?: number; pausedFor?: number; lastError?: string | null;
+  };
+  /** the MCP endpoint (/mcp) */
+  mcp?: { enabled: boolean; url?: string | null };
 };
 
 export type ApiErrorCode =

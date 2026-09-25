@@ -166,7 +166,9 @@ pub async fn delete(
         .iter()
         .map(|k| st.cache_dir(k, id))
         .collect();
+    let ext = st.ext.clone();
     tokio::task::spawn_blocking(move || {
+        ext.remove_library(id);
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_file(freelib_import::new_db_path(&db_path));
         for c in caches {

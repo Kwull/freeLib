@@ -17,6 +17,8 @@ A self-hosted web catalog for large e-book libraries described by INPX files (Fl
   - the original file, or a copy into a server folder
   - per-device formatting: hyphenation, footnote style, drop caps, generated covers, embedded fonts, custom CSS, file name templates, joining a series into one book
 - **Read in the browser** — a built-in EPUB reader with table of contents, themes and remembered position.
+- **Ratings** — your own, the library's (INPX) and Open Library's, as optional columns, filters and sorts; plus a (heuristic) "suitable for age" badge and filter.
+- **AI assistants (MCP)** — a built-in MCP server (`/mcp`) with personal API tokens: Claude and other MCP clients can search, suggest what to read next, manage shelves and send books to your devices. See [DOCKER.md](docs/web/DOCKER.md#ai-assistants-mcp).
 - **OPDS catalog** — use KOReader, Moon+ Reader, KyBook or FBReader directly with the server (`/opds`).
 - **Multi-user** — accounts with admin and reader roles, personal shelves, ratings and devices.
 - **Single sign-on** — optional OpenID Connect login (Pocket ID, Authelia, Authentik, Keycloak, Google…) next to local accounts, with admin rights from a provider group.

@@ -74,7 +74,16 @@ pub async fn detail(
         .pop()
         .ok_or_else(|| ApiError::internal("book lost"))?;
     let mut v = serde_json::to_value(&b).map_err(|e| ApiError::internal(e.to_string()))?;
+    let (ext, key) = (st.ext.clone(), d.book.key.clone());
+    let ext_info = tokio::task::spawn_blocking(move || ext.entry(lib, &key)).await?;
+    // the user looks at this book: fetch its external rating soon (priority 1)
+    if ext_info.as_ref().is_none_or(|e| {
+        !crate::extrating::is_fresh(&e.status, e.fetched_unix, crate::util::unix_now())
+    }) {
+        st.ext.enqueue(crate::extrating::Priority::User, lib, &[id]);
+    }
     if let Some(o) = v.as_object_mut() {
+        o.insert("extRatingInfo".into(), serde_json::json!(ext_info));
         o.insert("annotation".into(), serde_json::json!(info.annotation));
         o.insert("hasCover".into(), serde_json::json!(info.cover.is_some()));
         o.insert("file".into(), serde_json::json!(d.display_file()));
@@ -281,5 +290,11 @@ pub async fn file(
     let produced = output::produce(&st, lib, &dir, &d, &format, &opts, None).await?;
     let name = output::download_name(&st, &template, &d.book, &format, opts.transliterate, true);
     let ext = output::file_ext(&format, &d.book.ext);
+    let action = if inline { "read" } else { "download" };
+    let (uid, key, dev_name) = (u.id, d.book.key.clone(), q.device.map(|x| x.to_string()));
+    let _ = st
+        .db
+        .run(move |c| db::add_history(c, uid, lib, &[key], action, dev_name.as_deref()))
+        .await;
     file_response(produced, &name, &ext, inline).await
 }

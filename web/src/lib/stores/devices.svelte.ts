@@ -1,7 +1,8 @@
 import { api } from '../api/client';
-import { getPref, setPref } from './prefs.svelte';
 import type { Device } from '../api/types';
 
+// Devices come from the server in the user's own order (Settings → Devices, stored per user
+// on the server); the first one is the default for quick sends here and for MCP clients.
 export const devicesState = $state<{ items: Device[]; loaded: boolean }>({ items: [], loaded: false });
 
 export async function loadDevices() {
@@ -9,16 +10,29 @@ export async function loadDevices() {
   devicesState.loaded = true;
 }
 
+/** The user's default device: the first in their order. */
 export function defaultDevice(): Device | null {
   return devicesState.items[0] ?? null;
 }
 
-/** The device of the last send (per user prefs), else the first one. */
+/** Kept for callers: the default device (first in the user's order). */
 export function preferredDevice(): Device | null {
-  const last = getPref<number | null>('lastDevice', null);
-  return devicesState.items.find((d) => d.id === last) ?? defaultDevice();
+  return defaultDevice();
 }
 
-export function rememberDevice(id: number) {
-  if (getPref('lastDevice', null) !== id) setPref('lastDevice', id);
+/** Saves a new order (all visible device ids, first = default). Optimistic. */
+export async function reorderDevices(ids: number[]) {
+  const byId = new Map(devicesState.items.map((d) => [d.id, d]));
+  devicesState.items = ids.map((id) => byId.get(id)).filter((d): d is Device => !!d);
+  devicesState.items = await api.orderDevices(ids);
+}
+
+/** The verb of a device's action: send (e-mail), download, export (server folder). */
+export function deviceVerb(d: Device): 'send' | 'download' | 'export' {
+  return d.kind === 'email' ? 'send' : d.kind === 'folder' ? 'export' : 'download';
+}
+
+/** "Kindle (USB) · AZW3" */
+export function deviceCaption(d: Device): string {
+  return `${d.name} · ${d.format === 'original' ? 'original' : d.format.toUpperCase()}`;
 }

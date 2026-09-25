@@ -205,6 +205,31 @@ pub async fn send(
     Ok(Json(sender::start(&st, &u, req).await?))
 }
 
+#[derive(Deserialize)]
+pub struct OrderBody {
+    ids: Vec<i64>,
+}
+
+/// `PUT /devices/order`: the user's device order (the first device is their default).
+pub async fn order(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Json(b): Json<OrderBody>,
+) -> ApiResult<Json<Vec<Device>>> {
+    if b.ids.len() > 1000 {
+        return Err(ApiError::bad_request("too many devices"));
+    }
+    let uid = u.id;
+    Ok(Json(
+        st.db
+            .run(move |c| {
+                db::set_device_order(c, uid, &b.ids)?;
+                db::list_devices(c, uid)
+            })
+            .await?,
+    ))
+}
+
 pub async fn fonts(State(st): State<AppState>, _: Auth) -> Json<Vec<String>> {
     Json(st.conv.font_names())
 }

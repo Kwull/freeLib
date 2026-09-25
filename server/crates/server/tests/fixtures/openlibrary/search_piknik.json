@@ -1,0 +1,29 @@
+{
+  "numFound": 3,
+  "start": 0,
+  "numFoundExact": true,
+  "docs": [
+    {
+      "key": "/works/OL99812W",
+      "title": "Пикник на обочине. Трудно быть богом",
+      "author_name": ["Аркадий Стругацкий", "Борис Стругацкий"],
+      "edition_count": 1
+    },
+    {
+      "key": "/works/OL1914203W",
+      "title": "Пикник на обочине",
+      "author_name": ["Аркадий Стругацкий", "Борис Стругацкий"],
+      "ratings_count": 16,
+      "edition_count": 12
+    },
+    {
+      "key": "/works/OL555W",
+      "title": "Пикник на обочине",
+      "author_name": ["Иван Иванов"],
+      "ratings_count": 40,
+      "edition_count": 1
+    }
+  ],
+  "q": "",
+  "offset": null
+}

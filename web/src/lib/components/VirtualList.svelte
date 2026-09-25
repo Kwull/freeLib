@@ -10,6 +10,8 @@
     row,
     scrollToIndex = $bindable<number | null>(null),
     onRangeChange,
+    onScrollX,
+    scrollX = false,
     class: className = '',
   }: {
     items: T[];
@@ -18,6 +20,9 @@
     row: Snippet<[T, number]>;
     scrollToIndex?: number | null;
     onRangeChange?: (start: number, end: number, firstVisible: number) => void;
+    /** horizontal scrolling of wide rows (the book table); reports scrollLeft */
+    onScrollX?: (left: number) => void;
+    scrollX?: boolean;
     class?: string;
   } = $props();
 
@@ -53,7 +58,17 @@
   }
 
   function onScroll() {
-    if (viewport) scrollTop = viewport.scrollTop;
+    if (!viewport) return;
+    scrollTop = viewport.scrollTop;
+    onScrollX?.(viewport.scrollLeft);
+  }
+
+  /** Back to the left edge (a new sort or filter). */
+  export function resetX() {
+    if (viewport && viewport.scrollLeft !== 0) {
+      viewport.scrollLeft = 0;
+      onScrollX?.(0);
+    }
   }
 
   function onResize(node: HTMLDivElement) {
@@ -75,7 +90,7 @@
   onscroll={onScroll}
   use:onResize
   class="vlist {className}"
-  style="overflow-y: auto; overflow-x: hidden; height: 100%; position: relative;"
+  style="overflow-y: auto; overflow-x: {scrollX ? 'auto' : 'hidden'}; height: 100%; position: relative;"
 >
   <div style="height: {total}px; position: relative;">
     <div style="position: absolute; top: {padTop}px; left: 0; right: 0;">

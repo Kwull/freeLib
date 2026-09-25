@@ -95,6 +95,11 @@ pub async fn books(
     }
     let uid = u.id;
     st.db.run(move |c| db::get_shelf(c, uid, id)).await?;
+    if b.add {
+        let n = b.books.len().min(crate::extrating::BROWSE_ENQUEUE);
+        st.ext
+            .enqueue(crate::extrating::Priority::User, b.library, &b.books[..n]);
+    }
     let ids = b.books.clone();
     let keys: Vec<String> = st
         .catalog_call(b.library, move |cat| Ok(cat.keys_by_ids(&ids)?))
@@ -137,5 +142,6 @@ pub async fn rating(
     st.db
         .run(move |c| db::set_rating(c, u.id, lib, &key, b.rating))
         .await?;
+    st.ext.enqueue(crate::extrating::Priority::User, lib, &[id]);
     Ok(StatusCode::NO_CONTENT)
 }

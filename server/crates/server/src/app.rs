@@ -46,7 +46,24 @@ pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
         ),
         None => None,
     };
-    let st = AppState::new(cfg, db, calibre, oidc);
+    let http: std::sync::Arc<dyn crate::extrating::openlibrary::HttpGet> = std::sync::Arc::new(
+        crate::extrating::openlibrary::ReqwestGet::new(&crate::extrating::openlibrary::user_agent(
+            cfg.contact_email.as_deref(),
+        ))
+        .map_err(|e| anyhow::anyhow!("HTTP client: {e}"))?,
+    );
+    let ext = std::sync::Arc::new(crate::extrating::ExtRatings::open(
+        &cfg.data_dir.join("ratings.db"),
+        &cfg.openlibrary_url,
+        http,
+        cfg.ext_interval,
+    )?);
+    {
+        let c = db.lock();
+        let on = db::get_setting::<db::ExtRatingsConfig>(&c, "externalRatings")?.enabled;
+        ext.set_enabled(on);
+    }
+    let st = AppState::new(cfg, db, calibre, oidc, ext);
     bootstrap_users(&st)?;
     if let Some(p) = st.oidc.clone() {
         tokio::spawn(async move { p.probe().await });
@@ -68,6 +85,9 @@ pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
     autoimport(&st).await;
     reimport_outdated(&st, &rows).await;
     spawn_cleanup(&st);
+    if st.cfg.ext_worker {
+        tokio::spawn(st.ext.clone().run(st.clone()));
+    }
     Ok(st)
 }
 
@@ -311,6 +331,7 @@ pub fn router(st: AppState) -> Router {
             api::router().layer(middleware::from_fn(security::csrf_layer)),
         )
         .merge(opds::router().layer(middleware::from_fn_with_state(st.clone(), opds::gate)))
+        .merge(crate::mcp::router(st.clone()))
         .fallback(fallback)
         .layer(
             CompressionLayer::new()
