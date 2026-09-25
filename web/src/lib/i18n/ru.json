@@ -249,5 +249,12 @@
   "browse.seriesCount.few": "{count} серии",
   "browse.seriesCount.many": "{count} серий",
   "browse.seriesCount.other": "{count} серий",
-  "browse.addFilter": "+ Фильтр"
+  "browse.addFilter": "+ Фильтр",
+  "settings.saved": "Настройки сохранены",
+  "settings.mail.passwordKeep": "Сохранён — оставьте пустым, чтобы не менять",
+  "settings.mail.passwordSet": "Пароль сохранён.",
+  "settings.mail.passwordClear": "Удалить",
+  "settings.mail.subject": "Тема письма",
+  "settings.mail.subjectHint": "%b — название книги, %a — автор. Пусто — название книги.",
+  "settings.mail.testSent": "Тестовое письмо отправлено на {to}"
 }

@@ -773,6 +773,8 @@ pub struct SmtpConfig {
     pub allowed_recipients: Vec<String>,
     /// Mails per user and day (server local date).
     pub daily_limit_per_user: u32,
+    /// Subject of Send to Kindle mails; `%b` = book title, `%a` = author(s).
+    pub subject: String,
 }
 
 pub fn default_allowed_recipients() -> Vec<String> {
@@ -791,11 +793,29 @@ impl Default for SmtpConfig {
             pause_seconds: 2,
             allowed_recipients: default_allowed_recipients(),
             daily_limit_per_user: 100,
+            subject: "%b".into(),
         }
     }
 }
 
 impl SmtpConfig {
+    /// The mail subject for a book, from the [`subject`](Self::subject) template.
+    pub fn subject_for(&self, title: &str, authors: &str) -> String {
+        let tpl = if self.subject.trim().is_empty() {
+            "%b"
+        } else {
+            self.subject.trim()
+        };
+        let s = tpl.replace("%b", title).replace("%a", authors);
+        // a header value: no line breaks, bounded length
+        let s: String = s.chars().filter(|c| !c.is_control()).take(250).collect();
+        if s.trim().is_empty() {
+            title.to_string()
+        } else {
+            s
+        }
+    }
+
     /// Whether `addr` matches one of [`allowed_recipients`](Self::allowed_recipients).
     pub fn recipient_allowed(&self, addr: &str) -> bool {
         let a = addr.trim().to_lowercase();
@@ -876,5 +896,25 @@ impl Default for OpdsConfig {
             enabled: true,
             require_auth: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod smtp_subject_tests {
+    use super::SmtpConfig;
+
+    #[test]
+    fn subject_template() {
+        let mut c = SmtpConfig::default();
+        assert_eq!(c.subject_for("Dune", "Frank Herbert"), "Dune");
+        c.subject = "freeLib - %b (%a)".into();
+        assert_eq!(
+            c.subject_for("Dune", "Frank Herbert"),
+            "freeLib - Dune (Frank Herbert)"
+        );
+        c.subject = "static\r\nBcc: x@y".into();
+        assert_eq!(c.subject_for("Dune", ""), "staticBcc: x@y");
+        c.subject = "   ".into();
+        assert_eq!(c.subject_for("Dune", ""), "Dune");
     }
 }

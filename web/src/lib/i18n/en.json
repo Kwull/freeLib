@@ -229,5 +229,12 @@
   "browse.booksCount.other": "{count} books",
   "browse.seriesCount.one": "{count} series",
   "browse.seriesCount.other": "{count} series",
-  "browse.addFilter": "+ Filter"
+  "browse.addFilter": "+ Filter",
+  "settings.saved": "Settings saved",
+  "settings.mail.passwordKeep": "Saved — leave empty to keep",
+  "settings.mail.passwordSet": "A password is saved.",
+  "settings.mail.passwordClear": "Remove it",
+  "settings.mail.subject": "Subject",
+  "settings.mail.subjectHint": "%b = book title, %a = author. Empty = book title.",
+  "settings.mail.testSent": "Test message sent to {to}"
 }
