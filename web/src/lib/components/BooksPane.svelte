@@ -9,10 +9,18 @@
   import VirtualList from './VirtualList.svelte';
   import Splitter from './Splitter.svelte';
   import CoauthorsPopover from './CoauthorsPopover.svelte';
+  import ExtRating from './ExtRating.svelte';
+  import KidsBadge from './KidsBadge.svelte';
+  import RatingFilters from './RatingFilters.svelte';
+  import {
+    emptyRatingFilters, ratingFilterCount, matchesRatingFilters, sortByRating, ratingParams, formatAvg,
+    type RatingFilters as RatingFiltersT, type RatingSortKey,
+  } from '../utils/ratings';
   import { formatSize, formatDate } from '../utils/format';
   import { normalize } from '../utils/normalize';
   import { t, tn, i18nState } from '../i18n';
   import { getPref, setPref } from '../stores/prefs.svelte';
+  import { myRatings } from '../stores/myRatings.svelte';
   import { COL_LIMITS, colWidth, setColWidth, type ColKey } from '../stores/layout.svelte';
   import {
     isSelected, selectedCount, toggle, toggleMany, clear as clearSelection, selectedIds,
@@ -56,9 +64,11 @@
   const COLLAPSE_ABOVE = 8;
   const ROW_H = 40;
 
-  const OPT_COLUMNS = ['author', 'series', 'genre', 'language', 'format', 'rating'] as const;
+  const OPT_COLUMNS = ['author', 'series', 'genre', 'language', 'format', 'size', 'added', 'rating', 'libRating', 'extRating'] as const;
+  const RATING_COLS = ['rating', 'libRating', 'extRating'] as const;
   type OptCol = (typeof OPT_COLUMNS)[number];
-  type SortKey = 'series' | 'number' | 'title' | 'date';
+  type SortKey = 'series' | 'number' | 'title' | 'date' | RatingSortKey;
+  const isRatingSort = (k: SortKey): k is RatingSortKey => k === 'myRating' || k === 'libRating' || k === 'extRating';
 
   const scopeKey = $derived(scope.kind === 'since' ? `since:${scope.date}` : `${scope.kind}:${scope.id}`);
   const fullScope = $derived(scope.kind === 'author' || scope.kind === 'series');
@@ -80,19 +90,33 @@
 
   // ---- view options (persisted per user) -------------------------------------------
   const colsPrefKey = $derived(scope.kind === 'author' ? 'cols.author' : scope.kind === 'series' ? 'cols.series' : 'cols.other');
+  // entries are column keys, or `!size` / `!added` for a default column the user hid
   const extraColumns = $derived(
-    new Set<OptCol>(getPref<OptCol[]>(colsPrefKey, scope.kind === 'author' ? [] : ['author'])),
+    new Set<string>(getPref<string[]>(colsPrefKey, scope.kind === 'author' ? [] : ['author'])),
   );
+  const hasRatingCol = $derived(RATING_COLS.some((k) => extraColumns.has(k)));
+  /** Size and Added are on by default, except when rating columns are on (the table then
+   *  fits beside the details pane); an explicit choice in the Columns menu wins. */
+  function colShown(c: OptCol): boolean {
+    if (c === 'size' || c === 'added') {
+      if (extraColumns.has(c)) return true;
+      if (extraColumns.has(`!${c}`)) return false;
+      return !hasRatingCol;
+    }
+    return extraColumns.has(c);
+  }
   const view = $derived(getPref<'table' | 'grid'>('booksView', 'table'));
-  const sortPrefKey = $derived(`sort.${scope.kind === 'author' ? 'author' : 'series'}`);
+  // author / series lists are sorted here; genre, new arrivals and shelves by the server
+  const sortPrefKey = $derived(`sort.${scope.kind === 'author' ? 'author' : scope.kind === 'series' ? 'series' : 'paged'}`);
   const sort = $derived<SortKey>(
     scope.kind === 'author' ? getPref<SortKey>(sortPrefKey, 'series')
       : scope.kind === 'series' ? getPref<SortKey>(sortPrefKey, 'number')
-        : 'date',
+        : getPref<SortKey>(sortPrefKey, 'date'),
   );
   const hideAnth = $derived(scope.kind === 'author' && getPref<boolean>('hideAnthologies', false));
 
   let showDeleted = $state(false);
+  let ratingFilters = $state<RatingFiltersT>(emptyRatingFilters());
   let langFilter = $state<string | null>(null);
   let extFilter = $state<string | null>(null);
   let text = $state('');
@@ -109,13 +133,21 @@
   let collapsed = $state<Set<string>>(new Set());
   let collapseInitFor = '';
   let lastClickedIndex = -1;
-  let listRef = $state<{ reveal: (i: number) => void } | undefined>();
+  let listRef = $state<{ reveal: (i: number) => void; resetX: () => void } | undefined>();
+  // horizontal scroll of a wide table: the header follows the rows
+  let headWrap = $state<HTMLDivElement | undefined>();
+  let scrolledX = $state(false);
+  function onScrollX(left: number) {
+    if (headWrap) headWrap.scrollLeft = left;
+    scrolledX = left > 0;
+  }
 
   // New scope: forget the per-scope filters.
   $effect(() => {
     scopeKey;
     untrack(() => {
       text = ''; q = ''; langFilter = null; extFilter = null; showDeleted = false;
+      ratingFilters = emptyRatingFilters();
       coauthorsOpen = false; filterMenuOpen = false; columnMenuOpen = false;
     });
   });
@@ -130,6 +162,8 @@
     if (langFilter) params.lang = langFilter;
     if (extFilter) params.ext = extFilter;
     if (paginated && q) params.q = q;
+    // big scopes are filtered and sorted by rating on the server
+    if (paginated) Object.assign(params, ratingParams(ratingFilters, isRatingSort(sort) ? sort : null));
     return params;
   }
 
@@ -172,6 +206,20 @@
     return () => ctrl.abort();
   });
 
+  // ratings changed elsewhere (details pane): update the loaded rows
+  $effect(() => {
+    const changed = myRatings.changed;
+    untrack(() => {
+      let any = false;
+      const next = books.map((b) => {
+        const r = changed[`${lib}:${b.id}`];
+        if (r !== undefined && r !== b.rating) { any = true; return { ...b, rating: r }; }
+        return b;
+      });
+      if (any) books = next;
+    });
+  });
+
   async function loadMore() {
     if (!paginated || !nextCursor || fetchingMore) return;
     fetchingMore = true;
@@ -209,6 +257,9 @@
   const anthCount = $derived(scope.kind === 'author' ? textMatched.filter(isAnthology).length : 0);
   const visibleBooks = $derived.by(() => {
     let list = hideAnth ? textMatched.filter((b) => !isAnthology(b)) : textMatched;
+    if (paginated) return list;
+    if (ratingFilterCount(ratingFilters)) list = list.filter((b) => matchesRatingFilters(b, ratingFilters));
+    if (isRatingSort(sort)) return sortByRating(list, sort);
     if (sort === 'title') list = list.slice().sort((a, b) => cmpStr(normalize(a.title), normalize(b.title)) || a.id - b.id);
     else if (sort === 'date') list = list.slice().sort((a, b) => cmpStr(b.date, a.date) || cmpStr(a.title, b.title));
     return list;
@@ -298,11 +349,12 @@
 
   const availableLangs = $derived.by(() => [...new Set(books.map((b) => b.lang).filter(Boolean))].sort());
   const availableExts = $derived.by(() => [...new Set(books.map((b) => b.ext).filter(Boolean))].sort());
-  const activeFilterCount = $derived((langFilter ? 1 : 0) + (extFilter ? 1 : 0) + (showDeleted ? 1 : 0));
+  const activeFilterCount = $derived((langFilter ? 1 : 0) + (extFilter ? 1 : 0) + (showDeleted ? 1 : 0) + ratingFilterCount(ratingFilters));
   const anyFilter = $derived(activeFilterCount > 0 || !!q || hideAnth);
 
   function resetFilters() {
     text = ''; q = ''; langFilter = null; extFilter = null; showDeleted = false;
+    ratingFilters = emptyRatingFilters();
     if (hideAnth) setPref('hideAnthologies', false);
   }
 
@@ -362,27 +414,43 @@
     const c: Col[] = [];
     if (showNum) c.push('num');
     c.push('title');
-    for (const k of ['author', 'series', 'genre', 'language', 'format'] as const) if (extraColumns.has(k)) c.push(k);
-    c.push('size', 'added');
-    if (extraColumns.has('rating')) c.push('rating');
+    for (const k of ['author', 'series', 'genre', 'language', 'format', 'size', 'added', 'rating', 'libRating', 'extRating'] as const) if (colShown(k)) c.push(k);
     return c;
   });
   const titleIndex = $derived(columns.indexOf('title'));
+  /** below this width the table scrolls sideways instead of squeezing the title */
   const w = (k: ColKey) => liveCols[k] ?? colWidth(k);
+  const TITLE_MIN = 220;
+  const tableMinWidth = $derived(
+    32 + TITLE_MIN + columns.filter((c) => c !== 'title').reduce((n, c) => n + w(c as ColKey), 0) + 8 * columns.length + 28,
+  );
+  /** left offsets of the sticky checkbox, # and Title cells (row padding 16, gaps 8) */
+  const stickyNum = 16 + 32 + 8;
+  const stickyTitle = $derived(showNum ? stickyNum + w('num') + 8 : stickyNum);
   const gridColumns = $derived(
-    ['32px', ...columns.map((c) => (c === 'title' ? 'minmax(120px, 1fr)' : `${w(c)}px`))].join(' '),
+    ['32px', ...columns.map((c) => (c === 'title' ? `minmax(${TITLE_MIN}px, 1fr)` : `${w(c)}px`))].join(' '),
   );
   const colLabel: Record<Col, string> = $derived({
     num: '#', title: t('books.col.title'), author: t('books.col.author'), series: t('books.col.series'),
     genre: t('books.col.genre'), language: t('books.col.language'), format: t('books.col.format'),
     size: t('books.col.size'), added: t('books.col.added'), rating: t('books.col.rating'),
+    libRating: t('books.colShort.libRating'), extRating: t('books.col.extRating'),
   });
 
   function toggleColumn(c: OptCol) {
     const s = new Set(extraColumns);
-    if (s.has(c)) s.delete(c); else s.add(c);
+    const on = colShown(c);
+    s.delete(c); s.delete(`!${c}`);
+    if (c === 'size' || c === 'added') s.add(on ? `!${c}` : c);
+    else if (!on) s.add(c);
     setPref(colsPrefKey, [...s]);
   }
+
+  // a new sort, filter or scope starts at the left edge of a wide table
+  $effect(() => {
+    sort; ratingFilters; q; langFilter; extFilter; showDeleted; scopeKey;
+    untrack(() => listRef?.resetX());
+  });
 
   // The desktop table's fixed columns don't fit a phone screen (see
   // Phone.dc.html), so below 900px we switch to a simple stacked list.
@@ -402,6 +470,8 @@
     if (b.series && !grouped && scope.kind !== 'series') parts.push(`${b.series.name}${b.serno ? ` #${b.serno}` : ''}`);
     else if (b.serno && (grouped || scope.kind === 'series')) parts.push(`#${b.serno}`);
     parts.push(b.ext.toUpperCase(), formatSize(b.size));
+    if (b.libRating) parts.push(`★${b.libRating}`);
+    if (b.extRating) parts.push(`OL ${formatAvg(b.extRating.avg)}`);
     return parts.filter(Boolean).join(' · ');
   }
   function authorsShort(b: Book): string {
@@ -418,9 +488,13 @@
 
   const shownCoauthors = $derived((header?.coauthors ?? []).slice(0, 3));
   const moreCoauthors = $derived(Math.max(0, (header?.coauthorCount ?? 0) - shownCoauthors.length));
-  const sortOptions = $derived<SortKey[]>(scope.kind === 'author' ? ['series', 'title', 'date'] : ['number', 'title', 'date']);
+  const sortOptions = $derived<SortKey[]>(
+    scope.kind === 'author' ? ['series', 'title', 'date', 'myRating', 'libRating', 'extRating']
+      : scope.kind === 'series' ? ['number', 'title', 'date', 'myRating', 'libRating', 'extRating']
+        : ['date', 'myRating', 'libRating', 'extRating'],
+  );
   const countLabel = $derived(
-    fullScope && (q || hideAnth || langFilter || extFilter)
+    fullScope && (q || hideAnth || langFilter || extFilter || ratingFilterCount(ratingFilters))
       ? t('books.shownOf', { shown: visibleBooks.length, total: books.length })
       : '',
   );
@@ -443,12 +517,14 @@
         <label><input type="radio" name="extf-{phone}" checked={extFilter === e} onchange={() => (extFilter = e)} />{e.toUpperCase()}</label>
       {/each}
     {/if}
+    <div class="menu-group-title">{t('ratings.filters')}</div>
+    <RatingFilters filters={ratingFilters} onChange={(f) => (ratingFilters = f)} />
   </div>
 {/snippet}
 
 {#snippet colHead(c: Col, i: number)}
-  <span class="hcell" class:right={c === 'size' || c === 'added' || c === 'rating'}>
-    <span class="hlabel">{colLabel[c]}</span>
+  <span class="hcell" class:sticky-num={c === 'num'} class:sticky-title={c === 'title'} class:right={c === 'size' || c === 'added' || c === 'rating' || c === 'libRating' || c === 'extRating'}>
+    <span class="hlabel" title={c === 'libRating' ? t('books.col.libRating') : undefined}>{colLabel[c]}</span>
     {#if c !== 'title'}
       {@const k = c as ColKey}
       {#if i < titleIndex}
@@ -528,14 +604,12 @@
         onkeydown={(e) => { if (e.key === 'Escape') text = ''; }}
       />
     </label>
-    {#if fullScope}
-      <label class="sort">
-        <span class="visually-hidden">{t('books.sort')}</span>
-        <select value={sort} onchange={(e) => setPref(sortPrefKey, (e.currentTarget as HTMLSelectElement).value)} aria-label={t('books.sort')}>
-          {#each sortOptions as o (o)}<option value={o}>{t(`books.sort.${o}`)}</option>{/each}
-        </select>
-      </label>
-    {/if}
+    <label class="sort">
+      <span class="visually-hidden">{t('books.sort')}</span>
+      <select data-testid="books-sort" value={sort} onchange={(e) => setPref(sortPrefKey, (e.currentTarget as HTMLSelectElement).value)} aria-label={t('books.sort')}>
+        {#each sortOptions as o (o)}<option value={o}>{t(`books.sort.${o}`)}</option>{/each}
+      </select>
+    </label>
     {#if groups.length > 3 && !q}
       <button type="button" class="tbtn" onclick={() => setAllCollapsed(!allCollapsed)}>
         {allCollapsed ? t('books.expandAll') : t('books.collapseAll')}
@@ -565,7 +639,7 @@
           <div class="col-menu" role="menu">
             {#each OPT_COLUMNS as c (c)}
               <label>
-                <input type="checkbox" checked={extraColumns.has(c)} onchange={() => toggleColumn(c)} />
+                <input type="checkbox" checked={colShown(c)} onchange={() => toggleColumn(c)} />
                 {t(`books.col.${c}`)}
               </label>
             {/each}
@@ -623,7 +697,7 @@
             >
               <CoverThumb {lib} bookId={r.book.id} title={r.book.title} width={36} height={52} />
               <div class="m-info">
-                <span class="m-title">{r.book.title}</span>
+                <span class="m-title-row"><span class="m-title">{r.book.title}</span><KidsBadge age={r.book.kidsAge} /></span>
                 <span class="m-meta">{rowMeta(r)}</span>
               </div>
               <input
@@ -639,14 +713,16 @@
       </VirtualList>
     </div>
   {:else if view === 'table'}
-    <div class="table-wrap">
-      <div class="brow head" role="row" style="grid-template-columns: {gridColumns}">
-        <input type="checkbox" aria-label={t('books.selectAll')} checked={allChecked} onchange={toggleAll} />
-        {#each columns as c, i (c)}{@render colHead(c, i)}{/each}
+    <div class="table-wrap" class:scrolled-x={scrolledX} style="--sticky-num: {stickyNum}px; --sticky-title: {stickyTitle}px">
+      <div class="head-wrap" bind:this={headWrap}>
+        <div class="brow head" role="row" style="grid-template-columns: {gridColumns}; min-width: {tableMinWidth}px">
+          <span class="cell-check"><input type="checkbox" aria-label={t('books.selectAll')} checked={allChecked} onchange={toggleAll} /></span>
+          {#each columns as c, i (c)}{@render colHead(c, i)}{/each}
+        </div>
       </div>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div class="scroll" tabindex="0" role="grid" aria-label={t('books.list')} onkeydown={tableKeydown}>
-        <VirtualList bind:this={listRef} items={flatRows} itemHeight={ROW_H} onRangeChange={onRowRangeChange}>
+        <VirtualList bind:this={listRef} items={flatRows} itemHeight={ROW_H} onRangeChange={onRowRangeChange} scrollX {onScrollX}>
           {#snippet row(fr, fi)}
             {#if fr.kind === 'group'}
               {@const open = !effectiveCollapsed.has(fr.group.key)}
@@ -678,23 +754,24 @@
                 class:selected={b.id === selectedBookId}
                 class:checked={isSelected(lib, b.id)}
                 class:deleted={b.deleted}
-                style="grid-template-columns: {gridColumns}"
+                style="grid-template-columns: {gridColumns}; min-width: {tableMinWidth}px"
                 onclick={(e) => rowClick(e, b, fi)}
               >
-                <input
+                <span class="cell-check"><input
                   type="checkbox"
                   aria-label={t('books.select', { title: b.title })}
                   checked={isSelected(lib, b.id)}
                   onclick={(e) => e.stopPropagation()}
                   onchange={() => toggle(lib, b.id)}
-                />
+                /></span>
                 {#each columns as c (c)}
-                  {#if c === 'num'}<span class="muted num">{r.num}</span>
+                  {#if c === 'num'}<span class="muted num sticky-num">{r.num}</span>
                   {:else if c === 'title'}
-                    <span class="title-cell" title={b.title}>
+                    <span class="title-cell sticky-title" title={b.title}>
                       <button type="button" class="title-btn" tabindex="-1" class:strong={b.id === selectedBookId}>{b.title}</button>
                       {#if scope.kind === 'author' && !grouped && b.series && !extraColumns.has('series')}<span class="sub">{b.series.name}{b.serno ? ` #${b.serno}` : ''}</span>{/if}
                       {#if isAnthology(b)}<span class="tag" title={b.authors.map((a) => a.name).join(', ')}>{tn('books.authorsCount', b.authors.length)}</span>{/if}
+                      <KidsBadge age={b.kidsAge} />
                       {#if b.deleted}<span class="tag danger">{t('books.deleted')}</span>{/if}
                     </span>
                   {:else if c === 'author'}<span class="muted ellipsis" title={b.authors.map((a) => a.name).join(', ')}>{authorsShort(b)}</span>
@@ -704,7 +781,9 @@
                   {:else if c === 'format'}<span class="muted">{b.ext}</span>
                   {:else if c === 'size'}<span class="muted right">{formatSize(b.size)}</span>
                   {:else if c === 'added'}<span class="muted right">{formatDate(b.date, i18nState.lang)}</span>
-                  {:else if c === 'rating'}<span class="right rating-cell">{#if b.rating}<Rating value={b.rating} />{/if}</span>
+                  {:else if c === 'rating'}<span class="right rating-cell" title={t('ratings.myTooltip')}>{#if b.rating}<Rating value={b.rating} size={11} />{/if}</span>
+                  {:else if c === 'libRating'}<span class="right rating-cell lib" title={b.libRating ? t('ratings.libTooltip', { n: b.libRating }) : t('ratings.libNone')}>{#if b.libRating}<span class="lib-num"><Icon name="star" size={12} strokeWidth={1.6} />{b.libRating}</span>{/if}</span>
+                  {:else if c === 'extRating'}<span class="right rating-cell">{#if b.extRating}<ExtRating value={b.extRating} />{/if}</span>
                   {/if}
                 {/each}
               </div>
@@ -733,6 +812,9 @@
             />
           </div>
           <span class="cover-title">{b.title}</span>
+          {#if b.kidsAge !== null && b.kidsAge !== undefined || b.extRating}
+            <span class="cover-rate"><KidsBadge age={b.kidsAge} />{#if b.extRating}<ExtRating value={b.extRating} />{/if}</span>
+          {/if}
           {#if scope.kind !== 'author'}<span class="cover-sub">{authorsShort(b)}</span>{/if}
         </button>
       {/each}
@@ -826,6 +908,7 @@
   .m-row.checked { background: var(--accent-soft); }
   .m-info { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .m-title { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .m-meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .m-row input[type='checkbox'] { width: 22px; height: 22px; flex-shrink: 0; }
   .deleted .m-title, .deleted .title-btn { text-decoration: line-through; color: var(--muted); }
@@ -840,21 +923,29 @@
   .scroll { flex-grow: 1; min-height: 0; position: relative; display: flex; flex-direction: column; outline: none; }
   .scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
   .scroll :global(.vlist) { flex-grow: 1; min-height: 0; }
-  .brow { display: grid; align-items: center; height: 40px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line-soft); font-size: 14px; cursor: default; gap: 8px; }
-  .brow.head { height: 34px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-alt); flex-shrink: 0; }
+  .brow { --row-bg: var(--surface); background: var(--row-bg); display: grid; align-items: center; height: 40px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line-soft); font-size: 14px; cursor: default; gap: 8px; }
+  .head-wrap { overflow: hidden; flex-shrink: 0; }
+  /* wide tables scroll sideways; checkbox, # and Title stay put (the cells cover the gaps) */
+  .cell-check, .sticky-num, .sticky-title { position: sticky; z-index: 1; background: var(--row-bg); align-self: stretch; display: flex; align-items: center; }
+  .cell-check { left: 16px; box-shadow: -16px 0 0 var(--row-bg), 8px 0 0 var(--row-bg); }
+  .sticky-num { left: var(--sticky-num); box-shadow: 8px 0 0 var(--row-bg); }
+  .sticky-title { left: var(--sticky-title); }
+  .scrolled-x .sticky-title { box-shadow: 8px 0 0 var(--row-bg), 14px 0 10px -6px rgba(0, 0, 0, .22); }
+
+  .brow.head { --row-bg: var(--surface-alt); height: 34px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-alt); flex-shrink: 0; }
   .hcell { position: relative; min-width: 0; height: 100%; display: flex; align-items: center; }
   .hcell.right { justify-content: flex-end; }
-  .hlabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hlabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .hcell :global(.splitter.col-split) { position: absolute; top: 4px; bottom: 4px; margin: 0; }
   /* centred on the middle of the 8px column gap */
   .hcell :global(.splitter.col-split.at-right) { left: calc(100% - .5px); }
   .hcell :global(.splitter.col-split.at-left) { left: -8.5px; }
   .hcell :global(.splitter.col-split)::after { opacity: .25; background: var(--border-dashed); }
   .hcell :global(.splitter.col-split:hover)::after { opacity: 1; background: var(--accent); }
-  .brow:not(.head):hover { background: var(--row-hover); }
-  .brow.checked { background: var(--row-checked); }
-  .brow.selected { background: var(--accent-soft); }
-  .group-head { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 16px; background: var(--page); border-bottom: 1px solid var(--line-soft); font-size: 13px; min-width: 0; }
+  .brow:not(.head):hover { --row-bg: var(--row-hover); }
+  .brow.checked { --row-bg: var(--row-checked); }
+  .brow.selected { --row-bg: var(--accent-soft); }
+  .group-head { position: sticky; left: 0; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 16px; background: var(--page); border-bottom: 1px solid var(--line-soft); font-size: 13px; min-width: 0; }
   .gtoggle { all: unset; display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 1 auto; cursor: pointer; padding: 4px 4px; border-radius: 4px; }
   .gtoggle:hover { background: var(--surface-hover); }
   .gtoggle:focus-visible { outline: 2px solid var(--focus); }
@@ -885,6 +976,12 @@
   .check-badge { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 11px; background: #FFF; display: flex; align-items: center; justify-content: center; color: var(--accent); }
   .grid-check { position: absolute; top: 8px; left: 8px; width: 16px; height: 16px; }
   .cover-title { font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
+  .cover-rate { display: flex; align-items: center; gap: 6px; }
+  .lib-num { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+  .lib-num :global(svg) { fill: var(--muted); stroke: var(--muted); }
   .cover-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   input[type='checkbox'] { width: 16px; height: 16px; accent-color: var(--accent); }
+  /* after .hcell / .title-cell (position, alignment) */
+  .hcell.sticky-num, .hcell.sticky-title { position: sticky; }
+  .title-cell.sticky-title { align-items: center; }
 </style>

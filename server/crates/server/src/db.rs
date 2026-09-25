@@ -188,6 +188,13 @@ fn adopt_open_mode_data(c: &Connection, id: i64) -> ApiResult<()> {
         "UPDATE OR IGNORE user_state SET user_id=?1 WHERE user_id=0",
         [id],
     )?;
+    c.execute("UPDATE api_token SET user_id=?1 WHERE user_id=0", [id])?;
+    c.execute("UPDATE api_audit SET user_id=?1 WHERE user_id=0", [id])?;
+    c.execute("UPDATE book_history SET user_id=?1 WHERE user_id=0", [id])?;
+    c.execute(
+        "UPDATE OR IGNORE device_order SET user_id=?1 WHERE user_id=0",
+        [id],
+    )?;
     Ok(())
 }
 
@@ -219,6 +226,10 @@ pub fn delete_user(c: &Connection, id: i64) -> ApiResult<bool> {
     c.execute("DELETE FROM user_state WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM mail_count WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM user_identity WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM api_token WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM api_audit WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM book_history WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM device_order WHERE user_id=?1", [id])?;
     Ok(c.execute("DELETE FROM user WHERE id=?1", [id])? > 0)
 }
 
@@ -584,6 +595,7 @@ pub fn update_library(c: &Connection, l: &LibraryRow) -> ApiResult<()> {
 
 pub fn delete_library(c: &Connection, id: i64) -> ApiResult<()> {
     c.execute("DELETE FROM shelf_book WHERE library_id=?1", [id])?;
+    c.execute("DELETE FROM book_history WHERE library_id=?1", [id])?;
     c.execute("DELETE FROM rating WHERE library_id=?1", [id])?;
     c.execute("DELETE FROM library WHERE id=?1", [id])?;
     Ok(())
@@ -755,6 +767,324 @@ pub fn shelf_modify(
     Ok(())
 }
 
+/// All ratings of `user_id` in one library: `(book_key, rating)`.
+pub fn user_ratings(c: &Connection, user_id: i64, lib_id: i64) -> ApiResult<Vec<(String, i64)>> {
+    let mut st =
+        c.prepare_cached("SELECT book_key, rating FROM rating WHERE user_id=?1 AND library_id=?2")?;
+    let rows = st.query_map(params![user_id, lib_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Shelf memberships of `user_id` in one library: `(shelf_id, shelf name, book_key, added_at)`,
+/// newest first.
+pub fn user_shelf_books(
+    c: &Connection,
+    user_id: i64,
+    lib_id: i64,
+) -> ApiResult<Vec<(i64, String, String, String)>> {
+    let mut st = c.prepare_cached(
+        "SELECT s.id, s.name, sb.book_key, sb.added_at FROM shelf_book sb JOIN shelf s ON s.id = sb.shelf_id \
+         WHERE s.user_id=?1 AND sb.library_id=?2 ORDER BY sb.added_at DESC",
+    )?;
+    let rows = st.query_map(params![user_id, lib_id], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+// ---------------------------------------------------------------- history
+
+/// What a user did with a book (`book_history.action`).
+pub const HISTORY_ACTIONS: [&str; 3] = ["send", "download", "read"];
+
+/// History rows kept per user (oldest dropped).
+pub const HISTORY_MAX_PER_USER: i64 = 5000;
+
+/// One `book_history` row.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryRow {
+    pub library_id: i64,
+    pub book_key: String,
+    pub action: String,
+    pub device: Option<String>,
+    pub at: String,
+}
+
+/// Records that `user_id` sent / downloaded / read books. The same (book, action) within an
+/// hour is recorded once (the reader fetches a book several times).
+pub fn add_history(
+    c: &Connection,
+    user_id: i64,
+    lib_id: i64,
+    keys: &[String],
+    action: &str,
+    device: Option<&str>,
+) -> ApiResult<()> {
+    if !HISTORY_ACTIONS.contains(&action) || keys.is_empty() {
+        return Ok(());
+    }
+    let now = now_rfc3339();
+    let hour_ago = rfc3339_at(unix_now() - 3600);
+    let tx = c.unchecked_transaction()?;
+    {
+        let mut recent = tx.prepare_cached(
+            "SELECT 1 FROM book_history WHERE user_id=?1 AND library_id=?2 AND book_key=?3 AND action=?4 AND at > ?5",
+        )?;
+        let mut ins = tx.prepare_cached(
+            "INSERT INTO book_history(user_id, library_id, book_key, action, device, at) VALUES (?1,?2,?3,?4,?5,?6)",
+        )?;
+        for k in keys {
+            if recent.exists(params![user_id, lib_id, k, action, hour_ago])? {
+                continue;
+            }
+            ins.execute(params![user_id, lib_id, k, action, device, now])?;
+        }
+    }
+    tx.execute(
+        "DELETE FROM book_history WHERE user_id=?1 AND id <= \
+         (SELECT id FROM book_history WHERE user_id=?1 ORDER BY id DESC LIMIT 1 OFFSET ?2)",
+        params![user_id, HISTORY_MAX_PER_USER],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// The newest `limit` history rows of `user_id` in `lib_id` (all libraries when `None`).
+pub fn history(
+    c: &Connection,
+    user_id: i64,
+    lib_id: Option<i64>,
+    limit: i64,
+) -> ApiResult<Vec<HistoryRow>> {
+    let mut st = c.prepare_cached(
+        "SELECT library_id, book_key, action, device, at FROM book_history \
+         WHERE user_id=?1 AND (?2 IS NULL OR library_id=?2) ORDER BY id DESC LIMIT ?3",
+    )?;
+    let rows = st.query_map(params![user_id, lib_id, limit], |r| {
+        Ok(HistoryRow {
+            library_id: r.get(0)?,
+            book_key: r.get(1)?,
+            action: r.get(2)?,
+            device: r.get(3)?,
+            at: r.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Book keys of `lib_id` that `user_id` has sent, downloaded or read, with the actions.
+pub fn history_keys(
+    c: &Connection,
+    user_id: i64,
+    lib_id: i64,
+) -> ApiResult<HashMap<String, Vec<String>>> {
+    let mut st = c.prepare_cached(
+        "SELECT DISTINCT book_key, action FROM book_history WHERE user_id=?1 AND library_id=?2",
+    )?;
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for r in st.query_map(params![user_id, lib_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })? {
+        let (k, a) = r?;
+        out.entry(k).or_default().push(a);
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------- API tokens
+
+/// A personal API token (the secret itself is never stored, only its SHA-256).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiToken {
+    pub id: i64,
+    #[serde(skip)]
+    pub user_id: i64,
+    pub name: String,
+    /// First characters of the secret (`fl_ab12cd34`), to recognise it.
+    pub prefix: String,
+    pub scopes: Vec<String>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub expires_at: Option<String>,
+}
+
+fn token_row(r: &rusqlite::Row) -> rusqlite::Result<ApiToken> {
+    let scopes: String = r.get(4)?;
+    Ok(ApiToken {
+        id: r.get(0)?,
+        user_id: r.get(1)?,
+        name: r.get(2)?,
+        prefix: r.get(3)?,
+        scopes: scopes
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect(),
+        created_at: r.get(5)?,
+        last_used_at: r.get(6)?,
+        expires_at: r.get(7)?,
+    })
+}
+
+const TOKEN_COLS: &str = "id, user_id, name, prefix, scopes, created_at, last_used_at, expires_at";
+
+/// At most this many tokens per user.
+pub const MAX_TOKENS_PER_USER: i64 = 50;
+
+pub fn list_tokens(c: &Connection, user_id: i64) -> ApiResult<Vec<ApiToken>> {
+    let mut st = c.prepare(&format!(
+        "SELECT {TOKEN_COLS} FROM api_token WHERE user_id=?1 ORDER BY id DESC"
+    ))?;
+    let rows = st.query_map([user_id], token_row)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Stores a token by the SHA-256 (hex) of its secret.
+pub fn insert_token(
+    c: &Connection,
+    user_id: i64,
+    name: &str,
+    hash: &str,
+    prefix: &str,
+    scopes: &[String],
+    expires_at: Option<&str>,
+) -> ApiResult<ApiToken> {
+    let n: i64 = c.query_row(
+        "SELECT count(*) FROM api_token WHERE user_id=?1",
+        [user_id],
+        |r| r.get(0),
+    )?;
+    if n >= MAX_TOKENS_PER_USER {
+        return Err(ApiError::conflict(format!(
+            "at most {MAX_TOKENS_PER_USER} tokens per user; revoke an old one"
+        )));
+    }
+    c.execute(
+        "INSERT INTO api_token(user_id, name, token_hash, prefix, scopes, created_at, expires_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![user_id, name, hash, prefix, scopes.join(","), now_rfc3339(), expires_at],
+    )?;
+    let id = c.last_insert_rowid();
+    c.query_row(
+        &format!("SELECT {TOKEN_COLS} FROM api_token WHERE id=?1"),
+        [id],
+        token_row,
+    )
+    .map_err(Into::into)
+}
+
+/// Revokes token `id` of `user_id`; whether it existed.
+pub fn delete_token(c: &Connection, user_id: i64, id: i64) -> ApiResult<bool> {
+    Ok(c.execute(
+        "DELETE FROM api_token WHERE id=?1 AND user_id=?2",
+        params![id, user_id],
+    )? > 0)
+}
+
+/// The token with this secret hash and its user (`None` for unknown or expired tokens, or a
+/// deleted user). User 0 is the implicit open-mode admin.
+pub fn token_by_hash(c: &Connection, hash: &str) -> ApiResult<Option<(ApiToken, User)>> {
+    let row: Option<(ApiToken, String)> = c
+        .query_row(
+            &format!("SELECT {TOKEN_COLS}, token_hash FROM api_token WHERE token_hash=?1"),
+            [hash],
+            |r| Ok((token_row(r)?, r.get(8)?)),
+        )
+        .optional()?;
+    let Some((tok, stored)) = row else {
+        return Ok(None);
+    };
+    if !bool::from(subtle::ConstantTimeEq::ct_eq(
+        stored.as_bytes(),
+        hash.as_bytes(),
+    )) {
+        return Ok(None);
+    }
+    if tok
+        .expires_at
+        .as_deref()
+        .is_some_and(|e| e < now_rfc3339().as_str())
+    {
+        return Ok(None);
+    }
+    let user = if tok.user_id == 0 {
+        Some(User::open_mode_admin())
+    } else {
+        get_user(c, tok.user_id)?
+    };
+    Ok(user.map(|u| (tok, u)))
+}
+
+/// Records a use of the token (at most once a minute).
+pub fn touch_token(c: &Connection, id: i64) -> ApiResult<()> {
+    let now = now_rfc3339();
+    let minute_ago = rfc3339_at(unix_now() - 60);
+    c.execute(
+        "UPDATE api_token SET last_used_at=?2 WHERE id=?1 AND (last_used_at IS NULL OR last_used_at < ?3)",
+        params![id, now, minute_ago],
+    )?;
+    Ok(())
+}
+
+/// One audit log entry (MCP tool call).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditRow {
+    pub id: i64,
+    pub token_id: Option<i64>,
+    /// Name of the token at the time of the listing (`null` when revoked).
+    pub token_name: Option<String>,
+    pub tool: String,
+    pub ok: bool,
+    pub detail: String,
+    pub at: String,
+}
+
+/// Audit entries kept per user.
+pub const AUDIT_MAX_PER_USER: i64 = 500;
+
+pub fn add_audit(
+    c: &Connection,
+    user_id: i64,
+    token_id: Option<i64>,
+    tool: &str,
+    ok: bool,
+    detail: &str,
+) -> ApiResult<()> {
+    let detail: String = detail.chars().take(200).collect();
+    c.execute(
+        "INSERT INTO api_audit(user_id, token_id, tool, ok, detail, at) VALUES (?1,?2,?3,?4,?5,?6)",
+        params![user_id, token_id, tool, ok, detail, now_rfc3339()],
+    )?;
+    c.execute(
+        "DELETE FROM api_audit WHERE user_id=?1 AND id <= \
+         (SELECT id FROM api_audit WHERE user_id=?1 ORDER BY id DESC LIMIT 1 OFFSET ?2)",
+        params![user_id, AUDIT_MAX_PER_USER],
+    )?;
+    Ok(())
+}
+
+/// The newest `limit` audit entries of `user_id`.
+pub fn audit(c: &Connection, user_id: i64, limit: i64) -> ApiResult<Vec<AuditRow>> {
+    let mut st = c.prepare(
+        "SELECT a.id, a.token_id, t.name, a.tool, a.ok, a.detail, a.at FROM api_audit a \
+         LEFT JOIN api_token t ON t.id = a.token_id WHERE a.user_id=?1 ORDER BY a.id DESC LIMIT ?2",
+    )?;
+    let rows = st.query_map(params![user_id, limit], |r| {
+        Ok(AuditRow {
+            id: r.get(0)?,
+            token_id: r.get(1)?,
+            token_name: r.get(2)?,
+            tool: r.get(3)?,
+            ok: r.get(4)?,
+            detail: r.get(5)?,
+            at: r.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 // ---------------------------------------------------------------- devices
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -799,10 +1129,14 @@ fn device_row(r: &rusqlite::Row) -> rusqlite::Result<Device> {
 
 const DEVICE_COLS: &str = "id, user_id, name, kind, format, target, file_name, options";
 
+/// Devices visible to `user_id` (shared + own) in the user's order ([`set_device_order`]);
+/// devices the user never ordered follow, oldest first. The first one is the user's default.
 pub fn list_devices(c: &Connection, user_id: i64) -> ApiResult<Vec<Device>> {
-    let mut st = c.prepare(&format!(
-        "SELECT {DEVICE_COLS} FROM device WHERE user_id IS NULL OR user_id=?1 ORDER BY id"
-    ))?;
+    let mut st = c.prepare(
+        "SELECT d.id, d.user_id, d.name, d.kind, d.format, d.target, d.file_name, d.options FROM device d \
+         LEFT JOIN device_order o ON o.device_id = d.id AND o.user_id = ?1 \
+         WHERE d.user_id IS NULL OR d.user_id=?1 ORDER BY o.pos IS NULL, o.pos, d.id",
+    )?;
     let rows = st.query_map([user_id], device_row)?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
@@ -838,7 +1172,35 @@ pub fn save_device(c: &Connection, d: &Device) -> ApiResult<i64> {
     }
 }
 
+/// Stores `user_id`'s order of their devices: `ids` first (in that order), the rest after.
+/// Ids the user cannot see are refused (404).
+pub fn set_device_order(c: &Connection, user_id: i64, ids: &[i64]) -> ApiResult<()> {
+    let visible: Vec<i64> = list_devices(c, user_id)?.iter().map(|d| d.id).collect();
+    let mut seen = std::collections::HashSet::new();
+    for id in ids {
+        if !visible.contains(id) {
+            return Err(ApiError::not_found(format!("device {id} not found")));
+        }
+        if !seen.insert(*id) {
+            return Err(ApiError::bad_request("duplicate device id"));
+        }
+    }
+    let rest = visible.iter().filter(|id| !seen.contains(id));
+    let tx = c.unchecked_transaction()?;
+    tx.execute("DELETE FROM device_order WHERE user_id=?1", [user_id])?;
+    {
+        let mut ins =
+            tx.prepare("INSERT INTO device_order(user_id, device_id, pos) VALUES (?1,?2,?3)")?;
+        for (pos, id) in ids.iter().chain(rest).enumerate() {
+            ins.execute(params![user_id, id, pos as i64])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn delete_device(c: &Connection, id: i64) -> ApiResult<()> {
+    c.execute("DELETE FROM device_order WHERE device_id=?1", [id])?;
     c.execute("DELETE FROM device WHERE id=?1", [id])?;
     Ok(())
 }
@@ -1027,6 +1389,32 @@ mod tests {
         track_visit(&c, 1, t0 + 86_400, 1800).unwrap();
         assert_eq!(prev_visit(&c, 1).unwrap(), Some(rfc3339_at(t0 + 600)));
         assert_eq!(last_visit(&c, 1).unwrap(), Some(rfc3339_at(t0 + 86_400)));
+    }
+}
+
+/// `externalRatings` setting: whether the server looks up ratings on Open Library.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ExtRatingsConfig {
+    pub enabled: bool,
+}
+
+impl Default for ExtRatingsConfig {
+    fn default() -> Self {
+        ExtRatingsConfig { enabled: true }
+    }
+}
+
+/// `mcp` setting: whether the MCP endpoint (`/mcp`) accepts requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct McpConfig {
+    pub enabled: bool,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        McpConfig { enabled: true }
     }
 }
 

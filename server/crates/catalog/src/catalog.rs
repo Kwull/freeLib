@@ -106,6 +106,15 @@ pub(crate) enum CountSel {
     Newer(String),
 }
 
+/// SQL of a selection: `SELECT b.id {from}{where_extra} ORDER BY {order}` with `params`.
+pub(crate) struct SelSql {
+    pub(crate) from: String,
+    pub(crate) order: &'static str,
+    pub(crate) params: Vec<Box<dyn ToSql>>,
+    pub(crate) where_extra: String,
+    pub(crate) count_attrs: Option<CountSel>,
+}
+
 /// An open catalog: immutable data, pooled read-only connections.
 /// Cheap to share as `Arc<Catalog>`; old instances keep working after a reload
 /// (their file descriptors point at the replaced file).
@@ -372,20 +381,18 @@ impl Catalog {
             .count(&CountSel::Newer(after.to_string()), &BookFilter::default()))
     }
 
-    /// A page of books for one selector, with filters and cursor pagination.
-    pub fn books(&self, sel: &BookSelector, filter: &BookFilter, page: &Page) -> Result<BookPage> {
-        let offset: usize = match &page.cursor {
-            None => 0,
-            Some(c) if c.is_empty() => 0,
-            Some(c) => c.parse().map_err(|_| CatalogError::BadCursor)?,
-        };
-        let limit = page.limit.max(1);
-
+    /// SQL pieces of a selection with its list filters (shared by [`books`](Self::books) and
+    /// rating-ranked lists).
+    pub(crate) fn selection_sql(
+        &self,
+        conn: &Connection,
+        sel: &BookSelector,
+        filter: &BookFilter,
+    ) -> Result<SelSql> {
         let date_order = "b.date DESC, b.sort_key, b.id";
-        let conn = self.conn()?;
         // Large result sets (genre, since) are counted in memory rather than by SQL.
         let mut count_attrs: Option<CountSel> = None;
-        let (from, order, sel_param): (String, &str, Box<dyn ToSql>) = match sel {
+        let (from, order, sel_param): (String, &'static str, Box<dyn ToSql>) = match sel {
             BookSelector::Author(id) => (
                 "FROM book_author ba JOIN book b ON b.id=ba.book_id LEFT JOIN series s ON s.id=b.series_id \
                  WHERE ba.author_id=?1"
@@ -449,6 +456,31 @@ impl Catalog {
             // the in-memory counter knows nothing about the text filter
             count_attrs = None;
         }
+        Ok(SelSql {
+            from,
+            order,
+            params,
+            where_extra,
+            count_attrs,
+        })
+    }
+
+    /// A page of books for one selector, with filters and cursor pagination.
+    pub fn books(&self, sel: &BookSelector, filter: &BookFilter, page: &Page) -> Result<BookPage> {
+        let offset: usize = match &page.cursor {
+            None => 0,
+            Some(c) if c.is_empty() => 0,
+            Some(c) => c.parse().map_err(|_| CatalogError::BadCursor)?,
+        };
+        let limit = page.limit.max(1);
+        let conn = self.conn()?;
+        let SelSql {
+            from,
+            order,
+            params,
+            where_extra,
+            count_attrs,
+        } = self.selection_sql(&conn, sel, filter)?;
 
         let sql = format!(
             "SELECT b.id {from}{where_extra} ORDER BY {order} LIMIT ?{} OFFSET ?{}",
@@ -557,10 +589,11 @@ pub(crate) fn load_books(conn: &Connection, ids: &[i64]) -> Result<Vec<Book>> {
     }
     let arr = id_array(ids.iter().copied());
     let mut by_id: HashMap<i64, Book> = HashMap::with_capacity(ids.len());
+    let mut keywords: HashMap<i64, String> = HashMap::new();
     {
         let mut st = conn.prepare_cached(
-            "SELECT b.id, b.book_key, b.title, b.series_id, s.name, b.serno, b.lang, b.ext, b.size, b.date, b.deleted \
-             FROM book b LEFT JOIN series s ON s.id=b.series_id WHERE b.id IN rarray(?1)",
+            "SELECT b.id, b.book_key, b.title, b.series_id, s.name, b.serno, b.lang, b.ext, b.size, b.date, b.deleted, \
+             b.stars, b.keywords FROM book b LEFT JOIN series s ON s.id=b.series_id WHERE b.id IN rarray(?1)",
         )?;
         let mut q = st.query([arr.clone()])?;
         while let Some(r) = q.next()? {
@@ -588,8 +621,14 @@ pub(crate) fn load_books(conn: &Connection, ids: &[i64]) -> Result<Vec<Book>> {
                     size: r.get(8)?,
                     date: r.get(9)?,
                     deleted: r.get::<_, i64>(10)? != 0,
+                    lib_rating: r.get(11)?,
+                    kids_age: None,
                 },
             );
+            let kw: String = r.get(12)?;
+            if !kw.is_empty() {
+                keywords.insert(id, kw);
+            }
         }
     }
     {
@@ -617,6 +656,10 @@ pub(crate) fn load_books(conn: &Connection, ids: &[i64]) -> Result<Vec<Book>> {
                 b.genres.push(r.get(1)?);
             }
         }
+    }
+    for b in by_id.values_mut() {
+        let kw = keywords.get(&b.id).map(String::as_str).unwrap_or("");
+        b.kids_age = crate::kids::age_for(&b.genres, kw);
     }
     Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
 }

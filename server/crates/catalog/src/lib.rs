@@ -6,8 +6,10 @@
 
 pub mod catalog;
 pub mod genres;
+pub mod kids;
 pub mod model;
 pub mod normalize;
+pub mod rank;
 pub mod schema;
 pub mod search;
 pub mod summary;
@@ -20,6 +22,7 @@ pub use catalog::{
 pub use genres::{GENRE_OTHER, GenreDef, Genres, genres};
 pub use model::*;
 pub use normalize::{letter_of, normalize};
+pub use rank::{NoRatings, RatingQuery, RatingSort, RatingSource};
 pub use schema::{
     APP_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION, create_catalog_indexes, create_catalog_tables,
     migrate_app_db, open_app_db,

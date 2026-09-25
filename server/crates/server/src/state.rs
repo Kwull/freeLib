@@ -56,6 +56,10 @@ pub struct Inner {
     pub shutdown: AtomicBool,
     /// OpenID Connect sign-in, when configured.
     pub oidc: Option<Arc<crate::oidc::Provider>>,
+    /// External (Open Library) ratings: cache, index and enrichment queue.
+    pub ext: Arc<crate::extrating::ExtRatings>,
+    /// MCP requests per API token (rate limiting).
+    pub tokens: crate::tokens::Tokens,
 }
 
 impl AppState {
@@ -64,6 +68,7 @@ impl AppState {
         db: AppDb,
         calibre: Option<Calibre>,
         oidc: Option<crate::oidc::Provider>,
+        ext: Arc<crate::extrating::ExtRatings>,
     ) -> AppState {
         let (tx, _) = broadcast::channel(1024);
         let workers = Arc::new(Semaphore::new(cfg.workers.max(1)));
@@ -86,6 +91,8 @@ impl AppState {
             basic_cache: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
             oidc: oidc.map(Arc::new),
+            ext,
+            tokens: crate::tokens::Tokens::default(),
         }))
     }
 
@@ -183,6 +190,7 @@ impl AppState {
     }
 
     pub fn invalidate_sessions(&self) {
+        self.tokens.invalidate();
         self.session_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -251,6 +259,7 @@ impl AppState {
             new_since_last_visit: new_since,
             status,
             opds_url: format!("/opds/{}", row.id),
+            external_ratings: self.ext.progress(row.id),
         }
     }
 
@@ -307,6 +316,8 @@ pub struct LibraryDto {
     pub new_since_last_visit: i64,
     pub status: LibraryStatus,
     pub opds_url: String,
+    /// Open Library lookups of this library's books.
+    pub external_ratings: crate::extrating::Progress,
 }
 
 #[derive(Debug, Clone, Serialize)]

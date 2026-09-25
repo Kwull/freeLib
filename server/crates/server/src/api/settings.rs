@@ -6,14 +6,53 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::auth::{self, Admin, Auth};
-use crate::db::{self, OpdsConfig, SmtpConfig, User};
+use crate::db::{self, ExtRatingsConfig, McpConfig, OpdsConfig, SmtpConfig, User};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
 const PREFS_LIMIT: usize = 64 * 1024;
 
-fn settings_json(st: &AppState, smtp: &SmtpConfig, opds: &OpdsConfig) -> Value {
+/// Totals of the Open Library lookups over all libraries (Settings → Server).
+fn ext_status(st: &AppState, cfg: &ExtRatingsConfig) -> Value {
+    let libs: Vec<i64> = st
+        .libs
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .keys()
+        .copied()
+        .collect();
+    let (mut looked, mut found, mut rated, mut total) = (0u64, 0u64, 0u64, 0i64);
+    for id in libs {
+        let p = st.ext.progress(id);
+        looked += p.looked_up;
+        found += p.found;
+        rated += p.rated;
+        if let Ok((_, cat)) = st.catalog(id) {
+            total += cat.stats().live_book_count;
+        }
+    }
     json!({
+        "enabled": cfg.enabled,
+        "source": "openlibrary",
+        "contactSet": st.cfg.contact_email.is_some(),
+        "progress": { "lookedUp": looked, "found": found, "rated": rated, "total": total },
+        "queued": st.ext.queued(),
+        "requests": st.ext.requests.load(std::sync::atomic::Ordering::Relaxed),
+        "pausedFor": st.ext.paused_for(),
+        "lastError": st.ext.last_error(),
+    })
+}
+
+fn settings_json(
+    st: &AppState,
+    smtp: &SmtpConfig,
+    opds: &OpdsConfig,
+    ext: &ExtRatingsConfig,
+    mcp: &McpConfig,
+) -> Value {
+    json!({
+        "externalRatings": ext_status(st, ext),
+        "mcp": { "enabled": mcp.enabled, "url": st.cfg.public_url.as_ref().map(|u| format!("{u}/mcp")) },
         "smtp": {
             "host": smtp.host, "port": smtp.port, "security": smtp.security, "username": smtp.username,
             "from": smtp.from, "passwordSet": smtp.password.as_deref().is_some_and(|p| !p.is_empty()),
@@ -30,17 +69,20 @@ fn settings_json(st: &AppState, smtp: &SmtpConfig, opds: &OpdsConfig) -> Value {
     })
 }
 
+type AllSettings = (SmtpConfig, OpdsConfig, ExtRatingsConfig, McpConfig);
+
+fn load_all(c: &rusqlite::Connection) -> ApiResult<AllSettings> {
+    Ok((
+        db::get_setting::<SmtpConfig>(c, "smtp")?,
+        db::get_setting::<OpdsConfig>(c, "opds")?,
+        db::get_setting::<ExtRatingsConfig>(c, "externalRatings")?,
+        db::get_setting::<McpConfig>(c, "mcp")?,
+    ))
+}
+
 pub async fn get(State(st): State<AppState>, Admin(_): Admin) -> ApiResult<Json<Value>> {
-    let (smtp, opds) = st
-        .db
-        .run(|c| {
-            Ok((
-                db::get_setting::<SmtpConfig>(c, "smtp")?,
-                db::get_setting::<OpdsConfig>(c, "opds")?,
-            ))
-        })
-        .await?;
-    Ok(Json(settings_json(&st, &smtp, &opds)))
+    let (smtp, opds, ext, mcp) = st.db.run(|c| load_all(c)).await?;
+    Ok(Json(settings_json(&st, &smtp, &opds, &ext, &mcp)))
 }
 
 #[derive(Deserialize)]
@@ -92,9 +134,17 @@ pub struct OpdsIn {
 }
 
 #[derive(Deserialize)]
+pub struct EnabledIn {
+    enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SettingsIn {
     smtp: Option<SmtpIn>,
     opds: Option<OpdsIn>,
+    external_ratings: Option<EnabledIn>,
+    mcp: Option<EnabledIn>,
 }
 
 pub async fn put(
@@ -114,9 +164,18 @@ pub async fn put(
         Some(v) => Some(clean_patterns(v)?),
         None => None,
     };
-    let (smtp, opds) = st
+    let (smtp, opds, ext, mcp) = st
         .db
         .run(move |c| {
+            let (_, _, mut ext, mut mcp) = load_all(c)?;
+            if let Some(v) = b.external_ratings.and_then(|e| e.enabled) {
+                ext.enabled = v;
+                db::put_setting(c, "externalRatings", &ext)?;
+            }
+            if let Some(v) = b.mcp.and_then(|e| e.enabled) {
+                mcp.enabled = v;
+                db::put_setting(c, "mcp", &mcp)?;
+            }
             let mut smtp: SmtpConfig = db::get_setting(c, "smtp")?;
             if let Some(p) = patterns {
                 smtp.allowed_recipients = p;
@@ -167,10 +226,11 @@ pub async fn put(
             }
             db::put_setting(c, "smtp", &smtp)?;
             db::put_setting(c, "opds", &opds)?;
-            Ok((smtp, opds))
+            Ok((smtp, opds, ext, mcp))
         })
         .await?;
-    Ok(Json(settings_json(&st, &smtp, &opds)))
+    st.ext.set_enabled(ext.enabled);
+    Ok(Json(settings_json(&st, &smtp, &opds, &ext, &mcp)))
 }
 
 #[derive(Deserialize)]

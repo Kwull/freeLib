@@ -37,6 +37,7 @@ type Library = {
   newSinceLastVisit: number;       // books dated on/after the server-local day of the previous visit
   status: LibraryStatus;
   opdsUrl: string;                 // absolute path, e.g. "/opds/1"
+  externalRatings: { lookedUp: number; found: number; rated: number };  // Open Library lookups of this library
 };
 type AuthorRef = { id: number; name: string };
 type SeriesRef = { id: number; name: string };
@@ -51,6 +52,9 @@ type Book = {
   deleted: boolean;
   rating: number;                  // user rating 0..5 (0 = none)
   shelves: number[];               // shelf ids of the current user
+  libRating: number;               // library rating: INPX LIBRATE/STARS, 0..5 (0 = none)
+  extRating: { avg: number; votes: number } | null;  // Open Library average + votes (cached; null = unknown or no votes)
+  kidsAge: 0 | 6 | 12 | 16 | 18 | null;  // age estimate (heuristic from genres and keywords, see ARCHITECTURE.md); null = unknown
 };
 type BookDetail = Book & {
   annotation: string | null;       // sanitized HTML: <p>, <em>, <strong>, <br> only
@@ -58,6 +62,10 @@ type BookDetail = Book & {
   file: string;                    // "<archive> / <file>.<ext>"
   keywords: string;
   formats: string[];               // formats this server can produce for the book, e.g. ["original","epub","kepub","azw3"]
+  extRatingInfo: {                 // the cached Open Library lookup, null = not looked up yet (opening the book queues it)
+    source: "openlibrary"; status: "found" | "not_found" | "error";
+    average: number | null; count: number; workKey: string | null; url: string | null; fetchedAt: string;
+  } | null;
 };
 type Genre = { id: number; name: string; parent: number /*0 = top*/; count: number };
 type AuthorSummary = {             // GET /libraries/:lib/authors/:id/summary; live books only
@@ -169,6 +177,24 @@ passwords: a user created by single sign-on sets a password in Settings → Acco
 | `GET /languages` | `lib` | `[[code, count]]` for that library |
 | `PUT /libraries/:lib/books/:id/rating` | `{rating: 0..5}` | 204 |
 
+### Rating filters and sorts
+
+`GET books` and `GET search` also take (all optional; invalid values → 400):
+
+| Parameter | Meaning |
+|---|---|
+| `sort=my\|lib\|ext` | sort by my rating / library rating / Open Library average (votes break ties), best first, **unrated last**; equal ratings keep the list's own order (search: relevance). Other values keep the normal order |
+| `minMy=1..5`, `minLib=1..5` | minimum own / library rating |
+| `minExt=0..5` (decimal), `minExtVotes=N` | minimum Open Library average / vote count (books without an Open Library rating are excluded) |
+| `unratedByMe=1` | only books the user has not rated |
+| `kidsMaxAge=N` | only books whose age estimate is known and ≤ N |
+
+With any of them the whole selection is filtered and sorted on the server, in memory (genre and new-arrival
+selections from the per-book attribute table, author/series/shelf ids from one query), then paged by offset;
+genre / `since` lists are ordered date desc, id (instead of date desc, title) before a rating sort. `total` counts the
+filtered books; search facets count the books left after the rating filters. Books of an author or series listed
+on a first page are queued for an Open Library lookup (priority 2).
+
 ## Shelves
 
 | Method & path | Body | Response |
@@ -189,6 +215,7 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | `POST /devices` | `Device` without `id` | `Device` (`shared: true` and `kind: "folder"` need admin; an `email` target must match `smtp.allowedRecipients`, else 403) |
 | `PUT /devices/:id` | `Device` | `Device` (shared and folder devices: admin only) |
 | `DELETE /devices/:id` | – | 204 |
+| `PUT /devices/order` | `{ids: number[]}` | `Device[]` in the new order. Per user: `ids` first (any subset of the devices the user sees, shared ones included), the others after them. `GET /devices` returns the user's order (devices never ordered follow, oldest first). **The first device is the user's default** (the quick-send button, the Send dialog's preselection, MCP `device: "default"`). 404 for an unknown id, 400 for duplicates |
 | `POST /send` | `{library, books: number[], device: number, target?: string, fileName?: string, options?: Partial<ConvertOptions>}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`). `options` is merged (shallow) over the device's own options for this send only; the device itself is not changed. E-mail: the recipient must match `smtp.allowedRecipients` (403 `forbidden` otherwise, admins included) and the user's mails today plus this request's books must not exceed `smtp.dailyLimitPerUser` (429 `rate_limited`). Folder: readers may only use shared folder devices with their configured target (403). At most 5 queued + running send/export/download jobs per user (429 `rate_limited`). Exports never overwrite: an existing file gets a ` (2)`, ` (3)`, … sibling |
 | `GET /fonts` | – | `string[]` font family names available for embedding |
 
@@ -206,14 +233,51 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 
 | Method & path | Body | Response |
 |---|---|---|
-| `GET /settings` **(admin)** | – | `{ smtp: {host, port, security: "none"\|"starttls"\|"tls", username, from, passwordSet: boolean, pauseSeconds, allowedRecipients: string[], dailyLimitPerUser: number, subject: string (mail subject template: `%b` title, `%a` author; default `%b`)}, opds: {enabled: boolean, requireAuth: boolean}, calibre: {available: boolean, version: string\|null} }` |
-| `PUT /settings` **(admin)** | same shape; `smtp.password` write-only (omit to keep, `""` to remove). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100) | same as GET |
+| `GET /settings` **(admin)** | – | `{ externalRatings: {enabled, source: "openlibrary", contactSet, progress: {lookedUp, found, rated, total}, queued, requests, pausedFor (s), lastError}, mcp: {enabled, url}, smtp: {host, port, security: "none"\|"starttls"\|"tls", username, from, passwordSet: boolean, pauseSeconds, allowedRecipients: string[], dailyLimitPerUser: number, subject: string (mail subject template: `%b` title, `%a` author; default `%b`)}, opds: {enabled: boolean, requireAuth: boolean}, calibre: {available: boolean, version: string\|null} }` |
+| `PUT /settings` **(admin)** | same shape (`externalRatings.enabled`, default true: when false the server sends nothing to Open Library; `mcp.enabled`, default true: when false `/mcp` answers 403; the other `externalRatings` fields are read-only); `smtp.password` write-only (omit to keep, `""` to remove). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100) | same as GET |
 | `POST /settings/smtp/test` **(admin)** | `{to}` | 204 or 400 with message |
 | `GET /users` **(admin)** | – | `[{id, username, role, hasPassword: boolean, sso: {issuer, email, createdAt, lastLogin} \| null}]` (`sso`: the linked single sign-on identity) |
 | `POST /users` **(admin)** | `{username, password, role}` | user; 409 when the name exists (case-insensitive). User ids are never reused |
 | `PATCH /users/:id` **(admin)** | `{password?, role?}` | user |
 | `DELETE /users/:id` **(admin)** | – | 204 (also cancels and removes the user's jobs and their files) |
+| `GET /me/tokens` | – | `{ tokens: ApiToken[], scopes: ["read","write","send"], mcp: {enabled, url} }` (`url`: `FREELIB_PUBLIC_URL` + `/mcp`, else built from the request's host) |
+| `POST /me/tokens` | `{name, scopes: ("read"\|"write"\|"send")[], expiresInDays?: 1..3650}` | `{ token: ApiToken, secret: "fl_…" }` — the secret is returned **only here**; the server keeps its SHA-256. At most 50 tokens per user (409) |
+| `DELETE /me/tokens/:id` | – | 204 (revoked at once, also for cached authentications); 404 for another user's token |
+| `GET /me/tokens/audit` | – | the last 50 MCP tool calls with the user's tokens: `[{id, tokenId, tokenName (null when revoked), tool, ok, detail (arguments, ≤ 200 chars), at}]` newest first |
 | `GET /me/prefs`, `PUT /me/prefs` | arbitrary JSON ≤ 64 KB (UI state: pane and column widths, visible columns, sort orders, view mode, last library and device…; the SPA writes the whole object) | JSON |
+
+`ApiToken = { id, name, prefix /* "fl_" + 8 chars */, scopes, createdAt, lastUsedAt /* updated ≤ once a minute */, expiresAt: string | null }`.
+Tokens are accepted by `/mcp` only (not by the REST API or OPDS); the REST endpoints above need the session cookie.
+
+## MCP (not under /api)
+
+`POST /mcp` — Model Context Protocol, streamable HTTP transport (official Rust SDK `rmcp`), **stateless**: no
+`Mcp-Session-Id`; each POST carries one JSON-RPC message and is answered with `application/json` (or SSE when a tool
+streams notifications). Protocol versions up to `2026-07-28`. Requires `Authorization: Bearer fl_…` (401 with a
+`WWW-Authenticate: Bearer` challenge otherwise), 403 when `mcp.enabled` is false, 429 + `Retry-After` above
+`FREELIB_MCP_RATE` requests per token and minute (default 120). `tools/list` lists only the tools the token's scopes
+allow; every `tools/call` is checked again (a refused call is a tool error naming the missing scope) and audited.
+
+| Tool | Scope | Arguments (all ids are per library; `library` optional, default library otherwise) |
+|---|---|---|
+| `list_libraries` | read | – |
+| `search_books` | read | `query`, `author`/`author_id`, `series`/`series_id`, `genre`/`genre_id`, `language`, `added_after`, `added_before`, `min_my_rating`, `min_library_rating`, `min_openlibrary_rating`, `min_openlibrary_votes`, `unrated_by_me`, `kids_max_age`, `sort` (`relevance`\|`date`\|`my_rating`\|`library_rating`\|`openlibrary_rating`), `limit` ≤ 50, `cursor` |
+| `get_book` | read | `id` → authors, series + number, genres, language, added, size, format, formats, annotation (plain text ≤ 4000 chars), keywords, my / library / Open Library rating, kids age, my shelves, `myHistory {lastSent, lastDownloaded, lastRead}` |
+| `get_author` | read | `id` or `name` → counts, series, genres, languages, years, co-authors, best-rated books |
+| `list_author_books` | read | `author_id`, `sort`, `limit` ≤ 100, `cursor` |
+| `get_series` | read | `id` or `name` → books in order with my actions, `nextUnread` |
+| `list_genres` | read | `parent`, `lang` |
+| `get_reading_profile` | read | – → shelves with books, ratings, recent sends/downloads/reads, top genres and authors |
+| `suggest_candidates` | read | `seed_book_ids`, `use_profile`, `genres`, `language`, `kids_max_age`, `min_library_rating`, `min_openlibrary_rating`, `exclude_read` (default true), `limit` ≤ 50 → scored candidates with `reasons` |
+| `get_external_rating` | read | `id` → cached, or looked up now (respecting the rate limit; 403 when disabled) |
+| `list_devices` | read | – → devices in the user's order, `default` = the first |
+| `list_shelves` | read | – |
+| `add_to_shelf`, `remove_from_shelf` | write | `shelf_id` or `shelf` (name; `create: true` makes it), `book_ids` ≤ 500 |
+| `rate_book` | write | `id`, `rating` 0..5 |
+| `send_books` | send | `book_ids` ≤ 50, `device` (id or `"default"`) → `{jobId}`; same rules as `POST /send` (allowed recipients, daily limit, 5 jobs per user) |
+| `get_job` | send | `id` |
+
+Prompts: `suggest_next_book` (`wishes?`), `books_for_kid` (`age`, `interests?`), `similar_to` (`book_id`).
 
 ## OPDS (not under /api)
 

@@ -246,6 +246,8 @@ mod tests {
                 size: 100,
                 date: "2024-01-01".into(),
                 deleted: false,
+                lib_rating: 0,
+                kids_age: None,
             },
             file: "1".into(),
             archive: archive.into(),

@@ -3,7 +3,7 @@
   import Icon from './Icon.svelte';
   import { api, errorText } from '../api/client';
   import type { Book, Device } from '../api/types';
-  import { devicesState, preferredDevice, rememberDevice } from '../stores/devices.svelte';
+  import { devicesState, defaultDevice } from '../stores/devices.svelte';
   import { getPref, setPref } from '../stores/prefs.svelte';
   import { watchJob } from '../stores/jobs.svelte';
   import { fillFileNameTemplate } from '../utils/fileNameTemplate';
@@ -30,7 +30,7 @@
     if (!open || bookIds.length === 0) return;
     books = [];
     Promise.all(bookIds.slice(0, 30).map((id) => api.book(lib, id))).then((list) => { books = list; }).catch(() => {});
-    if (devicesState.items.length && deviceId === null) deviceId = initialDevice ?? preferredDevice()?.id ?? devicesState.items[0].id;
+    if (devicesState.items.length && deviceId === null) deviceId = initialDevice ?? defaultDevice()?.id ?? devicesState.items[0].id;
   });
 
   $effect(() => {
@@ -83,7 +83,6 @@
         },
       });
       watchJob(job);
-      rememberDevice(device.id);
       if (device.kind === 'email' && target && target !== (device.target ?? '')) {
         setPref('sendTargets', { ...getPref<Record<string, string>>('sendTargets', {}), [String(device.id)]: target });
       }

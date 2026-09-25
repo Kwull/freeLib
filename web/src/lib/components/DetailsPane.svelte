@@ -5,10 +5,13 @@
   import CoverThumb from './CoverThumb.svelte';
   import Rating from './Rating.svelte';
   import Splitter from './Splitter.svelte';
+  import KidsBadge from './KidsBadge.svelte';
+  import { formatAvg } from '../utils/ratings';
+  import { noteRating } from '../stores/myRatings.svelte';
   import { formatSize, formatDate } from '../utils/format';
   import { t, tn, i18nState } from '../i18n';
   import { navigate } from '../router.svelte';
-  import { preferredDevice } from '../stores/devices.svelte';
+  import { defaultDevice, devicesState, deviceVerb, deviceCaption } from '../stores/devices.svelte';
   import { shelvesState } from '../stores/shelves.svelte';
   import {
     PANE_LIMITS, paneWidth, setPaneWidth, detailsCollapsed, setDetailsCollapsed,
@@ -40,6 +43,7 @@
   $effect(() => {
     allAuthors = false;
     downloadMenuOpen = false;
+    deviceMenuOpen = false;
     if (bookId === null) { detail = null; error = null; return; }
     let cancelled = false;
     loading = true;
@@ -56,9 +60,11 @@
     if (!detail) return;
     detail = { ...detail, rating: v };
     await api.setRating(lib, detail.id, v);
+    noteRating(lib, detail.id, v);
   }
 
-  const dev = $derived(preferredDevice());
+  const dev = $derived(defaultDevice());
+  let deviceMenuOpen = $state(false);
   const shelfNames = $derived.by(() => {
     if (!detail) return [];
     return detail.shelves.map((id) => shelvesState.items.find((s) => s.id === id)?.name).filter(Boolean) as string[];
@@ -138,9 +144,26 @@
 
         <div class="actions">
           {#if dev}
-            <button type="button" class="primary" onclick={() => onSend([detail!.id], dev.id)}>
-              <Icon name="send" size={16} /><span class="ellipsis">{t('details.sendToDevice', { device: dev.name })}</span>
-            </button>
+            <div class="send-wrap">
+              <div class="split">
+                <button type="button" class="primary main" data-testid="quick-send" title={deviceCaption(dev)} aria-describedby="send-caption" onclick={() => onSend([detail!.id], dev.id)}>
+                  <Icon name={deviceVerb(dev) === 'send' ? 'send' : 'download'} size={16} /><span class="ellipsis">{t(`device.action.${deviceVerb(dev)}`)}</span>
+                </button>
+                <button type="button" class="primary chev" aria-label={t('details.otherDevice')} title={t('details.otherDevice')} aria-haspopup="true" aria-expanded={deviceMenuOpen} onclick={() => { deviceMenuOpen = !deviceMenuOpen; downloadMenuOpen = false; }}>
+                  <Icon name="chevronDown" size={14} />
+                </button>
+                {#if deviceMenuOpen}
+                  <div class="dl-menu dev-menu" role="menu">
+                    {#each devicesState.items as d (d.id)}
+                      <button type="button" role="menuitem" onclick={() => { deviceMenuOpen = false; onSend([detail!.id], d.id); }}>
+                        <span class="verb">{t(`device.action.${deviceVerb(d)}`)}</span><span class="muted">{deviceCaption(d)}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+              <span class="caption" id="send-caption" data-testid="send-caption">{deviceCaption(dev)}</span>
+            </div>
           {/if}
           <div class="dl-wrap">
             <button type="button" class="secondary icon-only" aria-label={t('details.downloadAs')} title={t('details.downloadAs')} aria-haspopup="true" aria-expanded={downloadMenuOpen} onclick={() => (downloadMenuOpen = !downloadMenuOpen)}>
@@ -179,7 +202,33 @@
 
         <dl class="meta-list">
           <dt>{t('details.added')}</dt><dd>{formatDate(detail.date, i18nState.lang)}</dd>
-          <dt>{t('details.rating')}</dt><dd><Rating value={detail.rating} onChange={rate} /></dd>
+          <dt>{t('ratings.my')}</dt><dd data-testid="my-rating"><Rating value={detail.rating} onChange={rate} /></dd>
+          <dt>{t('ratings.lib')}</dt>
+          <dd data-testid="lib-rating" title={t('ratings.libSource')}>
+            {#if detail.libRating}<span class="lib-stars"><Rating value={detail.libRating} /></span>{:else}<span class="muted">{t('ratings.none')}</span>{/if}
+          </dd>
+          <dt>{t('ratings.ext')}</dt>
+          <dd data-testid="ext-rating">
+            {#if detail.extRating}
+              <span class="ext-line" title={t('ratings.extSource')}>
+                <span class="ext-stars"><Rating value={Math.round(detail.extRating.avg)} /></span>
+                <b>{formatAvg(detail.extRating.avg)}</b>
+                <span class="muted">· {tn('ratings.votes', detail.extRating.votes)}</span>
+                {#if detail.extRatingInfo?.url}<a href={detail.extRatingInfo.url} target="_blank" rel="noopener noreferrer" data-link={false} class="ol-link">openlibrary.org</a>{/if}
+              </span>
+            {:else if detail.extRatingInfo?.status === 'found'}
+              <span class="muted">{t('ratings.extNoVotes')}</span>
+              {#if detail.extRatingInfo.url}<a href={detail.extRatingInfo.url} target="_blank" rel="noopener noreferrer" data-link={false} class="ol-link">openlibrary.org</a>{/if}
+            {:else if detail.extRatingInfo?.status === 'not_found'}
+              <span class="muted">{t('ratings.extNotFound')}</span>
+            {:else}
+              <span class="muted">{t('ratings.extPending')}</span>
+            {/if}
+          </dd>
+          <dt>{t('ratings.age')}</dt>
+          <dd data-testid="kids-age" title={t('ratings.kidsHint')}>
+            {#if detail.kidsAge !== null && detail.kidsAge !== undefined}<KidsBadge age={detail.kidsAge} /> <span class="muted small">{t('ratings.estimate')}</span>{:else}<span class="muted">{t('ratings.unknown')}</span>{/if}
+          </dd>
           <dt>{t('details.shelves')}</dt>
           <dd class="shelves-cell">
             {#each shelfNames as name (name)}<span class="chip small">{name}</span>{/each}
@@ -246,6 +295,12 @@
 {/if}
 
 <style>
+  .lib-stars :global(.rating svg.on) { fill: var(--muted); stroke: var(--muted); }
+  .ext-stars :global(.rating svg.on) { fill: var(--sky); stroke: var(--sky); }
+  .ext-line { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .ol-link { font-size: 12px; color: var(--muted); }
+  .ol-link:hover { color: var(--accent); }
+  .small { font-size: 12px; }
   .details {
     flex: 0 1 var(--w, 360px); min-width: 280px; position: relative; container-type: inline-size;
     border-left: 1px solid var(--line); background: var(--surface-alt); overflow-y: auto; display: flex; flex-direction: column;
@@ -272,7 +327,16 @@
   .meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; align-items: flex-start; }
   h2 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
   .muted { color: var(--muted); font-size: 13px; }
-  .actions { padding: 20px 24px 0; display: flex; gap: 8px; }
+  .actions { padding: 20px 24px 0; display: flex; gap: 8px; align-items: flex-start; }
+  .send-wrap { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .split { position: relative; display: flex; }
+  .split .main { border-top-right-radius: 0 !important; border-bottom-right-radius: 0 !important; }
+  .actions .split button.chev { flex: 0 0 34px; padding: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255,255,255,.25); }
+  .caption { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 2px; }
+  .dev-menu { left: 0; right: auto; min-width: 240px; }
+  .dev-menu button { all: unset; box-sizing: border-box; display: flex; justify-content: space-between; gap: 12px; width: 100%; padding: 8px 12px; font-size: 13px; color: var(--ink); cursor: pointer; }
+  .dev-menu button:hover, .dev-menu button:focus-visible { background: var(--surface-hover); }
+  .dev-menu .verb { font-weight: 500; }
   .actions button.primary {
     flex-grow: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px;
     border: none; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 500; font-size: 14px; padding: 0 12px;
@@ -283,7 +347,7 @@
   /* narrow pane: the send button gets its own row */
   @container (max-width: 400px) {
     .actions { flex-wrap: wrap; }
-    .actions button.primary { flex-basis: 100%; }
+    .actions .send-wrap { flex-basis: 100%; }
     .actions button.secondary { flex-grow: 1; justify-content: center; }
     .actions .dl-wrap { flex-grow: 1; display: flex; }
     .actions .dl-wrap button { flex-grow: 1; justify-content: center; }

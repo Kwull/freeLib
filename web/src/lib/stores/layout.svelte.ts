@@ -10,7 +10,7 @@ export const PANE_LIMITS: Record<PaneKey, { min: number; max: number; def: numbe
   details: { min: 280, max: 640, def: 360 },
 };
 
-export type ColKey = 'num' | 'author' | 'series' | 'genre' | 'language' | 'format' | 'size' | 'added' | 'rating';
+export type ColKey = 'num' | 'author' | 'series' | 'genre' | 'language' | 'format' | 'size' | 'added' | 'rating' | 'libRating' | 'extRating';
 
 export const COL_LIMITS: Record<ColKey, { min: number; max: number; def: number }> = {
   num: { min: 32, max: 90, def: 40 },
@@ -21,7 +21,9 @@ export const COL_LIMITS: Record<ColKey, { min: number; max: number; def: number 
   format: { min: 48, max: 120, def: 64 },
   size: { min: 56, max: 140, def: 72 },
   added: { min: 72, max: 160, def: 92 },
-  rating: { min: 84, max: 160, def: 92 },
+  rating: { min: 64, max: 160, def: 70 },
+  libRating: { min: 40, max: 120, def: 44 },
+  extRating: { min: 64, max: 160, def: 80 },
 };
 
 export function clampWidth(v: number, lim: { min: number; max: number }): number {

@@ -112,6 +112,22 @@ CREATE TABLE mail_count (user_id INTEGER NOT NULL, day TEXT NOT NULL, count INTE
 CREATE TABLE user_identity (issuer TEXT NOT NULL, subject TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE, email TEXT, created_at TEXT NOT NULL, last_login TEXT, PRIMARY KEY (issuer, subject)) WITHOUT ROWID;
 CREATE UNIQUE INDEX user_identity_user ON user_identity(user_id, issuer);
 "#,
+    // v4: personal API tokens (MCP), their audit log, and a per-user history of sends,
+    // downloads and reads (reading profile, "already sent")
+    r#"
+CREATE TABLE api_token (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL, scopes TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, expires_at TEXT);
+CREATE INDEX api_token_user ON api_token(user_id);
+CREATE TABLE api_audit (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, token_id INTEGER, tool TEXT NOT NULL, ok INTEGER NOT NULL, detail TEXT NOT NULL DEFAULT '', at TEXT NOT NULL);
+CREATE INDEX api_audit_user ON api_audit(user_id, id);
+CREATE TABLE book_history (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, library_id INTEGER NOT NULL, book_key TEXT NOT NULL, action TEXT NOT NULL CHECK (action IN ('send','download','read')), device TEXT, at TEXT NOT NULL);
+CREATE INDEX book_history_user ON book_history(user_id, library_id, at);
+CREATE INDEX book_history_key ON book_history(user_id, library_id, book_key);
+"#,
+    // v5: each user's order of the devices they see (own and shared); the first one is their
+    // default device
+    r#"
+CREATE TABLE device_order (user_id INTEGER NOT NULL, device_id INTEGER NOT NULL, pos INTEGER NOT NULL, PRIMARY KEY (user_id, device_id)) WITHOUT ROWID;
+"#,
 ];
 
 /// Current `app.db` schema version (`PRAGMA user_version` after migrating).

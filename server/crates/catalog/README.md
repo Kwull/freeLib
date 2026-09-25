@@ -98,6 +98,11 @@ Plain files (`archive == ""`) live at `library_path / relative_path()`.
 * `schema` — `create_catalog_tables/indexes` (importer), `CATALOG_SCHEMA_VERSION`, and for `app.db`:
   `open_app_db(path) -> Connection` (WAL, foreign keys, busy timeout, migrates), `migrate_app_db(&conn)`,
   `APP_MIGRATIONS` (append-only list; `PRAGMA user_version` = number applied), `APP_SCHEMA_VERSION`.
+* `rank` — `RatingQuery` (rating filters / sort), the `RatingSource` trait (user and external ratings by book id,
+  supplied by the server), `Catalog::books_rated(sel, filter, rq, src, page)` and `Catalog::search_rated(sq, src)`
+  (`SearchQuery.rating`), `Catalog::selection_ids`. `BookAttrs` also holds `stars` and the age estimate.
+* `kids` — `age_for(genre ids, keywords) -> Option<u8>` (0/6/12/16/18): the heuristic age estimate behind
+  `Book.kids_age` (see ARCHITECTURE.md "Kids' age estimate"). `Book` also has `lib_rating` (INPX stars).
 * `util` — `now_rfc3339()`, `now_millis()`, `parse_date()`, civil date helpers.
 
 ## Importer (`freelib-import`) in one screen

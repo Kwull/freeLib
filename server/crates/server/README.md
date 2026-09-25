@@ -53,13 +53,16 @@ Subcommands:
 | `app.rs` | startup: directories, `app.db`, admin bootstrap/open mode, default devices, libraries, `FREELIB_AUTOIMPORT`, cleanup task; router assembly (compression, security headers, trace) |
 | `config.rs` | `Config` from the environment; `Config::for_dir` for tests |
 | `state.rs` | `AppState`: config, db, per-library `LibRuntime` (catalog handle, import status, `deleted` flag, cached authors/series JSON and its br/gzip variants, `newSinceLastVisit` counts), jobs, worker / preview / password-verification semaphores, caches, login rate limiter (per address and per user name), `LibraryDto`, `catalog_call` (retries once on a catalog replaced mid-request) |
-| `db.rs` | `app.db` access: users, sessions (SHA-256 of the token stored), libraries, devices (+ seeding), shelves, ratings, settings, prefs |
+| `db.rs` | `app.db` access: users, sessions (SHA-256 of the token stored), libraries, devices (+ seeding, per-user order), shelves, ratings, settings, prefs, API tokens + audit, book history |
 | `auth.rs` | argon2id hashing, cookies, `Auth` / `Admin` extractors (session cache 60 s), credential check with rate limiting |
 | `oidc.rs` | OpenID Connect sign-in: discovery/JWKS cache, authorization code + PKCE + state + nonce, ID token validation, pending sign-ins, account lookup/creation/linking by (issuer, subject), admin group (see docs/web/ARCHITECTURE.md "Single sign-on") |
 | `security.rs` | CSRF middleware for `/api`, the `Host` check (DNS rebinding), security headers and the Content-Security-Policy |
 | `cache.rs` | LRU eviction of `cache/{out,covers,info}` (`FREELIB_CACHE_MAX_MB`), temp-file cleanup at startup |
 | `error.rs` | `ApiError` → `{"error", "message"}` |
 | `api/*.rs` | `/api/v1` handlers: `session`, `libraries` (+ `/fs`), `browse` (lists, genres, books, search, languages), `books` (detail, cover, file), `shelves` (+ rating), `devices` (+ `/send`, `/fonts`), `jobs` (+ SSE `/events`), `settings` (+ SMTP test, users, prefs), `oidc` (`/auth/oidc/*`, `/me/account`, `/me/password`, `/me/oidc`) |
+| `extrating/` | Open Library ratings: `openlibrary.rs` (HTTP trait, rate limiter with backoff, search + conservative title/surname matcher with transliteration, `ratings.json`), `mod.rs` (`ratings.db` cache, in-memory index + dense per-catalog arrays, priority queue, background worker, on-demand lookup) |
+| `tokens.rs` | personal API tokens: `fl_` secrets, SHA-256 storage, scopes, bearer authentication (60 s cache), per-token rate limit; `api/tokens.rs` = `/me/tokens` |
+| `mcp/` | MCP server at `/mcp` (rmcp streamable HTTP, stateless): `mod.rs` (gate middleware, `ServerHandler`, prompts, instructions), `tools.rs` (17 tools with scopes and schemas), `suggest.rs` (candidate scoring) |
 | `importer.rs` | import jobs: `freelib_import::import_inpx` in a blocking thread, progress → job/library events, catalog reload and warm-up |
 | `jobs.rs` | in-memory job list, cancel flags, produced files, SSE `Event`s with per-user visibility |
 | `sender.rs` | `/send` jobs: e-mail (one message per book, `pauseSeconds` between), folder export under `FREELIB_EXPORT_DIR/<target>`, download (single file or zip), `joinSeries` |

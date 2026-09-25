@@ -6,7 +6,10 @@ edition lives in `server/`, `web/`, `docker/`.
 
 ```
 Browser (Svelte 5 SPA) ──HTTP/JSON + SSE──▶ freelib-server (Rust, axum)
-                                             ├─ app.db             users, sessions, libraries, devices, shelves, ratings, settings
+                                             ├─ app.db             users, sessions, libraries, devices, shelves, ratings, settings, API tokens, history
+                                             ├─ ratings.db         Open Library rating cache (safe to delete)
+                                             ├─ rating worker      Open Library lookups, ≥ 1 s apart, priority queue
+                                             ├─ /mcp               MCP server (rmcp, streamable HTTP, bearer tokens)
                                              ├─ lib_<id>.db        one read-only catalog per library (SQLite, FTS5)
                                              ├─ import worker      INPX → lib_<id>.new.db → atomic rename
                                              ├─ job queue          send / export / convert (N workers = CPU cores)
@@ -54,7 +57,13 @@ Browser (Svelte 5 SPA) ──HTTP/JSON + SSE──▶ freelib-server (Rust, axum
 | `FREELIB_OIDC_DISABLE_PASSWORD` | `false` | Hide and refuse password sign-in in the web app, except for the `FREELIB_ADMIN_USER` account while `FREELIB_ADMIN_PASSWORD` is set (the way back in). OPDS keeps Basic auth |
 | `FREELIB_CACHE_MAX_MB` | `2048` | Size bound of `cache/{out,covers,info}`; least recently used files are evicted (`0` = unbounded) |
 | `FREELIB_CALIBRE_TIMEOUT` | `300` | Seconds before a Calibre conversion is killed (`FREELIB_CALIBRE=none` disables Calibre) |
+| `FREELIB_CONTACT_EMAIL` | unset | Contact address in the User-Agent of Open Library requests (`freeLib/<version> (+https://github.com/Kwull/freeLib; <email>)`), as Open Library asks of API users |
+| `FREELIB_OPENLIBRARY_URL` | `https://openlibrary.org` | Base URL of Open Library (tests point it at a local fake) |
+| `FREELIB_MCP_RATE` | `120` | MCP requests per API token and minute |
 | `RUST_LOG` | `info` | Logging |
+
+Admin settings (Settings → Server, stored in `app.db` `setting`): `externalRatings.enabled` (default true — when
+false nothing is sent to Open Library) and `mcp.enabled` (default true — when false `/mcp` answers 403).
 
 ## Catalog database (`lib_<id>.db`)
 
@@ -174,7 +183,105 @@ created by single sign-on have an empty `password_hash` (no password sign-in, no
 Migrations: `freelib_catalog::schema::APP_MIGRATIONS` is an append-only list of SQL batches; `PRAGMA user_version`
 holds how many were applied; `open_app_db()` applies the missing ones, each in a transaction, and refuses a newer database.
 
+Migration v4: `api_token(id, user_id, name, token_hash UNIQUE, prefix, scopes, created_at, last_used_at, expires_at)`
+(SHA-256 hex of the secret; the secret `fl_` + base64url of 32 random bytes is shown once), `api_audit(id, user_id,
+token_id, tool, ok, detail, at)` (≤ 500 per user kept, the UI shows 50), and `book_history(id, user_id, library_id,
+book_key, action ∈ send|download|read, device, at)` (≤ 5000 per user; the same book and action within an hour is
+recorded once). History is written by the send/export/download jobs when they succeed (`send` for e-mail and folder
+devices, `download` for download devices) and by `GET …/file` (`read` for the web reader's `inline=1`, else `download`).
+Migration v5: `device_order(user_id, device_id, pos)`: each user's order of the devices they see (own + shared).
+`GET /devices` sorts by it (devices never ordered follow by id); **the first device is the user's default** everywhere
+(quick send in the details pane and the selection bar, the Send dialog's preselection, MCP `device: "default"`). A
+first-in-order rule was chosen over "last used": it is explicit and stable — a one-off download no longer changes
+where the next "Send" goes. The old `lastDevice` UI pref is no longer read.
+Tokens, audit rows, history and device order are removed with their user; open-mode data (user 0) is adopted by the first account.
+
 User data is keyed by `(library_id, book_key)`, so it survives re-imports.
+
+## Ratings
+
+Three sources per book, all exposed on `Book`:
+
+* **my rating** — `rating` in `app.db` (0–5);
+* **library rating** — the INPX `LIBRATE`/`STARS` field, clamped 0–5 at import (Flibusta's own ratings are 0–5), stored
+  in `book.stars`, API `libRating` (0 = none);
+* **external rating** — Open Library (`server/src/extrating/`).
+
+### Open Library enrichment
+
+* **Lookup** (`extrating/openlibrary.rs`): `GET /search.json?title=…&author=<surname>&fields=key,title,author_name,ratings_count,edition_count`,
+  then `GET <work>/ratings.json` (`summary.average`, `summary.count`). Matching is conservative — no match beats a
+  wrong one: the book title (bracketed notes like `(сборник)` dropped) must equal the result title, or one of them its
+  main title before a `:`, ` - ` or `. ` (≥ 4 letters), compared as a Latin key (Cyrillic transliterated, accents folded,
+  `iy/ii/yi → y`, `kh → h`, `ts → c`, `ks → x`, … so `Strugatsky = Strugatskii = Стругацкий`); **and** one of the
+  book's author surnames (INPX last names; "Автор неизвестен" is never used) must be a word of one of the result's
+  author names. Among several matches the one with most ratings wins. Cyrillic books are tried as is, then with a
+  transliterated surname, then with transliterated title and surname (≤ 3 searches, stopping at the first match).
+  Titles with fewer than 2 key characters or books without an author are not looked up.
+* **Cache**: `ratings.db` (WAL) in the data directory, separate from `app.db` because it is written about once a second
+  and can be deleted at any time: `ext_rating(library_id, book_key, source, status found|not_found|error, average,
+  count, work_key, fetched_at, attempts, message)` keyed by (library, `book_key`, source) — `book_key` alone is only
+  unique per library (`lib:<LIBID>` of two different collections would collide) — and `sweep(library_id, next_id,
+  done_at)`. Found ratings are refreshed after 90 days, `not_found` after 180 days, errors retried after a day; a
+  failed refresh keeps the previous answer.
+* **Memory**: at start the found rows are loaded into `book_key → (average×100, votes)` per library (250k cached rows:
+  the server is listening 0.2 s after start). Book lists read it per row. For rating sorts and filters a dense array
+  indexed by book id (6 bytes/book, 3.3 MB for 551k books) is built per catalog version during the catalog warm-up
+  (≈ 0.5 s for 150k found ratings) and updated in place as lookups arrive.
+* **Worker** (`ExtRatings::run`, one task): one request at a time, at least 1 s apart (`Limiter`); HTTP 429/5xx or
+  network errors pause all requests 30 s, doubling up to 1 h, reset by a success. Priorities: (1) books the user
+  opened (detail), shelved, rated or sent — `Priority::User`; (2) books of the author/series pages the user browses
+  (first 300 of a page) — `Priority::Browse`; (3) a sweep over every library by book id, skipping fresh rows; after a
+  full pass it restarts a day later (which picks up refreshes). Queues are bounded (2 000 / 10 000, oldest dropped),
+  enqueuing never blocks a request. With `externalRatings.enabled` off nothing is queued or sent; MCP
+  `get_external_rating` looks one book up immediately (same limiter) or returns the cached answer.
+* **Privacy**: requests carry book titles and author surnames only, never anything about users, with the User-Agent
+  above. Progress (looked up / total, found, with ratings, queue, pause, last error) is shown in Settings → Server and
+  per library on the Libraries page.
+
+### Rating filters and sorts
+
+`freelib_catalog::rank`: `RatingQuery {sort: None|My|Lib|Ext, min_my, min_lib, min_ext, min_ext_votes, unrated_by_me,
+kids_max_age}` and a `RatingSource` trait (my rating and external rating by book id) that the server implements per
+request (the user's ratings of the library resolved to ids; the dense external array). `Catalog::books_rated` = `books`
+without a rating query; with one, the selection's ids come from `BookAttrs` (genre, since — now also holding
+`stars` and the age estimate, +2 bytes/book) or one SQL query (author, series, shelf), are filtered, stably sorted
+(best first, unrated last) and paged by offset. `search_rated` applies the filters before facets and sorts by the
+rating instead of bm25 (relevance breaks ties). The web app sorts and filters author/series lists (loaded in full) in
+the browser with the same rules, and sends the parameters for genres, new arrivals, shelves and search.
+
+### Kids' age estimate (heuristic)
+
+`freelib_catalog::kids::age_for(genre ids, keywords)` → 0, 6, 12, 16, 18 or unknown. It is **a heuristic, not an age
+rating**: nobody reviewed the books, and a children's genre on an adult book (or no genre) gives a wrong or missing
+estimate. Rules, strongest first: adult genres (`love_erotica`, `love_hard`, `home_sex`) or adult words in the INPX
+keywords (`18+`, `эротика`, `erotica`, `порно`) → 18+; an explicit `0+`/`6+`/`12+`/`16+` keyword → that; mature
+genres (horror, thrillers, serial killers, romance, counterculture, sex psychology, hard-boiled) → 16+; children's
+genres → the highest of 0+ (tales, nursery verse, children's folklore), 6+ (children's prose/classics/education, folk
+tales, fairy fantasy), 12+ (children's adventure/mystery/SF, young adult, gamebooks); children's / teen words in the
+keywords → 6+ / 12+; else unknown. The filter "suitable for age ≤ N" excludes unknown books.
+
+## MCP server
+
+`server/src/mcp/` — the official Rust SDK `rmcp` (3.4) `StreamableHttpService` mounted at `/mcp` (outside `/api/v1`,
+no cookies), in stateless mode with JSON responses (`legacy_session_mode = false`, `NeverSessionManager`); protocol
+versions up to 2026-07-28. Its own Host/Origin checks are off because `host_guard` (`FREELIB_ALLOWED_HOSTS`) already
+runs and the endpoint needs a bearer token. A middleware (`mcp::gate`) checks `mcp.enabled`, the token
+(`tokens::authenticate`: SHA-256 lookup, constant-time compare, expiry, 60 s cache cleared on revocation or user
+changes), the per-token rate limit (fixed one-minute window), and passes the token to the handler in the request
+extensions. The handler implements `list_tools` / `call_tool` / `list_prompts` / `get_prompt` itself: the tool table
+(`mcp/tools.rs`) holds each tool's scope, description and argument JSON schema (`schemars`); `tools/list` shows the
+tools the token may use, every call is checked again and written to `api_audit`. Tools answer with
+`structuredContent` (and the same JSON as text). Server instructions describe the library, the ids, the three
+ratings, the age heuristic and the suggested workflow. Scopes: `read` (catalog, own shelves/ratings/history/devices,
+suggestions, Open Library lookups), `write` (shelves, ratings), `send` (`send_books`, `get_job`).
+
+`suggest_candidates` (`mcp/suggest.rs`) scores server-side: seeds are the given books and/or the profile (rated 5 → 3,
+4 → 2, 3 → 0.5, ≤ 2 → −2; on a shelf +1; sent/downloaded/read +1; anthologies do not seed authors). Candidates: the
+books of the 15 best-weighted authors, of the seed series, and up to 1 500 well-rated books (library ≥ 4 or Open
+Library ≥ 4.0 with ≥ 5 votes) of the 5 top genres; read/rated/shelved books are excluded by default. Score:
+same author `3 × w/max`, next unread number of a series `+5` (later numbers `+2`), shared genres up to `+2`, library
+rating `(stars − 3) × 0.5`, Open Library `(avg − 3.5)`, disliked author down to `−3` — each part explained in `reasons`.
 
 ## Single sign-on (OpenID Connect)
 
@@ -311,6 +418,25 @@ Reproduce: `cargo run --release -p freelib-import --bin bench` (generates `serve
 if missing). With archives and offset resolution:
 `gen-inpx --books 600000 --out bench-data/files600k/lib.inpx --with-files bench-data/files600k/lib`, then
 `bench --inpx bench-data/files600k/lib.inpx --lib-dir bench-data/files600k/lib --db bench-data/files_lib.db`.
+
+### Measured: ratings (release server, 600k synthetic library)
+
+`bench-data/synthetic-600k.inpx` (551,652 live books), 5 000 own ratings, 250 000 cached Open Library rows (150 000
+found with votes); `curl`-style timings over HTTP on localhost, 7 runs, p50 / max:
+
+| Request | p50 | max |
+|---|---|---|
+| all 551k books (`since=1900-01-01`), default order, first page | 206 ms | 226 ms |
+| all 551k, `sort=ext` (index built at warm-up; 528 ms if not) | 46 ms | 47 ms |
+| all 551k, `sort=lib` / `sort=my` | 43 / 60 ms | 101 / 106 ms |
+| all 551k, `minExt=4&minExtVotes=100` / `unratedByMe=1` / `kidsMaxAge=12` | 33 / 47 / 28 ms | 34 / 48 / 29 ms |
+| top-level genre (103,025 books) default / `sort=ext` | 14 / 20 ms | – / 22 ms |
+| same genre `sort=lib&minLib=3`, page at offset 5 000 | 17 ms | 18 ms |
+| leaf genre (8 351) `sort=my` | 18 ms | 19 ms |
+| biggest author (1 621 books, all) `sort=ext` | 24 ms | 36 ms |
+| search `сер` (53,805 hits) default / `sort=ext&minLib=2` | 54 / 56 ms | 105 / 57 ms |
+
+RSS after these: ≈ 325 MB (≈ 285 MB right after start with the cache loaded).
 
 ### Measured: HTTP server
 

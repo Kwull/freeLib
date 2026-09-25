@@ -48,6 +48,8 @@ export FREELIB_AUTOIMPORT="$INPX"
 # that the rest of the Playwright suite (pnpm test) runs against, so specs need no login step.
 export FREELIB_WEB_DIR="$WEB_DIR/dist"
 export FREELIB_CALIBRE=none
+# never contact the real openlibrary.org from tests (lookups fail and back off)
+export FREELIB_OPENLIBRARY_URL="${FREELIB_OPENLIBRARY_URL:-http://127.0.0.1:9}"
 export RUST_LOG="${RUST_LOG:-info}"
 
 echo "[real-server] starting freelib-server on 127.0.0.1:$FREELIB_PORT (data in $TMP_DIR)" >&2

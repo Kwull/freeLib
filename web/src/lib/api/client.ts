@@ -2,7 +2,7 @@ import { ApiError } from './types';
 import type {
   Library, Book, BookDetail, Genre, Shelf, Device, Job, Session, NameListResponse,
   BooksResponse, SearchResponse, Settings, User, ConvertOptions, AuthorSummary, CoauthorsResponse,
-  Account, UserRow,
+  Account, UserRow, RatingParams, TokensResponse, ApiToken, AuditRow, TokenScope,
 } from './types';
 
 const BASE = '/api/v1';
@@ -115,7 +115,9 @@ export const api = {
   books: (lib: number, params: {
     author?: number; series?: number; genre?: number; shelf?: number; since?: string;
     lang?: string; ext?: string; deleted?: boolean; q?: string; cursor?: string; limit?: number;
-  }, init?: RequestInit) => request<BooksResponse>(`/libraries/${lib}/books${qs({ ...params, deleted: params.deleted ? 1 : undefined })}`, init),
+  } & RatingParams, init?: RequestInit) => request<BooksResponse>(`/libraries/${lib}/books${qs({
+    ...params, deleted: params.deleted ? 1 : undefined, unratedByMe: params.unratedByMe ? 1 : undefined,
+  })}`, init),
   authorSummary: (lib: number, id: number) => request<AuthorSummary>(`/libraries/${lib}/authors/${id}/summary`),
   coauthors: (lib: number, id: number) => request<CoauthorsResponse>(`/libraries/${lib}/authors/${id}/coauthors`),
   book: (lib: number, id: number) => request<BookDetail>(`/libraries/${lib}/books/${id}`),
@@ -126,7 +128,7 @@ export const api = {
   search: (lib: number, params: {
     q: string; kind?: 'all' | 'books' | 'authors' | 'series'; genre?: string; lang?: string;
     ext?: string; from?: string; to?: string; limit?: number;
-  }) => request<SearchResponse>(`/libraries/${lib}/search${qs(params)}`),
+  } & RatingParams) => request<SearchResponse>(`/libraries/${lib}/search${qs({ ...params, unratedByMe: params.unratedByMe ? 1 : undefined })}`),
   languages: (lib: number) => request<[string, number][]>(`/languages${qs({ lib })}`),
   setRating: (lib: number, id: number, rating: number) =>
     request<void>(`/libraries/${lib}/books/${id}/rating`, { method: 'PUT', body: JSON.stringify({ rating }) }),
@@ -146,6 +148,8 @@ export const api = {
   createDevice: (d: Omit<Device, 'id'>) => request<Device>('/devices', { method: 'POST', body: JSON.stringify(d) }),
   updateDevice: (id: number, d: Device) => request<Device>(`/devices/${id}`, { method: 'PUT', body: JSON.stringify(d) }),
   deleteDevice: (id: number) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
+  /** the user's device order (first = default); returns the devices in that order */
+  orderDevices: (ids: number[]) => request<Device[]>('/devices/order', { method: 'PUT', body: JSON.stringify({ ids }) }),
   send: (body: {
     library: number; books: number[]; device: number; target?: string; fileName?: string;
     options?: Partial<ConvertOptions>;
@@ -168,6 +172,13 @@ export const api = {
   updateUser: (id: number, u: { password?: string; role?: string }) =>
     request<User>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(u) }),
   deleteUser: (id: number) => request<void>(`/users/${id}`, { method: 'DELETE' }),
+
+  // API tokens (MCP)
+  tokens: () => request<TokensResponse>('/me/tokens'),
+  createToken: (body: { name: string; scopes: TokenScope[]; expiresInDays?: number }) =>
+    request<{ token: ApiToken; secret: string }>('/me/tokens', { method: 'POST', body: JSON.stringify(body) }),
+  revokeToken: (id: number) => request<void>(`/me/tokens/${id}`, { method: 'DELETE' }),
+  tokenAudit: () => request<AuditRow[]>('/me/tokens/audit'),
 
   prefs: () => request<Record<string, unknown>>('/me/prefs'),
   setPrefs: (p: Record<string, unknown>) => request<Record<string, unknown>>('/me/prefs', { method: 'PUT', body: JSON.stringify(p) }),

@@ -112,6 +112,11 @@
         <div class="muted">
           {lib.importedAt ? `${t('libraries.imported')} ${formatDate(lib.importedAt.slice(0, 10), i18nState.lang)}` : t('libraries.never')}
         </div>
+        {#if lib.externalRatings && lib.importedAt}
+          <div class="muted small" data-testid="lib-ext-ratings" title={t('libraries.extHint')}>
+            {t('libraries.extProgress', { looked: num(lib.externalRatings.lookedUp), total: num(lib.bookCount), found: num(lib.externalRatings.found) })}
+          </div>
+        {/if}
         {#if lib.status.state === 'importing'}
           <div class="bar"><div class="fill" style="width:{Math.round((lib.status.progress ?? 0) * 100)}%"></div></div>
           <div class="muted small">{lib.status.message ?? t('libraries.status.importing')}</div>

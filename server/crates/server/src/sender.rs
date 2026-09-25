@@ -137,8 +137,24 @@ pub async fn start(st: &AppState, user: &User, req: SendRequest) -> ApiResult<Jo
     let st2 = st.clone();
     let job_id = job.id.clone();
     let uid = user.id;
+    let n = req.books.len().min(crate::extrating::BROWSE_ENQUEUE);
+    st.ext.enqueue(
+        crate::extrating::Priority::User,
+        req.library,
+        &req.books[..n],
+    );
+    let (lib, ids) = (req.library, req.books.clone());
+    let action = if dev.kind == "download" {
+        "download"
+    } else {
+        "send"
+    };
+    let dev_name = dev.name.clone();
     tokio::spawn(async move {
         let r = run(&st2, &job_id, uid, req, target, smtp, cancel).await;
+        if r.is_ok() {
+            record_history(&st2, uid, lib, ids, action, dev_name).await;
+        }
         match r {
             Ok(()) => {}
             Err(e) if e.code == "cancelled" => st2.jobs.cancelled(&job_id),
@@ -146,6 +162,28 @@ pub async fn start(st: &AppState, user: &User, req: SendRequest) -> ApiResult<Jo
         }
     });
     Ok(job)
+}
+
+/// Remembers what the user sent / downloaded (reading profile, "already sent").
+async fn record_history(
+    st: &AppState,
+    uid: i64,
+    lib: i64,
+    ids: Vec<i64>,
+    action: &'static str,
+    device: String,
+) {
+    let Ok(keys) = st
+        .catalog_call(lib, move |cat| Ok(cat.keys_by_ids(&ids)?))
+        .await
+    else {
+        return;
+    };
+    let keys: Vec<String> = keys.into_iter().map(|(_, k)| k).collect();
+    let _ = st
+        .db
+        .run(move |c| db::add_history(c, uid, lib, &keys, action, Some(&device)))
+        .await;
 }
 
 fn cancelled() -> ApiError {

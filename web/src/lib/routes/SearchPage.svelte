@@ -10,6 +10,13 @@
   import DetailsPane from '../components/DetailsPane.svelte';
   import { normalize } from '../utils/normalize';
   import { formatDate } from '../utils/format';
+  import RatingFilters from '../components/RatingFilters.svelte';
+  import ExtRating from '../components/ExtRating.svelte';
+  import KidsBadge from '../components/KidsBadge.svelte';
+  import { getPref, setPref } from '../stores/prefs.svelte';
+  import {
+    emptyRatingFilters, ratingFilterCount, ratingParams, type RatingFilters as RatingFiltersT, type RatingSortKey,
+  } from '../utils/ratings';
 
   let { lib, q }: { lib: number; q: string } = $props();
 
@@ -27,6 +34,9 @@
   let facetsOpen = $state(false);
   let selectedBookId = $state<number | null>(null);
   let expanded = $state<Set<string>>(new Set());
+  let ratingFilters = $state<RatingFiltersT>(emptyRatingFilters());
+  type SearchSort = 'relevance' | RatingSortKey;
+  const sortKey = $derived(getPref<SearchSort>('sort.search', 'relevance'));
 
   $effect(() => { query = q; selectedBookId = null; expanded = new Set(); });
   $effect(() => {
@@ -45,6 +55,7 @@
       genre: [...genreFilter].join(',') || undefined,
       lang: [...langFilter].join(',') || undefined,
       ext: [...extFilter].join(',') || undefined,
+      ...ratingParams(ratingFilters, sortKey === 'relevance' ? null : sortKey),
     }).then((r) => { if (!cancelled) result = r; })
       .catch((e) => { if (!cancelled) error = errorText(e); })
       .finally(() => { if (!cancelled) loading = false; });
@@ -61,8 +72,9 @@
   }
   function clearFilters() {
     genreFilter = new Set(); langFilter = new Set(); extFilter = new Set();
+    ratingFilters = emptyRatingFilters();
   }
-  const filterCount = $derived(genreFilter.size + langFilter.size + extFilter.size);
+  const filterCount = $derived(genreFilter.size + langFilter.size + extFilter.size + ratingFilterCount(ratingFilters));
 
   function highlight(title: string): { pre: string; hit: string; post: string } | null {
     const words = normalize(q).split(' ').filter(Boolean).sort((a, b) => b.length - a.length);
@@ -113,6 +125,14 @@
         {:else}{b.title}{/if}
       </a>
       {#if !edition}<span class="muted ellipsis">{authorsLine(b)}{#if b.series}{` · ${b.series.name}${b.serno ? ` #${b.serno}` : ''}`}{/if}</span>{/if}
+      {#if !edition && (b.libRating || b.extRating || b.rating || (b.kidsAge !== null && b.kidsAge !== undefined))}
+        <span class="rates">
+          {#if b.rating}<span class="my" title={t('ratings.myTooltip')}>★ {b.rating}</span>{/if}
+          {#if b.libRating}<span class="lib" title={t('ratings.libTooltip', { n: b.libRating })}>{t('ratings.libShort')} {b.libRating}/5</span>{/if}
+          <ExtRating value={b.extRating} />
+          <KidsBadge age={b.kidsAge} />
+        </span>
+      {/if}
       {#if edition}<span class="muted ellipsis">{b.series ? `${b.series.name}${b.serno ? ` #${b.serno}` : ''} · ` : ''}{b.ext.toUpperCase()} · {b.lang}</span>{/if}
       {#if w && w.others.length}
         <button type="button" class="editions" aria-expanded={expanded.has(w.key)} onclick={() => (expanded = toggleSet(expanded, w.key))}>
@@ -137,6 +157,10 @@
     </button>
     {#if result && result.total + filterCount > 0}
       <div class="facet-groups">
+        <div class="facet">
+          <h3>{t('ratings.filtersCaps')}</h3>
+          <RatingFilters filters={ratingFilters} onChange={(f) => (ratingFilters = f)} />
+        </div>
         {#if result.facets.genre.length}
           <div class="facet">
             <h3>{t('search.genre')}</h3>
@@ -190,6 +214,15 @@
     {:else}
       <div class="summary" class:stale={loading}>
         <span><b>{result.total}</b> {tn('search.resultsCount', result.total)} «{q}»</span>
+        <label class="sort-sel">
+          <span class="visually-hidden">{t('books.sort')}</span>
+          <select data-testid="search-sort" value={sortKey} aria-label={t('books.sort')} onchange={(e) => setPref('sort.search', (e.currentTarget as HTMLSelectElement).value)}>
+            <option value="relevance">{t('search.sortRelevance')}</option>
+            <option value="myRating">{t('books.sort.myRating')}</option>
+            <option value="libRating">{t('books.sort.libRating')}</option>
+            <option value="extRating">{t('books.sort.extRating')}</option>
+          </select>
+        </label>
         {#each [...genreFilter] as g (g)}
           <button type="button" class="chip" onclick={() => (genreFilter = toggleSet(genreFilter, g))}>{genresById.get(g) ?? g}<Icon name="close" size={12} /></button>
         {/each}
@@ -279,6 +312,9 @@
   .empty .big { font-family: var(--font-display); font-size: 20px; color: var(--ink); }
   .summary { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); flex-wrap: wrap; }
   .summary.stale { opacity: .6; }
+  .sort-sel select { height: 28px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted-2); font: inherit; font-size: 13px; }
+  .rates { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .rates .my { color: var(--amber); }
   .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: var(--accent-soft); color: var(--accent-soft-ink); font-size: 12px; border: none; }
   h2 { margin: 0 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; display: flex; gap: 10px; align-items: baseline; }
   .cap { font-weight: 400; letter-spacing: 0; }

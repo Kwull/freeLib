@@ -40,6 +40,16 @@ pub struct Config {
     pub public_url: Option<String>,
     /// OpenID Connect sign-in (`FREELIB_OIDC_*`), when configured.
     pub oidc: Option<OidcConfig>,
+    /// Open Library base URL (`FREELIB_OPENLIBRARY_URL`, default `https://openlibrary.org`).
+    pub openlibrary_url: String,
+    /// Contact e-mail sent in the User-Agent of Open Library requests (`FREELIB_CONTACT_EMAIL`).
+    pub contact_email: Option<String>,
+    /// Minimum time between two Open Library requests (1 s).
+    pub ext_interval: Duration,
+    /// Run the background rating enrichment worker (off in [`Config::for_dir`]).
+    pub ext_worker: bool,
+    /// MCP requests per token and minute (`FREELIB_MCP_RATE`, default 120).
+    pub mcp_rate_per_min: u32,
 }
 
 /// `FREELIB_OIDC_*` (see docs/web/DOCKER.md "Single sign-on").
@@ -245,6 +255,17 @@ impl Config {
             max_jobs_per_user: 5,
             public_url: env("FREELIB_PUBLIC_URL").map(|u| u.trim_end_matches('/').to_string()),
             oidc: oidc_from_env()?,
+            openlibrary_url: env("FREELIB_OPENLIBRARY_URL")
+                .map(|u| u.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "https://openlibrary.org".into()),
+            contact_email: env("FREELIB_CONTACT_EMAIL")
+                .filter(|e| e.contains('@') && e.len() < 200),
+            ext_interval: Duration::from_secs(1),
+            ext_worker: true,
+            mcp_rate_per_min: env("FREELIB_MCP_RATE")
+                .and_then(|s| s.parse().ok())
+                .filter(|&n: &u32| n > 0)
+                .unwrap_or(120),
         })
     }
 
@@ -273,6 +294,12 @@ impl Config {
             max_jobs_per_user: 5,
             public_url: None,
             oidc: None,
+            // never the real service in tests
+            openlibrary_url: "http://127.0.0.1:9".into(),
+            contact_email: None,
+            ext_interval: Duration::from_millis(1),
+            ext_worker: false,
+            mcp_rate_per_min: 120,
         }
     }
 }

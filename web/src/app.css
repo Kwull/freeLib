@@ -27,6 +27,10 @@
   --accent-soft-ink: #16433F;
   --amber: #B8741A;
   --danger: #B3261E;
+  /* Open Library rating, kids age badge */
+  --sky: #2F6FA8;
+  --kids-ink: #2F6B3A;
+  --kids-bg: #E3F1E5;
   --scrim: rgba(29, 28, 25, 0.55);
   --focus: #1F5F5B;
   /* inverted surfaces: toasts, the floating selection bar */
@@ -60,6 +64,9 @@
     --accent-soft-ink: #8FD3CC;
     --amber: #D18F3C;
     --danger: #E5675F;
+    --sky: #6FA8DC;
+    --kids-ink: #9FD4A8;
+    --kids-bg: #203226;
     --scrim: rgba(0, 0, 0, 0.65);
     --focus: #59A9A3;
     --row-checked: #1E3230;
@@ -90,6 +97,9 @@
   --accent-soft-ink: #8FD3CC;
   --amber: #D18F3C;
   --danger: #E5675F;
+  --sky: #6FA8DC;
+  --kids-ink: #9FD4A8;
+  --kids-bg: #203226;
   --scrim: rgba(0, 0, 0, 0.65);
   --focus: #59A9A3;
   --row-checked: #1E3230;
