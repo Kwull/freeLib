@@ -23,7 +23,7 @@ use crate::{api, auth, importer, opds, security, spa};
 /// Opens everything and starts background tasks. Must run inside a Tokio runtime.
 pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
     for d in [&cfg.data_dir, &cfg.cache_dir] {
-        std::fs::create_dir_all(d)?;
+        ensure_writable_dir(d)?;
     }
     crate::cache::clean_on_start(&cfg.cache_dir);
     let db = AppDb::open(&cfg.data_dir.join("app.db"))?;
@@ -281,4 +281,24 @@ pub fn router(st: AppState) -> Router {
         .layer(middleware::from_fn(security::security_headers))
         .layer(TraceLayer::new_for_http())
         .with_state(st)
+}
+
+/// Creates `dir` if needed and checks that this process can write to it, so a
+/// wrongly owned volume fails with an actionable message instead of SQLite's
+/// "unable to open database file".
+fn ensure_writable_dir(dir: &Path) -> anyhow::Result<()> {
+    let probe = dir.join(".freelib-write-test");
+    let res = std::fs::create_dir_all(dir)
+        .and_then(|_| std::fs::write(&probe, b""))
+        .and_then(|_| std::fs::remove_file(&probe));
+    res.map_err(|e| {
+        // SAFETY: getuid/getgid have no preconditions and cannot fail.
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        anyhow::anyhow!(
+            "{} is not writable by uid {uid}, gid {gid}: {e}. In Docker, set PUID/PGID to the \
+             owner of the host folder, or give that folder to uid {uid}: \
+             `sudo chown -R {uid}:{gid} <host folder>`",
+            dir.display()
+        )
+    })
 }

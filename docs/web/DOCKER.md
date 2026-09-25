@@ -16,11 +16,11 @@ This guide covers running freeLib Web Edition with Docker.
    # Edit .env and set FREELIB_ADMIN_PASSWORD
    ```
 
-3. Create the folders and make the writable ones owned by the container user (uid 1000):
+3. Create the books folder and put your `.inpx` file and archives in it:
    ```bash
-   mkdir -p books data cache export
-   sudo chown 1000:1000 data cache export
+   mkdir -p books
    ```
+   The container starts as root just long enough to give `data`, `cache` and `export` to the server's user (`PUID`/`PGID`, default 1000:1000), then runs the server as that user. Set `PUID`/`PGID` to your own ids (`id -u`, `id -g`) to keep the files owned by you on the host.
 
 4. Start the service:
    ```bash
@@ -211,6 +211,7 @@ All environment variables from [ARCHITECTURE.md](./ARCHITECTURE.md#runtime-confi
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
+| `PUID` / `PGID` | `1000` / `1000` | User and group the server runs as; `/data`, `/cache` and `/export` are given to them on start. Use your host user's ids on a NAS. If the container is started with `--user`, that user is used and no ownership changes are made |
 | `FREELIB_PORT` | `8080` | HTTP port (inside container; use port mapping in compose) |
 | `FREELIB_BIND` | `0.0.0.0` | Listen address |
 | `FREELIB_DATA_DIR` | `/data` | Database directory (`app.db`, `lib_<id>.db`) |
