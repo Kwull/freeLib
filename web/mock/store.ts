@@ -65,7 +65,7 @@ function libMetaFor(id: number, name: string, isDefault: boolean): LibraryMeta {
 
 if (store.libraries.length === 0) {
   store.libraries.push(libMetaFor(1, 'Flibusta', true));
-  store.libraries.push(libMetaFor(2, 'Домашняя коллекция', false));
+  store.libraries.push(libMetaFor(2, 'Home Collection', false));
 }
 
 export function broadcast(event: string, data: unknown) {

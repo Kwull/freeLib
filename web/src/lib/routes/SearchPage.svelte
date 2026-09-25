@@ -2,7 +2,7 @@
   import { api } from '../api/client';
   import type { SearchResponse } from '../api/types';
   import { navigate } from '../router.svelte';
-  import { t } from '../i18n';
+  import { t, tn, i18nState } from '../i18n';
   import Icon from '../components/Icon.svelte';
   import CoverThumb from '../components/CoverThumb.svelte';
   import SendDialog from '../components/SendDialog.svelte';
@@ -20,7 +20,8 @@
 
   $effect(() => { query = q; });
   $effect(() => {
-    api.genres(lib).then((gs) => (genresById = new Map(gs.map((g) => [g.id, g.name]))));
+    const lang = i18nState.lang;
+    api.genres(lib, lang).then((gs) => (genresById = new Map(gs.map((g) => [g.id, g.name]))));
   });
 
   $effect(() => {
@@ -98,7 +99,7 @@
       <p class="empty">{t('search.noResults')}</p>
     {:else}
       <div class="summary">
-        <span><b>{result.total}</b> {t('search.results')} «{q}»</span>
+        <span><b>{result.total}</b> {tn('search.resultsCount', result.total)} «{q}»</span>
         {#each [...genreFilter] as g (g)}
           <button type="button" class="chip" onclick={() => (genreFilter = toggleSet(genreFilter, g) as Set<number>)}>{genresById.get(g) ?? g}<Icon name="close" size={12} /></button>
         {/each}
@@ -114,7 +115,7 @@
             {#each result.authors as a (a.id)}
               <a href="/l/{lib}/authors/{a.id}" data-link class="series-card">
                 <span class="name">{a.name}</span>
-                <span class="muted">{t('browse.booksCount', { count: a.count })}</span>
+                <span class="muted">{tn('browse.booksCount', a.count)}</span>
               </a>
             {/each}
           </div>
@@ -151,8 +152,8 @@
                 <span class="muted">{b.authors.map((a) => a.name).join(', ')}</span>
               </div>
               <span class="muted genre">{b.genres.map((g) => genresById.get(g)).filter(Boolean)[0] ?? ''}</span>
-              <span class="muted">{b.date}</span>
-              <button type="button" class="send-btn" onclick={() => (sendIds = [b.id])}><Icon name="send" size={14} />{t('selection.sendTo')}</button>
+              <span class="muted date-col">{b.date}</span>
+              <button type="button" class="send-btn" onclick={() => (sendIds = [b.id])}><Icon name="send" size={14} /><span>{t('selection.sendTo')}</span></button>
             </div>
           {/each}
         </section>
@@ -166,8 +167,9 @@
 <style>
   .search-page { display: flex; flex-grow: 1; min-width: 0; min-height: 0; overflow: hidden; }
   .facets { width: 240px; flex-shrink: 0; border-right: 1px solid var(--line); padding: 20px 20px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; background: var(--surface-alt); }
-  .search-box { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
-  .search-box input { border: none; outline: none; background: transparent; flex-grow: 1; font: inherit; font-size: 14px; }
+  .search-box { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted); }
+  .search-box :global(svg) { flex-shrink: 0; }
+  .search-box input { border: none; outline: none; background: transparent; flex-grow: 1; min-width: 0; font: inherit; font-size: 14px; color: var(--ink); }
   h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; }
   .fl { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; }
   .fl input { width: 15px; height: 15px; accent-color: var(--accent); }
@@ -183,11 +185,24 @@
   .muted { color: var(--muted); font-size: 13px; }
   .books-section { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .books-section h2 { margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
-  .res-row { display: grid; grid-template-columns: 44px minmax(0,1fr) 160px 100px 100px; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line-soft); }
+  .res-row { display: grid; grid-template-columns: 44px minmax(0,1fr) 160px 100px auto; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line-soft); }
   .res-row:last-child { border-bottom: none; }
   .info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .title { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   mark { background: rgba(184,116,26,.25); color: inherit; border-radius: 2px; }
   .genre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .send-btn { justify-self: end; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 13px; }
+  .send-btn { justify-self: end; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 13px; white-space: nowrap; flex-shrink: 0; }
+  .send-btn :global(svg) { flex-shrink: 0; }
+
+  @media (max-width: 900px) {
+    .search-page { flex-direction: column; overflow-y: auto; overflow-x: hidden; }
+    .facets { width: auto; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--line); padding: 12px 16px; gap: 12px 20px; }
+    .facets .search-box { flex-basis: 100%; }
+    .results { padding: 16px; gap: 16px; }
+    .series-grid { grid-template-columns: 1fr; }
+    .res-row { grid-template-columns: 40px minmax(0,1fr) auto; gap: 10px; }
+    .res-row .genre, .res-row .date-col { display: none; }
+    .send-btn span { display: none; }
+    .send-btn { padding: 0 10px; }
+  }
 </style>

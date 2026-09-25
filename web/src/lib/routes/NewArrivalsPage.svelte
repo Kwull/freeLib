@@ -32,4 +32,8 @@
   .head label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
   .head input { height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font: inherit; }
   .new-arrivals :global(.scope-page) { flex-grow: 1; }
+  @media (max-width: 900px) {
+    .head { flex-wrap: wrap; padding: 12px 16px; gap: 8px 16px; }
+    h1 { flex-basis: 100%; font-size: 18px; }
+  }
 </style>

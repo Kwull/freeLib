@@ -22,7 +22,11 @@ A self-hosted web catalog for large e-book libraries described by INPX files (Fl
 - **Works on phones** — responsive layout with a bottom tab bar; light and dark themes; English, Russian and Ukrainian.
 
 <p>
+  <img src="docs/web/screenshots/search-1440x900.png" alt="Full-text search with facets" width="640">
   <img src="docs/web/screenshots/send-1440x900.png" alt="Send dialog with device choices" width="640">
+</p>
+<p>
+  <img src="docs/web/screenshots/libraries-1440x900.png" alt="Libraries page" width="640">
   <img src="docs/web/screenshots/phone-books-390x844.png" alt="Phone layout" width="180">
 </p>
 

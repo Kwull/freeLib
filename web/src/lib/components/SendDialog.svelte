@@ -5,7 +5,7 @@
   import type { Book, Device } from '../api/types';
   import { devicesState } from '../stores/devices.svelte';
   import { fillFileNameTemplate } from '../utils/fileNameTemplate';
-  import { t } from '../i18n';
+  import { t, tn } from '../i18n';
   import { showToast } from '../stores/toast.svelte';
   import { clear as clearSelection } from '../stores/selection.svelte';
   import { navigate } from '../router.svelte';
@@ -54,8 +54,7 @@
   function actionLabel(d: Device | null): string {
     if (!d) return '';
     const kind = d.kind === 'email' ? 'send' : d.kind === 'folder' ? 'export' : 'download';
-    const label = t(`send.action.${kind}`, { count: bookIds.length });
-    return bookIds.length === 1 ? label.replace(/\bbooks\b/, 'book').replace(/\bкниг\b/, 'книгу') : label;
+    return tn(`send.action.${kind}`, bookIds.length);
   }
 
   async function submit() {
@@ -84,7 +83,7 @@
   }
 </script>
 
-<Dialog {open} titleId="send-title" title={bookIds.length === 1 ? t('send.titleOne') : t('send.title', { count: bookIds.length })} {onClose} width={760}>
+<Dialog {open} titleId="send-title" title={tn('send.title', bookIds.length)} {onClose} width={760}>
   <p class="subtitle">{titleLine}</p>
 
   <fieldset class="devices">

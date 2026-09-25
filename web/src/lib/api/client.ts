@@ -66,7 +66,7 @@ export const api = {
   // Browsing
   authors: (lib: number, v?: number) => request<NameListResponse>(`/libraries/${lib}/authors${qs({ v })}`),
   series: (lib: number, v?: number) => request<NameListResponse>(`/libraries/${lib}/series${qs({ v })}`),
-  genres: (lib: number) => request<Genre[]>(`/libraries/${lib}/genres`),
+  genres: (lib: number, lang?: string) => request<Genre[]>(`/libraries/${lib}/genres${qs({ lang })}`),
   books: (lib: number, params: {
     author?: number; series?: number; genre?: number; shelf?: number; since?: string;
     lang?: string; ext?: string; deleted?: boolean; cursor?: string; limit?: number;

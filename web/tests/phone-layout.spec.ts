@@ -11,10 +11,10 @@ test('phone layout navigates list -> books -> detail', async ({ page }) => {
   // List pane visible first, books pane hidden.
   await expect(page.getByLabel('Filter authors')).toBeVisible();
 
-  await page.getByLabel('Filter authors').fill('Стругацкий Аркадий Натанович');
-  await page.getByRole('button', { name: /Стругацкий Аркадий Натанович/ }).first().click();
+  await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');
+  await page.getByRole('button', { name: /Doyle Arthur Conan/ }).first().click();
 
-  const bookRow = page.locator('.m-row', { hasText: 'Трудно быть богом' });
+  const bookRow = page.locator('.m-row', { hasText: 'The Hound of the Baskervilles' });
   await expect(bookRow).toBeVisible();
 
   await bookRow.click();

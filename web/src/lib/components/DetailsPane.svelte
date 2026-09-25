@@ -22,7 +22,8 @@
   let genreNames = $state<Map<number, string>>(new Map());
 
   $effect(() => {
-    api.genres(lib).then((gs) => (genreNames = new Map(gs.map((g) => [g.id, g.name]))));
+    const lang = i18nState.lang;
+    api.genres(lib, lang).then((gs) => (genreNames = new Map(gs.map((g) => [g.id, g.name]))));
   });
 
   $effect(() => {

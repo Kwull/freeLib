@@ -1,75 +1,83 @@
+// English name pools. Author display order is "Surname First Middle" (no comma), matching
+// how the real catalog sorts by surname first letter.
 export const SURNAMES = [
-  'Иванов', 'Петров', 'Сидоров', 'Стругацкий', 'Кузнецов', 'Смирнов', 'Попов', 'Соколов', 'Лебедев', 'Козлов',
-  'Новиков', 'Морозов', 'Волков', 'Алексеев', 'Лазарев', 'Федоров', 'Михайлов', 'Беляев', 'Тарасов', 'Белов',
-  'Комаров', 'Орлов', 'Киселев', 'Макаров', 'Андреев', 'Ковалев', 'Ильин', 'Гусев', 'Титов', 'Кузьмин',
-  'Кудрявцев', 'Баранов', 'Куликов', 'Алексеенко', 'Струков', 'Струтинский', 'Струцкий', 'Стрыгин', 'Строганов',
-  'Гоголь', 'Пушкин', 'Толстой', 'Достоевский', 'Чехов', 'Тургенев', 'Булгаков', 'Пастернак', 'Ахматова', 'Цветаева',
-  'Рождественский', 'Ефремов', 'Головачёв', 'Лукьяненко', 'Перумов', 'Панов', 'Дивов', 'Олди', 'Громыко', 'Пехов',
+  'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Doyle', 'Miller', 'Davis', 'Wilson', 'Taylor',
+  'Moore', 'Clark', 'Turner', 'Baker', 'Carter', 'Mitchell', 'Foster', 'Bennett', 'Reed', 'Hayes',
+  'Cooper', 'Bailey', 'Morgan', 'Murphy', 'Bell', 'Coleman', 'Hunter', 'Fisher', 'Ferguson', 'Knight',
+  'Dawson', 'Barnes', 'Hughes', 'Palmer', 'Chapman', 'Conway', 'Rutherford', 'Ashford', 'Whitfield', 'Sinclair',
+  'Dickens', 'Austen', 'Bronte', 'Wells', 'Stoker', 'Christie', 'Kipling', 'Stevenson', 'Wilde', 'Shelley',
+  'Verne', 'Wodehouse', 'Chesterton', 'Sayers', 'Sabatini', 'Buchan', 'Haggard', 'Hope', 'Marsh', 'Allingham',
 ];
 export const FIRST_NAMES_M = [
-  'Александр', 'Андрей', 'Аркадий', 'Борис', 'Виктор', 'Владимир', 'Дмитрий', 'Евгений', 'Иван', 'Игорь',
-  'Кирилл', 'Максим', 'Михаил', 'Николай', 'Олег', 'Павел', 'Пётр', 'Роман', 'Сергей', 'Станислав',
+  'Arthur', 'James', 'John', 'Robert', 'William', 'Charles', 'Edward', 'George', 'Henry', 'Thomas',
+  'Frederick', 'Albert', 'Walter', 'Samuel', 'Joseph', 'Francis', 'Herbert', 'Alfred', 'Ernest', 'Sidney',
 ];
 export const FIRST_NAMES_F = [
-  'Александра', 'Анна', 'Валентина', 'Вера', 'Галина', 'Дарья', 'Екатерина', 'Елена', 'Ирина', 'Мария',
-  'Наталья', 'Ольга', 'Светлана', 'Татьяна', 'Юлия',
+  'Mary', 'Elizabeth', 'Margaret', 'Alice', 'Emily', 'Florence', 'Edith', 'Grace', 'Helen', 'Jane',
+  'Catherine', 'Eleanor', 'Charlotte', 'Louisa', 'Beatrice',
 ];
-// Note: 'Натанович' is deliberately excluded so the seeded "Стругацкий ... Натанович"
-// demo authors below can never collide with a randomly generated name.
+// Note: 'Conan' is deliberately excluded so the seeded "Doyle Arthur Conan"
+// demo author can never collide with a randomly generated middle name.
 export const PATRONYMIC_M = [
-  'Александрович', 'Андреевич', 'Борисович', 'Викторович', 'Владимирович', 'Дмитриевич', 'Иванович', 'Игоревич',
-  'Михайлович', 'Николаевич', 'Олегович', 'Павлович', 'Петрович', 'Сергеевич',
+  'Edward', 'Henry', 'James', 'Robert', 'William', 'Charles', 'Frederick', 'George',
+  'Albert', 'Thomas', 'Francis', 'Herbert', 'Walter', 'Ernest',
 ];
 export const PATRONYMIC_F = [
-  'Александровна', 'Андреевна', 'Борисовна', 'Викторовна', 'Владимировна', 'Дмитриевна', 'Ивановна', 'Игоревна',
-  'Михайловна', 'Николаевна', 'Олеговна', 'Павловна', 'Петровна', 'Сергеевна',
+  'Anne', 'Jane', 'Louise', 'Grace', 'Elizabeth', 'Margaret', 'Rose', 'Kate',
+  'Catherine', 'Florence', 'Alice', 'Mary', 'Eleanor', 'Edith',
 ];
 
 export const SERIES_WORDS_A = [
-  'Мир', 'Хроники', 'Легенды', 'Сказания', 'Империя', 'Звёзды', 'Полдень', 'Тени', 'Земля', 'Дорога',
-  'Наследие', 'Клинки', 'Пламя', 'Ветер', 'Врата', 'Осколки', 'Королевство', 'Свет', 'Тьма', 'Время',
+  'World', 'Chronicles', 'Legends', 'Tales', 'Empire', 'Stars', 'Meridian', 'Shadows', 'Realm', 'Road',
+  'Legacy', 'Blades', 'Flame', 'Wind', 'Gates', 'Fragments', 'Kingdom', 'Light', 'Dark', 'Time',
 ];
 export const SERIES_WORDS_B = [
-  'забвения', 'богов', 'звёзд', 'снов', 'пустоты', 'империи', 'странников', 'героев', 'войны', 'льда',
-  'огня', 'ветра', 'теней', 'времени', 'судьбы', 'надежды', 'ночи', 'рассвета', 'бездны', 'горизонта',
+  'of Oblivion', 'of the Gods', 'of the Stars', 'of Dreams', 'of the Void', 'of the Empire', 'of Wanderers',
+  'of Heroes', 'of War', 'of Ice', 'of Fire', 'of the Wind', 'of Shadows', 'of Time', 'of Fate',
+  'of Hope', 'of Night', 'of Dawn', 'of the Abyss', 'of the Horizon',
 ];
 
 export const TITLE_WORDS_A = [
-  'Последний', 'Тайный', 'Забытый', 'Великий', 'Странный', 'Чёрный', 'Белый', 'Стальной', 'Огненный', 'Ледяной',
-  'Утренний', 'Ночной', 'Бесконечный', 'Пропавший', 'Проклятый', 'Золотой', 'Серебряный', 'Потерянный', 'Новый', 'Древний',
+  'The Last', 'The Secret', 'The Forgotten', 'The Great', 'The Strange', 'The Dark', 'The White', 'The Iron',
+  'The Burning', 'The Frozen', 'The Morning', 'The Midnight', 'The Endless', 'The Missing', 'The Cursed',
+  'The Golden', 'The Silver', 'The Lost', 'The New', 'The Ancient',
 ];
 export const TITLE_WORDS_B = [
-  'город', 'путь', 'остров', 'дом', 'корабль', 'лес', 'сад', 'портал', 'мир', 'храм',
-  'клинок', 'ключ', 'дневник', 'договор', 'полёт', 'рассвет', 'закат', 'берег', 'причал', 'горизонт',
+  'City', 'Road', 'Island', 'House', 'Ship', 'Forest', 'Garden', 'Portal', 'World', 'Temple',
+  'Blade', 'Key', 'Diary', 'Bargain', 'Flight', 'Sunrise', 'Sunset', 'Shore', 'Harbor', 'Horizon',
 ];
 
-export const GENRES: { name: string; parent: number }[] = [
-  { name: 'Фантастика', parent: 0 },
-  { name: 'Научная фантастика', parent: 1 },
-  { name: 'Социальная фантастика', parent: 1 },
-  { name: 'Космическая фантастика', parent: 1 },
-  { name: 'Фэнтези', parent: 0 },
-  { name: 'Героическое фэнтези', parent: 5 },
-  { name: 'Городское фэнтези', parent: 5 },
-  { name: 'Детективы и триллеры', parent: 0 },
-  { name: 'Классический детектив', parent: 8 },
-  { name: 'Триллер', parent: 8 },
-  { name: 'Проза', parent: 0 },
-  { name: 'Современная проза', parent: 11 },
-  { name: 'Классическая проза', parent: 11 },
-  { name: 'Историческая проза', parent: 11 },
-  { name: 'Публицистика', parent: 0 },
-  { name: 'Драматургия', parent: 0 },
-  { name: 'Поэзия', parent: 0 },
-  { name: 'Детская литература', parent: 0 },
-  { name: 'Детская проза', parent: 18 },
-  { name: 'Детские приключения', parent: 18 },
-  { name: 'Наука и образование', parent: 0 },
-  { name: 'История', parent: 21 },
-  { name: 'Философия', parent: 21 },
-  { name: 'Психология', parent: 21 },
-  { name: 'Прочее', parent: 0 },
+export const GENRES: { en: string; ru: string; uk: string; parent: number }[] = [
+  { en: 'Fiction', ru: 'Фантастика', uk: 'Фантастика', parent: 0 },
+  { en: 'Science Fiction', ru: 'Научная фантастика', uk: 'Наукова фантастика', parent: 1 },
+  { en: 'Social Sci-Fi', ru: 'Социальная фантастика', uk: 'Соціальна фантастика', parent: 1 },
+  { en: 'Space Opera Sci-Fi', ru: 'Космическая фантастика', uk: 'Космічна фантастика', parent: 1 },
+  { en: 'Fantasy', ru: 'Фэнтези', uk: 'Фентезі', parent: 0 },
+  { en: 'Heroic Fantasy', ru: 'Героическое фэнтези', uk: 'Героїчне фентезі', parent: 5 },
+  { en: 'Urban Fantasy', ru: 'Городское фэнтези', uk: 'Міське фентезі', parent: 5 },
+  { en: 'Mystery & Thrillers', ru: 'Детективы и триллеры', uk: 'Детективи та трилери', parent: 0 },
+  { en: 'Classic Mystery', ru: 'Классический детектив', uk: 'Класичний детектив', parent: 8 },
+  { en: 'Thriller', ru: 'Триллер', uk: 'Трилер', parent: 8 },
+  { en: 'Prose', ru: 'Проза', uk: 'Проза', parent: 0 },
+  { en: 'Contemporary Prose', ru: 'Современная проза', uk: 'Сучасна проза', parent: 11 },
+  { en: 'Classic Prose', ru: 'Классическая проза', uk: 'Класична проза', parent: 11 },
+  { en: 'Historical Prose', ru: 'Историческая проза', uk: 'Історична проза', parent: 11 },
+  { en: 'Journalism', ru: 'Публицистика', uk: 'Публіцистика', parent: 0 },
+  { en: 'Drama', ru: 'Драматургия', uk: 'Драматургія', parent: 0 },
+  { en: 'Poetry', ru: 'Поэзия', uk: 'Поезія', parent: 0 },
+  { en: "Children's Literature", ru: 'Детская литература', uk: 'Дитяча література', parent: 0 },
+  { en: "Children's Prose", ru: 'Детская проза', uk: 'Дитяча проза', parent: 18 },
+  { en: "Children's Adventure", ru: 'Детские приключения', uk: 'Дитячі пригоди', parent: 18 },
+  { en: 'Science & Education', ru: 'Наука и образование', uk: 'Наука і освіта', parent: 0 },
+  { en: 'History', ru: 'История', uk: 'Історія', parent: 21 },
+  { en: 'Philosophy', ru: 'Философия', uk: 'Філософія', parent: 21 },
+  { en: 'Psychology', ru: 'Психология', uk: 'Психологія', parent: 21 },
+  { en: 'Other', ru: 'Прочее', uk: 'Інше', parent: 0 },
 ];
 
-export const LANGS = ['ru', 'en', 'uk'] as const;
+export function genreName(g: { en: string; ru: string; uk: string }, lang: string): string {
+  return lang === 'ru' ? g.ru : lang === 'uk' ? g.uk : g.en;
+}
+
+export const LANGS = ['en', 'ru', 'uk'] as const;
 export const EXTS = ['fb2', 'epub', 'pdf'] as const;

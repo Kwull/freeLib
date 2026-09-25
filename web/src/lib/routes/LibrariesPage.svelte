@@ -4,7 +4,7 @@
   import Icon from '../components/Icon.svelte';
   import Dialog from '../components/Dialog.svelte';
   import QrCode from '../components/QrCode.svelte';
-  import { t } from '../i18n';
+  import { t, tn } from '../i18n';
   import { formatDate } from '../utils/format';
   import { i18nState } from '../i18n';
   import { sessionState } from '../stores/session.svelte';
@@ -90,9 +90,9 @@
           {#if lib.isDefault}<span class="badge">default</span>{/if}
         </div>
         <div class="stats">
-          <span>{lib.bookCount.toLocaleString()} {t('libraries.books')}</span>
-          <span>{lib.authorCount.toLocaleString()} {t('libraries.authors')}</span>
-          <span>{lib.seriesCount.toLocaleString()} {t('libraries.series')}</span>
+          <span>{lib.bookCount.toLocaleString()} {tn('libraries.books', lib.bookCount)}</span>
+          <span>{lib.authorCount.toLocaleString()} {tn('libraries.authors', lib.authorCount)}</span>
+          <span>{lib.seriesCount.toLocaleString()} {tn('libraries.series', lib.seriesCount)}</span>
         </div>
         <div class="muted">
           {lib.importedAt ? `${t('libraries.imported')} ${formatDate(lib.importedAt.slice(0, 10), i18nState.lang)}` : t('libraries.never')}
@@ -209,9 +209,16 @@
   .opds-row { display: flex; align-items: center; gap: 8px; }
   .link-btn { all: unset; display: flex; align-items: center; gap: 6px; color: var(--accent); font-size: 13px; cursor: pointer; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-  .actions button, .reimport button { height: 30px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; }
+  .actions button, .reimport button { height: 30px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; white-space: nowrap; }
   .actions .danger { color: var(--danger); }
-  .reimport { display: flex; gap: 4px; }
+  .reimport { display: flex; flex-wrap: wrap; gap: 4px; }
+  @media (max-width: 900px) {
+    .libraries-page { padding: 16px; }
+    .head { flex-wrap: wrap; gap: 10px; }
+    h1 { font-size: 22px; }
+    button.primary { white-space: nowrap; }
+    .grid { grid-template-columns: 1fr; }
+  }
   .form { padding: 4px 24px 24px; display: flex; flex-direction: column; gap: 12px; }
   .form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted-2); }
   .form input[type='text'] { height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font: inherit; }

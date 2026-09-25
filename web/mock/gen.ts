@@ -7,11 +7,13 @@ import {
 
 export type MockAuthor = { id: number; name: string; sortKey: string; bookCount: number };
 export type MockSeries = { id: number; name: string; sortKey: string; bookCount: number };
-export type MockGenre = { id: number; name: string; parent: number; count: number };
+/** `en`/`ru`/`uk` names carried through so the server can localize on request. */
+export type MockGenre = { id: number; en: string; ru: string; uk: string; parent: number; count: number };
 export type MockBook = {
   id: number; key: string; title: string; sortKey: string;
   authorIds: number[]; seriesId: number | null; serno: number | null;
   genreIds: number[]; lang: string; ext: string; size: number; date: string; deleted: boolean;
+  annotation?: string;
 };
 
 export type MockLibrary = {
@@ -60,10 +62,8 @@ export function generateLibrary(id: number, seed: number): MockLibrary {
   const authorsRaw: { name: string; sortKey: string }[] = [];
   // A guaranteed, prototype-like cluster of authors so demos/tests are stable.
   const seedAuthors = [
-    'Стругацкий Аркадий Натанович', 'Стругацкий Борис Натанович', 'Струве Пётр Бернгардович',
-    'Струков Андрей', 'Струн Эдуард', 'Струнский Александр', 'Струтинская Елена',
-    'Струтинский Николай', 'Струтт Виктория', 'Струцкий Игорь', 'Струшкевич Анна',
-    'Стрюкова Ольга', 'Стрыгин Алексей',
+    'Doyle Arthur Conan', 'Doyley Arthur', 'Doylan Frederick', 'Doyler Henry',
+    'Doyleston Margaret', 'Doyne Robert', 'Doynton Grace', 'Doyce Samuel',
   ];
   for (const name of seedAuthors) authorsRaw.push({ name, sortKey: normalize(name) });
 
@@ -81,7 +81,7 @@ export function generateLibrary(id: number, seed: number): MockLibrary {
 
   // --- series ----------------------------------------------------------
   const seriesRaw: { name: string; sortKey: string }[] = [];
-  const seedSeries = ['Полдень, XXII век', 'НИИЧАВО', 'Мир Полудня'];
+  const seedSeries = ['Sherlock Holmes', 'Professor Challenger'];
   for (const name of seedSeries) seriesRaw.push({ name, sortKey: normalize(name) });
   for (let i = seedSeries.length; i < SERIES_COUNT; i++) {
     const name = `${pick(rand, SERIES_WORDS_A)} ${pick(rand, SERIES_WORDS_B)}`;
@@ -91,7 +91,9 @@ export function generateLibrary(id: number, seed: number): MockLibrary {
   const series: MockSeries[] = seriesRaw.map((s, i) => ({ id: i + 1, name: s.name, sortKey: s.sortKey, bookCount: 0 }));
   const seriesLetters = buildLetters(series.map((s) => s.sortKey));
 
-  const genres: MockGenre[] = GENRES.map((g, i) => ({ id: i + 1, name: g.name, parent: g.parent, count: 0 }));
+  const genres: MockGenre[] = GENRES.map((g, i) => ({
+    id: i + 1, en: g.en, ru: g.ru, uk: g.uk, parent: g.parent, count: 0,
+  }));
 
   // --- books -------------------------------------------------------
   const books: MockBook[] = [];
@@ -116,27 +118,55 @@ export function generateLibrary(id: number, seed: number): MockLibrary {
   }
 
   let nextId = 1;
-  // Strugatsky demo bibliography, matching Main.dc.html closely. Names are
-  // sorted alphabetically among all 50k authors above, so look ids up by
-  // name instead of assuming they kept their pre-sort position.
+  // Arthur Conan Doyle demo bibliography (Sherlock Holmes & Professor Challenger, plus a
+  // few standalone historical novels). Names are sorted alphabetically among all 50k
+  // authors above, so look ids up by name instead of assuming their pre-sort position.
   const authorIdByName = new Map(authors.map((a) => [a.name, a.id]));
   const seriesIdByName = new Map(series.map((s) => [s.name, s.id]));
-  const strug = [authorIdByName.get('Стругацкий Аркадий Натанович')!, authorIdByName.get('Стругацкий Борис Натанович')!];
-  const poldenSeries = seriesIdByName.get('Полдень, XXII век')!;
-  const niichavoSeries = seriesIdByName.get('НИИЧАВО')!;
-  const demo: [string, number | null, number | null, number][] = [
-    ['Полдень, XXII век', poldenSeries, 1, 3], ['Попытка к бегству', poldenSeries, 2, 3],
-    ['Трудно быть богом', poldenSeries, 3, 2], ['Обитаемый остров', poldenSeries, 5, 1],
-    ['Жук в муравейнике', poldenSeries, 6, 1], ['Волны гасят ветер', poldenSeries, 7, 1],
-    ['Понедельник начинается в субботу', niichavoSeries, 1, 5], ['Сказка о Тройке', niichavoSeries, 2, 5],
-    ['Пикник на обочине', null, null, 2], ['Улитка на склоне', null, null, 11],
-    ['Град обреченный', null, null, 11], ['Отель «У погибшего альпиниста»', null, null, 9],
+  const doyle = [authorIdByName.get('Doyle Arthur Conan')!];
+  const holmesSeries = seriesIdByName.get('Sherlock Holmes')!;
+  const challengerSeries = seriesIdByName.get('Professor Challenger')!;
+  const CLASSIC_MYSTERY = 9;
+  const SCI_FI = 2;
+  const HISTORICAL_PROSE = 14;
+  const demo: [string, number | null, number | null, number, string][] = [
+    ['A Study in Scarlet', holmesSeries, 1, CLASSIC_MYSTERY,
+      'Dr. Watson meets a brilliant, eccentric detective and is drawn into his first case: a murder investigation that leads back to a story of revenge from the American West.'],
+    ['The Sign of the Four', holmesSeries, 2, CLASSIC_MYSTERY,
+      'A stolen treasure, a wooden-legged man, and a locked-room death send Holmes and Watson down the Thames in pursuit of a decades-old betrayal.'],
+    ['The Adventures of Sherlock Holmes', holmesSeries, 3, CLASSIC_MYSTERY,
+      'Twelve of the detective’s early cases, from "A Scandal in Bohemia" to "The Copper Beeches", collected as they first appeared.'],
+    ['The Memoirs of Sherlock Holmes', holmesSeries, 4, CLASSIC_MYSTERY,
+      'A further eleven cases, ending with the detective’s fateful encounter with Professor Moriarty at the Reichenbach Falls.'],
+    ['The Hound of the Baskervilles', holmesSeries, 5, CLASSIC_MYSTERY,
+      'A curse, a spectral hound, and a death on the Devon moor call Holmes and Watson to Baskerville Hall.'],
+    ['The Return of Sherlock Holmes', holmesSeries, 6, CLASSIC_MYSTERY,
+      'Holmes returns from the dead in "The Empty House" and takes on thirteen new cases.'],
+    ['The Valley of Fear', holmesSeries, 7, CLASSIC_MYSTERY,
+      'A cipher message, a country-house murder, and a secret society lead Holmes to a story that spans continents and decades.'],
+    ['His Last Bow', holmesSeries, 8, CLASSIC_MYSTERY,
+      'Eight cases, including Holmes’s final wartime mission on the eve of 1914.'],
+    ['The Case-Book of Sherlock Holmes', holmesSeries, 9, CLASSIC_MYSTERY,
+      'The last twelve recorded cases of the detective, narrated in his later years.'],
+    ['The Lost World', challengerSeries, 1, SCI_FI,
+      'Professor Challenger leads an expedition to a South American plateau where prehistoric creatures still survive.'],
+    ['The Poison Belt', challengerSeries, 2, SCI_FI,
+      'Challenger and his companions shut themselves indoors as the Earth passes through a belt of poisonous ether.'],
+    ['The Land of Mist', challengerSeries, 3, SCI_FI,
+      'Years later, Challenger reluctantly investigates the world of mediums and séances.'],
+    ['The White Company', null, null, HISTORICAL_PROSE,
+      'A band of English archers and men-at-arms fight through fourteenth-century France and Spain.'],
+    ['Sir Nigel', null, null, HISTORICAL_PROSE,
+      'A prequel to The White Company, following a young squire’s path to knighthood.'],
+    ['Micah Clarke', null, null, HISTORICAL_PROSE,
+      'A young soldier’s account of joining the Duke of Monmouth’s doomed rebellion of 1685.'],
   ];
-  for (const [title, sid, serno, genre] of demo) {
+  for (const [title, sid, serno, genre, annotation] of demo) {
     addBook({
       id: nextId, key: `demo:${nextId}`, title, sortKey: normalize(title),
-      authorIds: strug, seriesId: sid, serno, genreIds: [genre],
-      lang: 'ru', ext: 'fb2', size: int(rand, 200_000, 900_000), date: randDate(rand), deleted: false,
+      authorIds: doyle, seriesId: sid, serno, genreIds: [genre],
+      lang: 'en', ext: 'fb2', size: int(rand, 200_000, 900_000), date: randDate(rand), deleted: false,
+      annotation: `<p>${annotation}</p>`,
     });
     nextId++;
   }

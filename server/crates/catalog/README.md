@@ -39,7 +39,7 @@ handle.close();                                 // before deleting the library
 | `series_list() -> NameList` | same for series | `GET series` |
 | `author(id) -> Option<NameCount>` | `{id, name, count}` | page titles |
 | `series(id) -> Option<SeriesHit>` | `{id, name, count, authors}` (`authors` = main author(s), display string) | |
-| `genres() -> Vec<GenreCount>` | all 322 `{id, name, parent, count}`; group count = distinct books in the group | `GET genres` |
+| `genres(lang) -> Vec<GenreCount>` | all 322 `{id, name, parent, count}`, `name` localized to `lang` ("en"/"ru"/"uk"); group count = distinct books in the group | `GET genres` |
 | `languages() -> Vec<(String, i64)>` | `[(lang, count)]`, most frequent first | `GET /languages` |
 | `count_newer_than(date_or_rfc3339) -> i64` | live books with `date > d` | `newSinceLastVisit` |
 | `books(&BookSelector, &BookFilter, &Page) -> BookPage` | `{books: Vec<Book>, nextCursor, total}` | `GET books` |
@@ -89,6 +89,8 @@ Plain files (`archive == ""`) live at `library_path / relative_path()`.
   collapsed whitespace, leading non-alphanumerics dropped). `letter_of(sort_key)`, `search_tokens(q)`, `collapse_ws`.
 * `genres::genres() -> &'static Genres` — `all()`, `get(id)`, `by_code(code)`, `resolve(code)` (unknown codes →
   "…: прочее" of the matching group, else 11 "Прочее"), `top_level()`, `children(id)`, `with_descendants(id)`, `top(id)`.
+  Each `GenreDef` has `name` (Russian), `name_en`, `name_uk`, plus `localized(lang)` ("en"/"ru"/"uk", falling back to
+  English then Russian).
 * `schema` — `create_catalog_tables/indexes` (importer), `CATALOG_SCHEMA_VERSION`, and for `app.db`:
   `open_app_db(path) -> Connection` (WAL, foreign keys, busy timeout, migrates), `migrate_app_db(&conn)`,
   `APP_MIGRATIONS` (append-only list; `PRAGMA user_version` = number applied), `APP_SCHEMA_VERSION`.

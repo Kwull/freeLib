@@ -318,7 +318,7 @@ impl Catalog {
     }
 
     /// All genres (322) with this library's counts; zero-count genres included.
-    pub fn genres(&self) -> Result<Vec<GenreCount>> {
+    pub fn genres(&self, lang: &str) -> Result<Vec<GenreCount>> {
         let conn = self.conn()?;
         let mut st = conn.prepare_cached("SELECT genre_id, count FROM genre_count")?;
         let counts: HashMap<u16, i64> = st
@@ -329,7 +329,7 @@ impl Catalog {
             .iter()
             .map(|g| GenreCount {
                 id: g.id,
-                name: g.name.clone(),
+                name: g.localized(lang).to_string(),
                 parent: g.parent,
                 count: counts.get(&g.id).copied().unwrap_or(0),
             })
