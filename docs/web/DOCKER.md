@@ -16,12 +16,18 @@ This guide covers running freeLib Web Edition with Docker.
    # Edit .env and set FREELIB_ADMIN_PASSWORD
    ```
 
-3. Start the service:
+3. Create the folders and make the writable ones owned by the container user (uid 1000):
+   ```bash
+   mkdir -p books data cache export
+   sudo chown 1000:1000 data cache export
+   ```
+
+4. Start the service:
    ```bash
    docker compose up -d
    ```
 
-4. Access freeLib at `http://localhost:8080`
+5. Access freeLib at `http://localhost:8080`
 
 ## Volumes
 
