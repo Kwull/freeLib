@@ -138,7 +138,7 @@ jobs:
           docker exec freelib freelib-server healthcheck
           # The server runs unprivileged and owns what it wrote
           test "$(docker exec freelib stat -c %u:%g /data/app.db)" = 1000:1000
-          docker top freelib -o user,args | grep freelib-server
+          test "$(docker exec freelib sh -c 'for d in /proc/[0-9]*; do [ "$(cat $d/comm 2>/dev/null)" = freelib-server ] && stat -c %u $d; done')" = 1000
 
       - name: Container logs
         if: always()
