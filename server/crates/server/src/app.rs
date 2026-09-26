@@ -101,6 +101,10 @@ pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
         let c = st.db.lock();
         db::seed_devices(&c)?;
     }
+    // send/export/download jobs of the last run: resume queued ones (below, once the
+    // libraries are open), mark interrupted ones retryable
+    let resume = st.jobs.load(&st.db)?;
+    st.jobs.attach_db(st.db.clone());
     let rows = {
         let c = st.db.lock();
         db::list_libraries(&c)?
@@ -113,6 +117,7 @@ pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
     }
     autoimport(&st).await;
     reimport_outdated(&st, &rows).await;
+    crate::sender::resume(&st, resume);
     spawn_cleanup(&st);
     if st.cfg.ext_worker {
         tokio::spawn(st.ext.clone().run(st.clone()));
@@ -363,6 +368,7 @@ pub fn router(st: AppState) -> Router {
         .merge(opds::router().layer(middleware::from_fn_with_state(st.clone(), opds::gate)))
         .merge(crate::mcp::router(st.clone()))
         .merge(crate::oauth::router())
+        .merge(crate::handoff::router())
         .fallback(fallback)
         .layer(
             CompressionLayer::new()

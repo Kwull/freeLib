@@ -205,6 +205,8 @@ fn adopt_open_mode_data(c: &Connection, id: i64) -> ApiResult<()> {
         "UPDATE OR IGNORE series_dismiss SET user_id=?1 WHERE user_id=0",
         [id],
     )?;
+    c.execute("UPDATE job SET owner=?1 WHERE owner=0", [id])?;
+    c.execute("UPDATE handoff SET user_id=?1 WHERE user_id=0", [id])?;
     Ok(())
 }
 
@@ -243,6 +245,8 @@ pub fn delete_user(c: &Connection, id: i64) -> ApiResult<bool> {
     c.execute("DELETE FROM oauth_grant WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM follow WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM series_dismiss WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM job WHERE owner=?1", [id])?;
+    c.execute("DELETE FROM handoff WHERE user_id=?1", [id])?;
     Ok(c.execute("DELETE FROM user WHERE id=?1", [id])? > 0)
 }
 
@@ -1129,6 +1133,11 @@ pub struct Device {
     pub options: ConvertOptions,
     #[serde(skip)]
     pub user_id: Option<i64>,
+    /// The default preset a shared device was seeded from (`kindle-email`, `kindle-usb`,
+    /// `apple-books`, `kobo`, `server-folder`, `original`); read-only, `null` for devices
+    /// users created. Clients use it to recognise e.g. the Apple Books device.
+    #[serde(default, skip_deserializing)]
+    pub preset: Option<String>,
 }
 
 pub fn default_file_name() -> String {
@@ -1148,16 +1157,17 @@ fn device_row(r: &rusqlite::Row) -> rusqlite::Result<Device> {
         target: r.get(5)?,
         file_name: r.get(6)?,
         options: serde_json::from_str(&options).unwrap_or_default(),
+        preset: r.get(8)?,
     })
 }
 
-const DEVICE_COLS: &str = "id, user_id, name, kind, format, target, file_name, options";
+const DEVICE_COLS: &str = "id, user_id, name, kind, format, target, file_name, options, preset";
 
 /// Devices visible to `user_id` (shared + own) in the user's order ([`set_device_order`]);
 /// devices the user never ordered follow, oldest first. The first one is the user's default.
 pub fn list_devices(c: &Connection, user_id: i64) -> ApiResult<Vec<Device>> {
     let mut st = c.prepare(
-        "SELECT d.id, d.user_id, d.name, d.kind, d.format, d.target, d.file_name, d.options FROM device d \
+        "SELECT d.id, d.user_id, d.name, d.kind, d.format, d.target, d.file_name, d.options, d.preset FROM device d \
          LEFT JOIN device_order o ON o.device_id = d.id AND o.user_id = ?1 \
          WHERE d.user_id IS NULL OR d.user_id=?1 ORDER BY o.pos IS NULL, o.pos, d.id",
     )?;
@@ -1183,8 +1193,8 @@ pub fn save_device(c: &Connection, d: &Device) -> ApiResult<i64> {
         serde_json::to_string(&d.options).map_err(|e| ApiError::internal(e.to_string()))?;
     if d.id == 0 {
         c.execute(
-            "INSERT INTO device(user_id, name, kind, format, target, file_name, options) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            params![d.user_id, d.name, d.kind, d.format, d.target, d.file_name, options],
+            "INSERT INTO device(user_id, name, kind, format, target, file_name, options, preset) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![d.user_id, d.name, d.kind, d.format, d.target, d.file_name, options, d.preset],
         )?;
         Ok(c.last_insert_rowid())
     } else {
@@ -1223,40 +1233,35 @@ pub fn set_device_order(c: &Connection, user_id: i64, ids: &[i64]) -> ApiResult<
     Ok(())
 }
 
+/// Marks a device as customized when its conversion options changed, so preset upgrades
+/// ([`crate::presets::upgrade`]) no longer touch it. Renaming or changing the target does not
+/// count.
+pub fn mark_customized_if_changed(
+    c: &Connection,
+    id: i64,
+    before: &ConvertOptions,
+    after: &ConvertOptions,
+) -> ApiResult<()> {
+    if before != after {
+        c.execute("UPDATE device SET customized=1 WHERE id=?1", [id])?;
+    }
+    Ok(())
+}
+
 pub fn delete_device(c: &Connection, id: i64) -> ApiResult<()> {
     c.execute("DELETE FROM device_order WHERE device_id=?1", [id])?;
     c.execute("DELETE FROM device WHERE id=?1", [id])?;
     Ok(())
 }
 
-/// Seeds the shared default devices once (API.md "Devices and sending").
+/// Seeds the shared default devices once and upgrades untouched seeded devices to the current
+/// presets ([`crate::presets`]).
 pub fn seed_devices(c: &Connection) -> ApiResult<()> {
-    if get_setting_raw(c, "devices_seeded")?.is_some() {
-        return Ok(());
+    crate::presets::seed(c)?;
+    let n = crate::presets::upgrade(c)?;
+    if n > 0 {
+        tracing::info!("updated {n} default device(s) to the current presets");
     }
-    let defaults: [(&str, &str, &str, Option<&str>); 6] = [
-        ("Kindle", "email", "epub", None),
-        ("Kindle (USB)", "download", "azw3", None),
-        ("Apple Books", "download", "epub", None),
-        ("Kobo", "download", "kepub", None),
-        ("Server folder", "folder", "epub", Some("")),
-        ("Original", "download", "original", None),
-    ];
-    for (name, kind, format, target) in defaults {
-        let d = Device {
-            id: 0,
-            name: name.into(),
-            kind: kind.into(),
-            format: format.into(),
-            target: target.map(String::from),
-            file_name: default_file_name(),
-            shared: true,
-            options: ConvertOptions::default(),
-            user_id: None,
-        };
-        save_device(c, &d)?;
-    }
-    put_setting_raw(c, "devices_seeded", "true")?;
     Ok(())
 }
 
@@ -1309,6 +1314,15 @@ pub struct SmtpConfig {
     pub daily_limit_per_user: u32,
     /// Subject of Send to Kindle mails; `%b` = book title, `%a` = author(s).
     pub subject: String,
+    /// Attachments per mail when several books are sent at once (Amazon: at most 25).
+    pub max_attachments: u32,
+    /// Size limit of one mail in MB, measured as encoded (base64) attachments (Amazon: 50 MB;
+    /// many SMTP providers allow less, e.g. Gmail 25 MB).
+    pub max_mail_mb: u32,
+    /// Automatic retries of a mail after a temporary SMTP or network error.
+    pub retries: u32,
+    /// Delay before the first retry; each further retry waits four times longer.
+    pub retry_delay_seconds: u64,
 }
 
 pub fn default_allowed_recipients() -> Vec<String> {
@@ -1328,6 +1342,10 @@ impl Default for SmtpConfig {
             allowed_recipients: default_allowed_recipients(),
             daily_limit_per_user: 100,
             subject: "%b".into(),
+            max_attachments: 25,
+            max_mail_mb: 50,
+            retries: 3,
+            retry_delay_seconds: 30,
         }
     }
 }

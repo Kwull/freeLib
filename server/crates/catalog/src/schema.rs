@@ -152,6 +152,19 @@ ALTER TABLE api_audit ADD COLUMN grant_id INTEGER;
 CREATE TABLE follow (user_id INTEGER NOT NULL, library_id INTEGER NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('author','series')), key TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (user_id, library_id, kind, key)) WITHOUT ROWID;
 CREATE TABLE series_dismiss (user_id INTEGER NOT NULL, library_id INTEGER NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (user_id, library_id, key)) WITHOUT ROWID;
 "#,
+    // v8: delivery. Seeded devices remember their preset (tuned defaults are upgraded while
+    // nobody edited the device's options); send/export/download jobs and their per-book
+    // results survive restarts; short-lived hand-off links ("Send to my phone")
+    r#"
+ALTER TABLE device ADD COLUMN preset TEXT;
+ALTER TABLE device ADD COLUMN preset_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE device ADD COLUMN customized INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE job (id TEXT PRIMARY KEY, owner INTEGER NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL, progress REAL NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT '', log TEXT NOT NULL DEFAULT '[]', request TEXT, hint TEXT, file_path TEXT, file_name TEXT, file_mime TEXT, dir TEXT, created_at TEXT NOT NULL, finished_at TEXT, finished_unix INTEGER);
+CREATE INDEX job_owner ON job(owner);
+CREATE TABLE job_item (job_id TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE, pos INTEGER NOT NULL, book_id INTEGER NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, size INTEGER, mail INTEGER, updated_at TEXT NOT NULL, PRIMARY KEY (job_id, pos)) WITHOUT ROWID;
+CREATE TABLE handoff (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, library_id INTEGER NOT NULL, book_id INTEGER NOT NULL, book_key TEXT NOT NULL, device_id INTEGER, format TEXT NOT NULL, options TEXT NOT NULL, file_name TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, uses INTEGER NOT NULL DEFAULT 0, max_uses INTEGER NOT NULL) WITHOUT ROWID;
+CREATE INDEX handoff_user ON handoff(user_id, created_at);
+"#,
 ];
 
 /// Current `app.db` schema version (`PRAGMA user_version` after migrating).

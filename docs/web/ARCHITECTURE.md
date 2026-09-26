@@ -283,10 +283,18 @@ OAuth authorization codes and consent requests live only in memory. The key file
 database copies and backups, not a full compromise of the data volume; the environment / Docker secret options
 keep the key out of that volume.
 
-Migration v6: `follow(user_id, library_id, kind ∈ author|series, key, name, created_at)` and
+Migration v7: `follow(user_id, library_id, kind ∈ author|series, key, name, created_at)` and
 `series_dismiss(user_id, library_id, key, name, at)`, keyed by the author's / series' normalized name (`sort_key`,
 the importer's dedup key) because ids are not stable across imports.
-Tokens, audit rows, history, device order, follows and dismissed series are removed with their user; open-mode data (user 0) is adopted by the first account.
+Migration v8 (delivery): `device.preset`, `device.preset_version`, `device.customized` (tuned defaults of the
+seeded devices are upgraded while nobody changed their conversion options, see DEVICES.md);
+`job(id, owner, kind, title, state, progress, message, log, request, hint, file_path, file_name, file_mime, dir,
+created_at, finished_at, finished_unix)` and `job_item(job_id, pos, book_id, title, state, detail, attempts, size,
+mail, updated_at)`: send/export/download jobs with their per-book results, written through by a background writer
+(`jobs.rs`); `request` is what a resume or retry runs again; queued jobs resume at startup, running ones become failed
+and retryable; `handoff(token_hash, user_id, library_id, book_id, book_key, device_id, format, options, file_name,
+created_at, expires_at, uses, max_uses)`: phone links (only the SHA-256 of the token is stored).
+Tokens, audit rows, history, device order, follows, dismissed series, jobs and phone links are removed with their user; open-mode data (user 0) is adopted by the first account.
 
 User data is keyed by `(library_id, book_key)`, so it survives re-imports.
 

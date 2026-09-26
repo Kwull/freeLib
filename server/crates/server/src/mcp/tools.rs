@@ -182,7 +182,7 @@ pub fn definitions() -> Vec<(Tool, &'static str)> {
             t::<SendArgs>(
                 "send_books",
                 "Send books",
-                "Send books to one of my devices (Send to Kindle by e-mail, a download, or a server folder). Respects the server's allowed recipients and daily mail limit. Returns a job id for get_job.",
+                "Send books (or a whole series) to one of my devices (Send to Kindle by e-mail, a download, or a server folder). Several books travel in as few e-mails as Amazon allows. Respects the server's allowed recipients and daily mail limit. Returns a job id for get_job.",
                 false,
             ),
             "send",
@@ -191,7 +191,7 @@ pub fn definitions() -> Vec<(Tool, &'static str)> {
             t::<JobArg>(
                 "get_job",
                 "Job status",
-                "State of a send job (queued, running, done, failed) with its log.",
+                "State of a send job (queued, running, done, failed) with its log, each book's delivery state (converting, converted, sending, retrying, accepted with the mail server's reply, saved, ready, failed) and advice such as the Kindle approved-sender hint.",
                 true,
             ),
             "send",
@@ -387,7 +387,11 @@ pub struct RateArgs {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct SendArgs {
     /// Book ids (at most 50).
+    #[serde(default)]
     pub book_ids: Vec<i64>,
+    /// Send a whole series instead (or in addition): its books in reading order, several per
+    /// e-mail.
+    pub series_id: Option<i64>,
     /// Device id from list_devices, or "default".
     pub device: Value,
     pub library: Option<i64>,
@@ -1461,8 +1465,8 @@ async fn rate_book(st: &AppState, auth: &TokenAuth, a: RateArgs) -> ToolResult {
 }
 
 async fn send_books(st: &AppState, auth: &TokenAuth, a: SendArgs) -> ToolResult {
-    if a.book_ids.is_empty() || a.book_ids.len() > 50 {
-        return Err("give 1..50 book_ids".into());
+    if (a.book_ids.is_empty() && a.series_id.is_none()) || a.book_ids.len() > 50 {
+        return Err("give 1..50 book_ids or a series_id".into());
     }
     let lib = resolve_lib(st, a.library)?;
     let uid = auth.user.id;
@@ -1489,6 +1493,7 @@ async fn send_books(st: &AppState, auth: &TokenAuth, a: SendArgs) -> ToolResult 
     let req = crate::sender::SendRequest {
         library: lib,
         books: a.book_ids.clone(),
+        series: a.series_id.into_iter().collect(),
         device,
         target: None,
         file_name: None,
@@ -1496,14 +1501,23 @@ async fn send_books(st: &AppState, auth: &TokenAuth, a: SendArgs) -> ToolResult 
     let job = crate::sender::start(st, &auth.user, req)
         .await
         .map_err(err)?;
-    Ok(json!({"jobId": job.id, "state": job.state, "title": job.title}))
+    Ok(json!({"jobId": job.id, "state": job.state, "title": job.title, "books": job.items.len()}))
 }
 
 async fn get_job(st: &AppState, auth: &TokenAuth, a: JobArg) -> ToolResult {
     let j = st.jobs.get(&a.id, &auth.user).ok_or("job not found")?;
+    let books: Vec<Value> = j
+        .items
+        .iter()
+        .map(|i| {
+            json!({"id": i.book_id, "title": i.title, "state": i.state, "detail": i.detail,
+                   "attempts": i.attempts, "mail": i.mail})
+        })
+        .collect();
     Ok(json!({
         "id": j.id, "kind": j.kind, "title": j.title, "state": j.state, "progress": j.progress,
         "message": j.message, "log": j.log, "createdAt": j.created_at, "finishedAt": j.finished_at,
+        "books": books, "retryable": j.retryable, "hint": j.hint.as_ref().map(|h| h.text.clone()),
     }))
 }
 

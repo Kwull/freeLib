@@ -3,7 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { store, catalog, createJob, runJobProgress, broadcast } from './store';
+import { store, catalog, createJob, runJobProgress, runSendJob, broadcast } from './store';
+import type { JobItem } from '../src/lib/api/types';
 import { placeholderCover } from './covers';
 import { scenarioOf, handleScenario, handleMockControl, sendSlowly } from './scenario';
 import { normalize } from './normalize';
@@ -165,12 +166,52 @@ function matchLib(req: IncomingMessage, pattern: RegExp): RegExpMatchArray | nul
   return url.match(pattern);
 }
 
+/** `/h/<token>[/cover|/file]`: the phone page of a hand-off link (a simplified copy of the server's). */
+function handoffPage(req: IncomingMessage, res: ServerResponse, path: string) {
+  const [, , token, what] = path.split('/');
+  const h = store.handoffs.get(token ?? '');
+  const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  if (!h || h.expires < Date.now() || h.uses >= 3) {
+    res.statusCode = 410;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end('<!doctype html><title>Link expired</title><h1>This link has expired</h1>');
+    return;
+  }
+  const lib = catalog(h.lib);
+  const b = lib.bookById.get(h.book)!;
+  if (what === 'cover') {
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.end(placeholderCover(b.title, 'thumb'));
+    return;
+  }
+  if (what === 'file') {
+    h.uses++;
+    const buf = getSampleEpub();
+    res.setHeader('Content-Type', 'application/epub+zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(b.title)}.epub"; filename*=UTF-8''${encodeURIComponent(b.title)}.epub`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(buf);
+    return;
+  }
+  const ios = /iPhone|iPad|iPod/.test(String(req.headers['user-agent'] ?? ''));
+  const authors = b.authorIds.map((a) => lib.authors[a - 1].name).join(', ');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(b.title)}</title>
+<style>body{margin:0;min-height:100vh;background:#f6f3ee;font:16px/1.45 -apple-system,sans-serif;display:flex;align-items:center;justify-content:center;padding:24px 16px}
+main{max-width:420px;width:100%;background:#fff;border-radius:18px;padding:28px 22px;text-align:center}img{max-width:62%;border-radius:6px}
+a.btn{display:block;margin:22px 0 10px;padding:15px;border-radius:12px;background:#1f5f5b;color:#fff;font-weight:600;text-decoration:none}</style></head>
+<body><main><img src="/h/${token}/cover" alt=""><h1>${esc(b.title)}</h1><p>${esc(authors)}</p>
+<a class="btn" href="/h/${token}/file">${ios ? 'Open in Books' : 'Download'}</a><p>${h.format.toUpperCase()}</p></main></body></html>`);
+}
+
 export function installMockApi(server: Connect.Server) {
   server.use(async (req, res, next) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
     const method = req.method ?? 'GET';
     if (handleMockControl(url, res)) return;
+    if (path.startsWith('/h/')) return handoffPage(req, res, path);
     if (!path.startsWith('/api/v1') && !path.startsWith('/opds')) return next();
 
     // simulate small network latency for realism
@@ -677,9 +718,64 @@ export function installMockApi(server: Connect.Server) {
           if (!ok) return fail(res, 403, 'forbidden', `${to} is not an allowed recipient`);
         }
         const kind = device.kind === 'email' ? 'send' : device.kind === 'folder' ? 'export' : 'download';
-        recordHistory(Number(body.library), (body.books ?? []).map(Number));
-        const job = createJob(kind, `${kind === 'send' ? 'Send to' : kind === 'export' ? 'Export to' : 'Download for'} ${device.name} · ${body.books.length} books`);
-        runJobProgress(job);
+        // "send whole series": the series' live books in reading order (like the server)
+        const lib = catalog(Number(body.library) || 1);
+        const ids: number[] = [...(body.books ?? [])];
+        let seriesName = '';
+        for (const sid of (body.series ?? []) as number[]) {
+          const s = lib.series[sid - 1];
+          if (!s) return fail(res, 404, 'not_found', 'no books in this series');
+          seriesName ||= s.name;
+          for (const id of lib.booksBySeries.get(sid) ?? []) if (!lib.bookById.get(id)?.deleted && !ids.includes(id)) ids.push(id);
+        }
+        if (!ids.length) return fail(res, 400, 'bad_request', 'no books selected');
+        recordHistory(Number(body.library), ids);
+        const items: JobItem[] = ids.slice(0, 200).map((id) => ({
+          bookId: id, title: lib.bookById.get(id)?.title ?? `#${id}`, state: 'queued', detail: '', attempts: 0, size: null, mail: null,
+        }));
+        const n = ids.length;
+        const what = `${seriesName ? `«${seriesName}» · ` : ''}${n} book${n === 1 ? '' : 's'}`;
+        const job = createJob(kind, `${kind === 'send' ? 'Send to' : kind === 'export' ? 'Export to' : 'Download for'} ${device.name} · ${what}`, items);
+        const target = String(body.target || device.target || '');
+        store.jobRequests.set(job.id, { target, device });
+        runSendJob(job, { email: device.kind === 'email', kindle: /@(free\.)?kindle\.com$/i.test(target) });
+        return send(res, 200, job);
+      }
+      if (path === '/api/v1/handoff' && method === 'POST') {
+        const body = await readBody(req);
+        const lib = catalog(Number(body.library) || 1);
+        const b = lib.bookById.get(Number(body.book));
+        if (!b) return fail(res, 404, 'not_found', 'book not found');
+        const device = store.devices.find((d) => d.id === body.device) ?? store.devices.find((d) => d.preset === 'apple-books');
+        const format = body.format ?? (device && device.kind !== 'email' ? device.format : 'epub');
+        const token = Array.from({ length: 22 }, (_, i) => 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'[(b.id * 31 + i * 17 + store.handoffs.size * 7) % 56]).join('');
+        const expires = Date.now() + 15 * 60_000;
+        store.handoffs.set(token, { lib: lib.id, book: b.id, format, uses: 0, expires });
+        const host = req.headers.host ?? 'localhost:5173';
+        return send(res, 200, {
+          url: `/h/${token}`, absoluteUrl: `http://${host}/h/${token}`, expiresAt: new Date(expires).toISOString(),
+          maxUses: 3, format, fileName: `${b.title}.${format === 'kepub' ? 'kepub.epub' : format}`, title: b.title,
+        });
+      }
+      m = matchLib(req, /^\/api\/v1\/jobs\/([\w-]+)\/retry$/);
+      if (m && method === 'POST') {
+        const job = store.jobs.find((j) => j.id === m![1]);
+        if (!job) return fail(res, 404, 'not_found', 'job not found');
+        if (!job.retryable) return fail(res, 409, 'conflict', 'this job cannot be retried');
+        const r = store.jobRequests.get(job.id);
+        job.state = 'queued'; job.finishedAt = null; job.hint = null; job.retryable = false; job.message = '';
+        const redo = (job.items ?? []).filter((it) => it.state === 'failed');
+        for (const it of redo) { it.state = 'queued'; it.detail = ''; it.title = it.title.replace(' (fail)', ''); }
+        const keep = (job.items ?? []).filter((it) => it.state !== 'queued');
+        const sub = { ...job, items: redo };
+        runSendJob(sub as typeof job, { email: r?.device.kind === 'email', kindle: /@(free\.)?kindle\.com$/i.test(r?.target ?? '') });
+        // mirror the sub-run into the job
+        const mirror = setInterval(() => {
+          job.items = [...keep, ...redo]; job.state = sub.state; job.message = sub.message; job.progress = sub.progress;
+          job.hint = sub.hint; job.retryable = sub.retryable; job.finishedAt = sub.finishedAt;
+          broadcast('job', job);
+          if (sub.state === 'done' || sub.state === 'failed') clearInterval(mirror);
+        }, 200);
         return send(res, 200, job);
       }
       if (path === '/api/v1/fonts' && method === 'GET') {

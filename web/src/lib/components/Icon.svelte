@@ -11,6 +11,7 @@
     chevronRight: 'm9 6 6 6-6 6',
     chevronLeft: 'm15 6-6 6 6 6',
     send: 'M22 2 11 13M22 2 15 22l-4-9-9-4Z',
+    phone: 'M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm3 17h2',
     download: 'M12 3v12m0 0-5-5m5 5 5-5M4 21h16',
     read: 'M2 5h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2ZM22 5h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8Z',
     library: 'M4 21h16M6 21V9l6-4 6 4v12M10 21v-6h4v6',

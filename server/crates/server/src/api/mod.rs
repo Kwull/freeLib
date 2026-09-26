@@ -81,6 +81,8 @@ pub fn router() -> Router<AppState> {
         .route("/fonts", get(devices::fonts))
         .route("/jobs", get(jobs::list).delete(jobs::clear))
         .route("/jobs/{id}/cancel", post(jobs::cancel))
+        .route("/jobs/{id}/retry", post(jobs::retry))
+        .route("/handoff", post(crate::handoff::create))
         .route("/jobs/{id}/download", get(jobs::download))
         .route("/events", get(jobs::events))
         .route("/settings", get(settings::get).put(settings::put))

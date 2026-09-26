@@ -11,7 +11,10 @@
   import { formatSize, formatDate } from '../utils/format';
   import { t, tn, i18nState } from '../i18n';
   import { navigate } from '../router.svelte';
-  import { defaultDevice, devicesState, deviceVerb, deviceCaption } from '../stores/devices.svelte';
+  import { defaultDevice, devicesState, deviceVerb, deviceCaption, appleBooksDevice, openInBooks } from '../stores/devices.svelte';
+  import PhoneDialog from './PhoneDialog.svelte';
+  import { isIOS } from '../utils/platform';
+  import { showToast } from '../stores/toast.svelte';
   import { shelvesState } from '../stores/shelves.svelte';
   import {
     PANE_LIMITS, paneWidth, setPaneWidth, detailsCollapsed, setDetailsCollapsed,
@@ -65,6 +68,24 @@
 
   const dev = $derived(defaultDevice());
   let deviceMenuOpen = $state(false);
+  let phoneOpen = $state(false);
+  let opening = $state(false);
+  // on iPhone/iPad the Apple Books device becomes the primary action: "Open in Books"
+  const ios = isIOS();
+  const apple = $derived(appleBooksDevice());
+  const iosBooks = $derived(ios && !!apple && !!detail && detail.formats.includes('epub'));
+
+  async function openBooks() {
+    if (!detail || opening) return;
+    opening = true;
+    try {
+      await openInBooks(lib, detail.id, apple);
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    } finally {
+      setTimeout(() => (opening = false), 1500);
+    }
+  }
   const shelfNames = $derived.by(() => {
     if (!detail) return [];
     return detail.shelves.map((id) => shelvesState.items.find((s) => s.id === id)?.name).filter(Boolean) as string[];
@@ -143,7 +164,28 @@
         </div>
 
         <div class="actions">
-          {#if dev}
+          {#if iosBooks && apple}
+            <div class="send-wrap">
+              <div class="split">
+                <button type="button" class="primary main" data-testid="open-in-books" aria-describedby="send-caption" disabled={opening} onclick={openBooks}>
+                  <Icon name="read" size={16} /><span class="ellipsis">{opening ? t('books.opening') : t('books.openInBooks')}</span>
+                </button>
+                <button type="button" class="primary chev" aria-label={t('details.otherDevice')} title={t('details.otherDevice')} aria-haspopup="true" aria-expanded={deviceMenuOpen} onclick={() => { deviceMenuOpen = !deviceMenuOpen; downloadMenuOpen = false; }}>
+                  <Icon name="chevronDown" size={14} />
+                </button>
+                {#if deviceMenuOpen}
+                  <div class="dl-menu dev-menu" role="menu">
+                    {#each devicesState.items as d (d.id)}
+                      <button type="button" role="menuitem" onclick={() => { deviceMenuOpen = false; onSend([detail!.id], d.id); }}>
+                        <span class="verb">{t(`device.action.${deviceVerb(d)}`)}</span><span class="muted">{deviceCaption(d)}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+              <span class="caption" id="send-caption" data-testid="send-caption">{deviceCaption(apple)}</span>
+            </div>
+          {:else if dev}
             <div class="send-wrap">
               <div class="split">
                 <button type="button" class="primary main" data-testid="quick-send" title={deviceCaption(dev)} aria-describedby="send-caption" onclick={() => onSend([detail!.id], dev.id)}>
@@ -177,10 +219,18 @@
               </div>
             {/if}
           </div>
+          {#if !ios}
+            <button type="button" class="secondary icon-only" data-testid="send-to-phone" aria-label={t('phone.action')} title={t('phone.action')} onclick={() => (phoneOpen = true)}>
+              <Icon name="phone" size={16} />
+            </button>
+          {/if}
           <button type="button" class="secondary" onclick={() => navigate(`/l/${lib}/read/${detail!.id}`)}>
             <Icon name="read" size={16} />{t('details.read')}
           </button>
         </div>
+        {#if phoneOpen}
+          <PhoneDialog {lib} bookId={detail.id} device={apple} onClose={() => (phoneOpen = false)} />
+        {/if}
 
         {#if detail.deleted}<p class="warn">{t('details.deletedNote')}</p>{/if}
 
@@ -342,6 +392,7 @@
     border: none; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 500; font-size: 14px; padding: 0 12px;
   }
   .actions button.primary:hover { background: var(--accent-hover); }
+  .actions button.primary:disabled { opacity: .7; }
   .actions button.secondary { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 14px; flex-shrink: 0; }
   .actions button.icon-only { gap: 4px; }
   /* narrow pane: the send button gets its own row */

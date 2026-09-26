@@ -381,6 +381,13 @@
           <input type="text" placeholder="%b" bind:value={settings.smtp.subject} />
           <span class="muted hint">{t('settings.mail.subjectHint')}</span>
         </label>
+        <label class="field">{t('settings.mail.maxAttachments')}<input type="number" min="1" max="100" bind:value={settings.smtp.maxAttachments} /></label>
+        <label class="field">{t('settings.mail.maxMailMb')}
+          <input type="number" min="1" max="200" bind:value={settings.smtp.maxMailMb} />
+          <span class="muted hint">{t('settings.mail.limitsHint')}</span>
+        </label>
+        <label class="field">{t('settings.mail.retries')}<input type="number" min="0" max="10" bind:value={settings.smtp.retries} /></label>
+        <label class="field">{t('settings.mail.retryDelay')}<input type="number" min="0" max="3600" bind:value={settings.smtp.retryDelaySeconds} /></label>
       </div>
       <label class="field recipients">{t('settings.mail.allowedRecipients')}
         <textarea rows="4" spellcheck="false" placeholder="*@kindle.com" bind:value={recipientsText}></textarea>

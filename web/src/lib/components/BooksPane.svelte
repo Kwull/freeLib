@@ -48,7 +48,7 @@
   };
 
   let {
-    lib, scope, selectedBookId, onPick, onOpenSend, onOpenShelf, header, onBack, onCounts,
+    lib, scope, selectedBookId, onPick, onOpenSend, onOpenShelf, header, onBack, onCounts, onSendSeries,
   }: {
     lib: number;
     scope: Scope;
@@ -59,6 +59,8 @@
     header?: Header;
     onBack?: () => void;
     onCounts?: (counts: { books: number }) => void;
+    /** "Send whole series" (series pages, and the selection bar for selected books in series) */
+    onSendSeries?: (seriesIds: number[]) => void;
   } = $props();
 
   /** A book with this many authors is an anthology / collection (same as the server). */
@@ -516,6 +518,13 @@
     return { destroy: () => io.disconnect() };
   }
 
+  // series of the selected books (loaded ones), for "Send whole series"
+  const selectedSeries = $derived.by(() => {
+    const sel = new Set(selectedIds(lib));
+    const ids: number[] = [];
+    for (const b of books) if (sel.has(b.id) && b.series && !ids.includes(b.series.id)) ids.push(b.series.id);
+    return ids.slice(0, 20);
+  });
   const shownCoauthors = $derived((header?.coauthors ?? []).slice(0, 3));
   const moreCoauthors = $derived(Math.max(0, (header?.coauthorCount ?? 0) - shownCoauthors.length));
   const sortOptions = $derived<SortKey[]>(
@@ -595,6 +604,9 @@
         <span>{tn('browse.booksCount', header.booksCount)}</span>
         {#if header.seriesCount}<span>· {tn('browse.seriesCount', header.seriesCount)}</span>{/if}
         {#if header.anthologies}<span>· {tn('browse.inAnthologies', header.anthologies)}</span>{/if}
+        {#if scope.kind === 'series' && onSendSeries}
+          <button type="button" class="series-send" data-testid="send-series" onclick={() => onSendSeries!([scope.id])}><Icon name="send" size={14} />{t('series.sendWhole')}</button>
+        {/if}
       </div>
       {#if shownCoauthors.length || moreCoauthors}
         <div class="coauthors">
@@ -625,6 +637,9 @@
         </span>
       </div>
       {#if header.follow}<FollowButton {lib} kind={header.follow.kind} id={header.follow.id} compact />{/if}
+      {#if scope.kind === 'series' && onSendSeries}
+        <button type="button" class="series-send" aria-label={t('series.sendWhole')} title={t('series.sendWhole')} onclick={() => onSendSeries!([scope.id])}><Icon name="send" size={16} /></button>
+      {/if}
     </div>
   {/if}
 
@@ -879,6 +894,7 @@
 
   <SelectionBar
     count={selectedCount(lib)}
+    onSendSeries={onSendSeries && selectedSeries.length ? () => onSendSeries!(selectedSeries) : undefined}
     onSend={() => onOpenSend(selectedIds(lib))}
     onDownload={() => onOpenSend(selectedIds(lib))}
     onShelf={() => onOpenShelf(selectedIds(lib))}
@@ -890,6 +906,12 @@
   .books-pane { flex: 1 1 0; min-width: 320px; display: flex; flex-direction: column; background: var(--surface); position: relative; min-height: 0; }
   .scope-header { padding: 16px 24px 12px; display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--line); flex-shrink: 0; min-width: 0; }
   .scope-header .crumb { font-size: 12px; color: var(--muted); }
+  .series-send {
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; margin-left: 10px; border-radius: 7px;
+    border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .series-send:hover { background: var(--accent-soft); }
+  .scope-header-phone .series-send { margin-left: auto; width: 36px; height: 36px; padding: 0; justify-content: center; }
   .scope-header h1 {
     margin: 2px 0 2px; font-family: var(--font-display); font-size: 24px; font-weight: 600; line-height: 1.25;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -903,7 +925,7 @@
   .ed-line { display: flex; align-items: center; gap: 8px; padding-left: 48px; font-size: 13px; color: var(--muted-2); min-width: 0; }
   .m-edition { background: var(--surface-alt); }
   .ed-mark { width: 36px; display: flex; justify-content: center; color: var(--muted); flex-shrink: 0; }
-  .counts { display: flex; gap: 4px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+  .counts { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; }
   .coauthors { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); min-width: 0; }
   .coauthors .lbl { flex-shrink: 0; }
   .coauthors .names { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

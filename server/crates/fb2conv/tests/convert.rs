@@ -774,3 +774,206 @@ fn splitting() {
     );
     epubcheck("big.epub", &bytes);
 }
+
+// ------------------------------------------------------------------------- catalog metadata
+
+type MetaEl = (String, Vec<(String, String)>, String);
+
+/// Elements of the OPF `<metadata>`: (name, attributes, text).
+fn opf_metadata(opf: &str) -> Vec<MetaEl> {
+    use quick_xml::events::Event;
+    let mut r = quick_xml::Reader::from_str(opf);
+    let mut out = Vec::new();
+    let mut in_meta = false;
+    let mut cur: Option<MetaEl> = None;
+    loop {
+        match r.read_event().unwrap() {
+            Event::Start(e) if e.name().as_ref() == "metadata" => in_meta = true,
+            Event::Start(e) | Event::Empty(e) if in_meta => {
+                let name = e.name().as_ref().to_string();
+                let attrs = e
+                    .attributes()
+                    .flatten()
+                    .map(|a| {
+                        (
+                            a.key.as_ref().to_string(),
+                            a.normalized_value(quick_xml::XmlVersion::default())
+                                .unwrap()
+                                .into_owned(),
+                        )
+                    })
+                    .collect();
+                if let Some(c) = cur.take() {
+                    out.push(c);
+                }
+                cur = Some((name, attrs, String::new()));
+            }
+            Event::Text(t) => {
+                if let Some(c) = cur.as_mut() {
+                    c.2.push_str(&t.xml10_content());
+                }
+            }
+            Event::GeneralRef(g) => {
+                if let Some(c) = cur.as_mut() {
+                    let name = g.to_string();
+                    c.2.push_str(match name.as_str() {
+                        "amp" => "&",
+                        "lt" => "<",
+                        "gt" => ">",
+                        "quot" => "\"",
+                        _ => "?",
+                    });
+                }
+            }
+            Event::End(e) if e.name().as_ref() == "metadata" => {
+                if let Some(c) = cur.take() {
+                    out.push(c);
+                }
+                in_meta = false;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+fn meta_value(m: &[MetaEl], pred: impl Fn(&[(String, String)], &str) -> bool) -> Option<String> {
+    m.iter().find(|(n, a, _)| pred(a, n)).map(|(_, a, t)| {
+        a.iter()
+            .find(|(k, _)| k == "content")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| t.trim().to_string())
+    })
+}
+
+fn attr<'a>(a: &'a [(String, String)], k: &str) -> Option<&'a str> {
+    a.iter().find(|(x, _)| x == k).map(|(_, v)| v.as_str())
+}
+
+fn refined(m: &[MetaEl], id: &str, prop: &str) -> Option<String> {
+    meta_value(m, |a, _| {
+        attr(a, "refines") == Some(id) && attr(a, "property") == Some(prop)
+    })
+}
+
+fn named(m: &[MetaEl], name: &str) -> Option<String> {
+    meta_value(m, |a, _| attr(a, "name") == Some(name))
+}
+
+fn element(m: &[MetaEl], name: &str) -> Option<String> {
+    meta_value(m, |_, n| n == name)
+}
+
+#[test]
+fn catalog_metadata_series_and_cover() {
+    // an FB2 without <lang>, with junk in the title, a repeated series number and no cover
+    let src = String::from_utf8(fixture("series1.fb2"))
+        .unwrap()
+        .replace("<lang>en</lang>", "")
+        .replace(
+            "<book-title>Foundation</book-title>",
+            "<book-title>  The   Foundation (fb2). Book 3 </book-title><date value=\"1951-06-01\">1951-06-01</date>",
+        )
+        .replace("<sequence name=\"Foundation\" number=\"1\"/>", "")
+        .replace(
+            "</title-info>",
+            "<annotation><p>First <emphasis>line</emphasis> &amp; more.</p><p>Second.</p></annotation></title-info><publish-info><publisher>Gnome Press</publisher><isbn>978-0-553-29335-7</isbn></publish-info>",
+        );
+    let meta = BookMeta {
+        book_key: Some("lib:4242".into()),
+        lang: Some("eng".into()),
+        series: Some("Foundation".into()),
+        serno: Some(3),
+    };
+    let opts = ConvertOptions::default();
+    let bytes = fb2_to_epub_with(src.as_bytes(), &opts, Assets::shared(), &meta).unwrap();
+    let again = fb2_to_epub_with(src.as_bytes(), &opts, Assets::shared(), &meta).unwrap();
+    let e = Epub::open(&bytes);
+    check_epub_structure(&e);
+    let opf = e.text("OEBPS/content.opf");
+    let m = opf_metadata(&opf);
+    let uid = book_uuid("lib:4242");
+    assert_eq!(
+        meta_value(&m, |a, n| n == "dc:identifier"
+            && attr(a, "id") == Some("bookid"))
+        .as_deref(),
+        Some(uid.as_str())
+    );
+    assert!(
+        Epub::open(&again).text("OEBPS/content.opf").contains(&uid),
+        "re-conversion keeps the identifier"
+    );
+    assert_eq!(element(&m, "dc:language").as_deref(), Some("en"));
+    assert_eq!(element(&m, "dc:title").as_deref(), Some("The Foundation"));
+    assert_eq!(
+        refined(&m, "#title", "file-as").as_deref(),
+        Some("Foundation, The")
+    );
+    assert_eq!(
+        named(&m, "calibre:title_sort").as_deref(),
+        Some("Foundation, The")
+    );
+    assert_eq!(
+        refined(&m, "#creator1", "file-as").as_deref(),
+        Some("Asimov, Isaac")
+    );
+    assert_eq!(
+        meta_value(&m, |a, _| attr(a, "property")
+            == Some("belongs-to-collection"))
+        .as_deref(),
+        Some("Foundation")
+    );
+    assert_eq!(
+        refined(&m, "#series", "collection-type").as_deref(),
+        Some("series")
+    );
+    assert_eq!(
+        refined(&m, "#series", "group-position").as_deref(),
+        Some("3")
+    );
+    assert_eq!(named(&m, "calibre:series").as_deref(), Some("Foundation"));
+    assert_eq!(named(&m, "calibre:series_index").as_deref(), Some("3"));
+    assert_eq!(
+        element(&m, "dc:description").as_deref(),
+        Some("First line & more. Second.")
+    );
+    assert_eq!(element(&m, "dc:publisher").as_deref(), Some("Gnome Press"));
+    assert_eq!(element(&m, "dc:date").as_deref(), Some("1951-06-01"));
+    assert_eq!(
+        meta_value(&m, |a, n| n == "dc:identifier"
+            && attr(a, "id") == Some("isbn"))
+        .as_deref(),
+        Some("urn:isbn:9780553293357")
+    );
+    // generated cover: a device-sized JPEG, marked for every reader
+    assert_eq!(named(&m, "cover").as_deref(), Some("cover-image"));
+    assert!(opf.contains(
+        "id=\"cover-image\" href=\"img/cover.jpg\" media-type=\"image/jpeg\" properties=\"cover-image\""
+    ));
+    assert!(opf.contains("<reference type=\"cover\""));
+    assert!(
+        e.text("OEBPS/nav.xhtml")
+            .contains("epub:type=\"cover\" href=\"cover.xhtml\"")
+    );
+    let cover = &e.files["OEBPS/img/cover.jpg"];
+    let img = image::load_from_memory(cover).unwrap();
+    assert_eq!((img.width(), img.height()), (COVER_WIDTH, COVER_HEIGHT));
+    assert!(cover.len() < 200 * 1024, "cover is {} bytes", cover.len());
+    epubcheck("metadata.epub", &bytes);
+
+    // the FB2 language wins over the catalog's; the FB2 series stays when the catalog has none
+    let bytes = fb2_to_epub_with(
+        &fixture("series1.fb2"),
+        &opts,
+        Assets::shared(),
+        &BookMeta {
+            lang: Some("ru".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let m = opf_metadata(&Epub::open(&bytes).text("OEBPS/content.opf"));
+    assert_eq!(element(&m, "dc:language").as_deref(), Some("en"));
+    assert_eq!(named(&m, "calibre:series_index").as_deref(), Some("1"));
+}

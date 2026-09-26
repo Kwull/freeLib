@@ -15,7 +15,16 @@ sanitize_html(html: &str) -> Option<String>            // same sanitiser for for
 
 // conversion
 fb2_to_epub(bytes: &[u8], opts: &ConvertOptions, assets: &Assets) -> Result<Vec<u8>>
+fb2_to_epub_with(bytes, opts, assets, meta: &BookMeta) -> Result<Vec<u8>>   // + catalog metadata
 join_to_epub(books: &[&[u8]], opts, assets, title: Option<&str>) -> Result<Vec<u8>>  // joinSeries
+join_to_epub_with(books, opts, assets, title, meta: &BookMeta) -> Result<Vec<u8>>
+
+// metadata helpers (also used for Calibre arguments)
+BookMeta { book_key, lang, series, serno }   // the catalog's view; Default = FB2 only
+book_uuid(book_key) -> "urn:uuid:…"          // stable EPUB identifier
+normalize_language(tag) -> Option<String>    // BCP 47: "rus" → "ru", "ru_ru" → "ru-RU"
+book_language(fb2_lang, fallback, sample)    // FB2 lang, else catalog lang, else a guess
+clean_title(title, serno) / title_sort(title, lang)
 to_kepub(epub: &[u8]) -> Result<Vec<u8>>               // save as *.kepub.epub
 kepubify_xhtml(src: &str) -> Option<String>            // one document
 
@@ -28,7 +37,7 @@ transliteration(s: &str) -> String
 Assets::shared() -> &'static Assets    // or Assets::new(); cheap to share, lazily caches dictionaries
 assets.font_names() -> Vec<String>     // GET /fonts → ["PT Serif"]
 assets.hyphenator(lang) / hyphenation_languages() / default_css()
-generate_cover(&Assets, author, title, bottom_line) -> Vec<u8>   // JPEG
+generate_cover(&Assets, author, title, bottom_line) -> Vec<u8>   // 1600×2560 JPEG (COVER_WIDTH/HEIGHT)
 ```
 
 * `BookInfo` (serde, camelCase): `title, authors[{first,middle,last,nickname}], translators,
@@ -68,11 +77,13 @@ generate_cover(&Assets, author, title, bottom_line) -> Vec<u8>   // JPEG
 mimetype                                  (stored, first)
 META-INF/container.xml
 META-INF/com.apple.ibooks.display-options.xml   (only when fonts are embedded)
-OEBPS/content.opf   EPUB 3.0 package: dc:identifier urn:uuid (FB2 document id or content hash,
-                    deterministic), dcterms:modified, creators with role/file-as, translators,
-                    description (plain text), subjects, publisher, date (year), ISBN,
-                    belongs-to-collection + group-position and calibre:series/series_index,
-                    <meta name="cover">, cover-image property, legacy <guide>
+OEBPS/content.opf   EPUB 3.0 package: dc:identifier urn:uuid (from BookMeta.book_key, else the
+                    FB2 document id or content hash; deterministic), cleaned dc:title with
+                    title-type and file-as + calibre:title_sort, dcterms:modified, creators with
+                    role/file-as, translators, description (plain text), subjects, publisher,
+                    date (full date or year), ISBN, belongs-to-collection + collection-type +
+                    group-position and calibre:series/series_index, <meta name="cover">,
+                    cover-image property, legacy <guide> (docs/web/DEVICES.md)
 OEBPS/toc.ncx       EPUB 2 NCX with nested navPoints (for older readers / Calibre / Kindle)
 OEBPS/nav.xhtml     EPUB 3 nav (toc + hidden landmarks); also the visible TOC page
 OEBPS/css/main.css  Qt style.css adapted for EPUB 3 + hyphenation/font rules + userCss
@@ -145,12 +156,15 @@ OEBPS/img/…         images, OEBPS/fonts/… embedded fonts
   * `always`: a cover is always drawn.
   * `never`: only the FB2 cover is used.
 
-  The drawn cover uses the Qt background `cover.jpg` and PT Serif, with the author at the top,
-  the bold title in the middle and the series/number (or the expanded `coverLabel`) at the
-  bottom. Text shrinks until it fits. When `coverLabel` expands to a non-empty string, it is
-  drawn top-right on a translucent box on existing covers, like Qt's "additional label".
-  Generated covers are about 780×1250 px JPEGs of about 330 KB; the leather texture does not
-  compress well.
+  The FB2 cover counts only when it decodes completely (a JPEG/PNG without its end marker is
+  broken), is at least 100 px and not thinner than 1:4; covers much larger than 1600×2560 or
+  heavier than 1.5 MB are scaled down to a JPEG. The drawn cover is 1600×2560 on a flat colour
+  picked from the title, in PT Serif: the author at the top, the bold, line-balanced title in the
+  middle (short words stay with the next one), the series in italics and "Книга N" (or the
+  expanded `coverLabel`) at the bottom. Text shrinks until it fits. It is a 4:2:0 JPEG with
+  optimised Huffman tables (`jpeg-encoder`), about 100–150 KB; the old leather texture
+  (~330 KB at 780×1250) is gone. When `coverLabel` expands to a non-empty string, it is drawn
+  top-right on a translucent box on existing covers, like Qt's "additional label".
 * **Hyphenation.**
   * `soft` inserts U+00AD from the Qt Liang dictionaries (ru, uk, en, de), with a minimum of
     2 letters on each side. Headings, subtitles and code are not hyphenated.
@@ -241,14 +255,16 @@ poem).
 | Options | Time |
 |---|---|
 | no cover | 21 ms |
-| defaults (generated cover) | 54 ms |
+| defaults (generated 1600×2560 cover) | 95 ms (54 ms with the old 780×1250 cover) |
 | + soft hyphenation | 80 ms |
 | everything (hyphenation, popup notes, drop caps, PT Serif, forced cover with label) | 85 ms |
 | a 2 MB FB2 with defaults | 110 ms |
 | `read_info`, 530 KB | 1 ms |
 | `to_kepub` of the 460 KB result | 22 ms |
 
-Cover drawing costs about 30 ms and hyphenation about 30–40 ms per 500 KB.
+The other rows with a cover were measured with the old 780×1250 cover; the new one adds about 40 ms.
+
+Cover drawing costs about 70 ms at 1600×2560 (the result is cached per book and profile) and hyphenation about 30–40 ms per 500 KB. The synthetic book's EPUB is now 224 KB (was about 460 KB with the leather cover).
 
 The example also converts real files:
 `… --example fb2epub -- [--kepub] [--options '<json>'] in.fb2 out.epub`.
