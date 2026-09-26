@@ -53,16 +53,16 @@ test.describe('desktop', () => {
   test('expanded editions are full rows on the table grid, with their own titles', async ({ page }) => {
     await openAuthor(page, 'Азимов Айзек');
     const list = page.locator('.scroll');
-    // #6: four titles, three copies of one of them → one work
+    // #6: three titles, three copies of one of them → one work; the omnibus «Книга 9» stays apart
     const row6 = list.locator('.brow:not(.edition-row)', { hasText: /Академия на краю гибели|Край Основания|Сообщество на краю/ }).first();
-    await expect(row6.getByTestId('editions-toggle')).toHaveText('6 editions');
+    await expect(row6.getByTestId('editions-toggle')).toHaveText('5 editions');
     await row6.getByTestId('editions-toggle').click();
     const eds = list.getByTestId('edition-row');
-    await expect(eds).toHaveCount(5);
+    await expect(eds).toHaveCount(4);
     // translations under other titles show their title; copies of the group title do not
     await expect(list.getByTestId('edition-title').filter({ hasText: 'Край Основания' })).toBeVisible();
     await expect(list.getByTestId('edition-title').filter({ hasText: 'Сообщество на краю' })).toBeVisible();
-    await expect(list.getByTestId('edition-title').filter({ hasText: 'Миры Айзека Азимова. Книга 9' })).toBeVisible();
+    await expect(list.getByTestId('edition-title').filter({ hasText: 'Миры Айзека Азимова' })).toHaveCount(0);
 
     // geometry: 40px rows, stacked, the checkbox vertically inside its row
     expectStacked(await rowBoxes(list.locator('.vlist > div > div > *')), 40);
@@ -78,9 +78,9 @@ test.describe('desktop', () => {
     const cell = await eds.first().locator('.right').first().boundingBox();
     expect(Math.abs(head!.x + head!.width - (cell!.x + cell!.width))).toBeLessThan(1.5);
 
-    // #7 and #5 are joined too; the unnumbered omnibus volumes stay single
-    await expect(list.locator('.brow', { hasText: /Академия и Земля|Основание и Земля/ }).first().getByTestId('editions-toggle')).toHaveText('5 editions');
-    for (const t of ['Академия. Начало', 'Академия. Первая трилогия', 'Путь к Академии', 'Миры Айзека Азимова. Книга 7']) {
+    // #7 and #5 are joined too; omnibus volumes and unnumbered books stay single
+    await expect(list.locator('.brow', { hasText: /Академия и Земля|Основание и Земля/ }).first().getByTestId('editions-toggle')).toHaveText('4 editions');
+    for (const t of ['Академия. Начало', 'Академия. Первая трилогия', 'Путь к Академии', 'Миры Айзека Азимова. Книга 7', 'Миры Айзека Азимова. Книга 9', 'Миры Айзека Азимова. Книга 10']) {
       const r = list.locator('.brow:not(.edition-row)', { hasText: t });
       await expect(r).toHaveCount(1);
       await expect(r.getByTestId('editions-toggle')).toHaveCount(0);
@@ -148,7 +148,7 @@ test.describe('desktop', () => {
     const grid = page.locator('.grid-view');
     const head = grid.locator('.grid-group', { hasText: 'Академия [Азимов]' });
     await expect(head).toBeVisible();
-    await expect(grid.locator('.cover-card .ed-count', { hasText: '6 editions' })).toBeVisible();
+    await expect(grid.locator('.cover-card .ed-count', { hasText: '5 editions' })).toBeVisible();
     const cards = grid.locator('.cover-card');
     const n = await cards.count();
     await head.locator('.gtoggle').click();
@@ -170,7 +170,7 @@ test.describe('phone', () => {
     const list = page.locator('.mobile-list');
     const row = list.locator('.m-row', { hasText: /Академия на краю гибели|Край Основания/ }).first();
     await row.getByTestId('editions-toggle').click();
-    await expect(list.getByTestId('edition-row')).toHaveCount(5);
+    await expect(list.getByTestId('edition-row')).toHaveCount(4);
     await expect(list.getByTestId('edition-title').filter({ hasText: 'Край Основания' })).toBeVisible();
     expectStacked(await rowBoxes(list.locator('.vlist > div > div > *')), 64);
     for (const ed of await list.getByTestId('edition-row').all()) await expectCellsInside(ed);

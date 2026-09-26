@@ -199,7 +199,7 @@ top-level "Прочее" (id 11). A book's genre ids are deduplicated; books wit
 * **Editions** (`works.rs`, see "Editions: how works are detected" below): `work_id` = the smallest book id of the
   work. Lists group in memory (`BookAttrs` now also holds size and work id, +8 bytes/book, and a "title names a
   volume" flag), each work at the position of its first edition; the best copy: not deleted > title names no volume
-  (an omnibus «Миры Айзека Азимова. Книга 9» joined by series number never represents the novel) > known cover >
+  (a plain copy represents the work better than `… Том 1`) > known cover >
   FB2 > EPUB > other > larger (20 % buckets, ≤ 30 MB) > newer > library rating > lower id. Covers are known per library and `book_key` from preview extraction since the server started
   (`find::CoverHints`, not persisted) and passed as `RatingSource::has_cover`. Grouped pages are cut by offset from
   the grouped selection. Search groups after ranking; MCP `search_books` always groups.
@@ -226,18 +226,17 @@ it once, as its best copy, with "N editions" to open the others. The importer (`
    (normalised series name), the same series number (> 0), the same language and the same first author, whose author
    sets are compatible (one contains the other: `{Азимов}` and `{Азимов, Сильверберг}` join, `{Азимов, X}` and
    `{Азимов, Y}` do not), are one work — different Russian titles of one novel: «Академия на краю гибели», «Край
-   Основания», «Сообщество на краю» and «Миры Айзека Азимова. Книга 9», all #6 of «Академия [Азимов]». Guards:
+   Основания» and «Сообщество на краю», all #6 of «Академия [Азимов]». Guards:
    * books without a number (or #0) are never joined by this rule («Академия. Первая трилогия», «Путь к Академии»);
-   * titles naming **different volumes** under one number (`Том 1` / `Том 2`, `Книга 9` / `Книга 10`) are not
-     joined; only copies of the same volume are;
+   * titles naming a **volume** (`Книга N`, `Том N`, `Часть N`, `Vol. N`, `Part N`) never join by this rule: an
+     omnibus filed under a number («Миры Айзека Азимова. Книга 9» as #6) stays its own work, and parts
+     (`Том 1` / `Том 2`) only join copies with the same title by the title rule;
    * series whose numbering looks unreliable are skipped entirely: a number with more than 5 distinct titles, all
      titles under one number (3 or more), or one number holding most of the titles of a series with 6 or more.
    Works joined here also merge their title-rule editions (a union-find over work ids; the smallest id wins), and the
    count is reported as `seriesWorksJoined` in the import stats.
 
-An omnibus filed under a number (a "Книга 5" collection as #1) joins that number's work: the catalog cannot tell
-it apart from a translation, but the best-copy rule never shows it as the row. The edition list shows each edition's
-own title when it differs from the row's title. Changing these rules bumps `CATALOG_SCHEMA_VERSION`, which re-imports
+The edition list shows each edition's own title when it differs from the row's title. Changing these rules bumps `CATALOG_SCHEMA_VERSION`, which re-imports
 every library once at start. Unit tests with the real titles: `catalog/src/works.rs`, `catalog/src/text.rs`; an import
 test over the gen-inpx "showcase" books (`import/tests/catalog.rs`).
 

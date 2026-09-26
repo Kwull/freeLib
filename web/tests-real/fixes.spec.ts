@@ -20,21 +20,23 @@ test('translations under other titles are one work; unnumbered books stay single
   const { id, books } = await asimov(request);
   const byNo = (n: number) => books.filter((b) => b.serno === n);
   // one row per number, with all its titles
-  expect(byNo(6)).toHaveLength(1);
-  expect(byNo(6)[0].editions?.count).toBeGreaterThanOrEqual(6);
-  expect(byNo(7)[0].editions?.count).toBeGreaterThanOrEqual(5);
+  // one row per novel, plus the omnibus volume filed under the same number
+  const novel = (n: number) => byNo(n).filter((b) => !/Миры Айзека Азимова/.test(b.title));
+  expect(novel(6)).toHaveLength(1);
+  expect(novel(6)[0].editions?.count).toBeGreaterThanOrEqual(5);
+  expect(novel(7)[0].editions?.count).toBeGreaterThanOrEqual(4);
   expect(byNo(5)[0].editions?.count).toBe(2);
   expect(byNo(8)[0].editions).toBeUndefined();
   // the best copy is a plain novel, not the omnibus volume
-  expect(byNo(6)[0].title).not.toMatch(/Книга \d/);
-  for (const t of ['Академия. Книги 1-7', 'Академия. Начало', 'Путь к Академии', 'Миры Айзека Азимова. Книга 7']) {
+  expect(novel(6)[0].title).not.toMatch(/Книга \d/);
+  for (const t of ['Академия. Книги 1-7', 'Академия. Начало', 'Путь к Академии', 'Миры Айзека Азимова. Книга 7', 'Миры Айзека Азимова. Книга 9', 'Миры Айзека Азимова. Книга 10']) {
     const b = books.find((x) => x.title === t);
     expect(b, t).toBeTruthy();
     expect(b!.editions, t).toBeUndefined();
   }
 
   // the list: the work's other titles as full rows
-  const best = byNo(6)[0];
+  const best = novel(6)[0];
   await page.goto(`/l/${LIB}/authors/${id}?book=${best.id}`);
   const row = page.locator('.scroll .brow', { hasText: best.title }).first();
   await expect(row).toBeVisible({ timeout: 15000 });

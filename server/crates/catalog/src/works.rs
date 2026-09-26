@@ -9,8 +9,9 @@
 //! 2. **Series-number rule** ([`series_number_merges`]): same language, same series, same
 //!    series number (> 0), same first author and compatible author sets (one contains the
 //!    other) — different translations of one novel under different titles («Академия на краю
-//!    гибели», «Край Основания», «Сообщество на краю» as #6). Not applied when the titles name
-//!    different volumes (`Том 1` / `Том 2`), nor in series whose numbering looks unreliable.
+//!    гибели», «Край Основания», «Сообщество на краю» as #6). Titles naming a volume (an
+//!    omnibus `Миры Айзека Азимова. Книга 9`, a part `Том 1`) never join by this rule, only by
+//!    the title rule; nor is it applied in series whose numbering looks unreliable.
 //!
 //! Books by an unknown author and generic titles ("Избранное", "Рассказы") keep their own id.
 //! A list is grouped in memory: each work appears once, at the position of its first edition
@@ -18,8 +19,7 @@
 //!
 //! **Best copy** (first difference wins):
 //! 1. not deleted;
-//! 2. its title names no volume (`Миры Айзека Азимова. Книга 9` joined by the series-number
-//!    rule is an omnibus: a plain copy of the novel represents the work better);
+//! 2. its title names no volume (a plain copy represents the work better than `… Том 1`);
 //! 3. has a cover (as far as the server knows — covers are only known for books whose preview
 //!    was extracted; unknown ranks between yes and no);
 //! 4. format: FB2 (converts best, usually with its cover), then EPUB, then anything else;
@@ -362,7 +362,12 @@ pub fn series_number_merges(books: &[SeriesBook]) -> HashMap<i64, i64> {
         }
         // one bucket per language, number and first author
         let mut buckets: HashMap<(&str, i64, i64), Vec<&SeriesBook>> = HashMap::new();
-        for b in list.iter().filter(|b| !b.authors.is_empty()) {
+        // a title naming a volume (`Миры Айзека Азимова. Книга 9`, `Люди за спиной. Том 1`) is an
+        // omnibus or a part: it joins other copies only by the title rule
+        for b in list
+            .iter()
+            .filter(|b| !b.authors.is_empty() && b.volume.is_none())
+        {
             buckets
                 .entry((b.lang.as_str(), b.serno, b.authors[0]))
                 .or_default()
@@ -371,43 +376,23 @@ pub fn series_number_merges(books: &[SeriesBook]) -> HashMap<i64, i64> {
         let mut keys: Vec<_> = buckets.keys().copied().collect();
         keys.sort_unstable();
         for k in keys {
-            let bucket = &buckets[&k];
-            let volumes: std::collections::HashSet<u64> =
-                bucket.iter().filter_map(|b| b.volume).collect();
-            // different volumes under one number: only the same volume joins
-            let parts: Vec<Vec<&SeriesBook>> = if volumes.len() >= 2 {
-                let mut vs: Vec<u64> = volumes.into_iter().collect();
-                vs.sort_unstable();
-                vs.iter()
-                    .map(|v| {
-                        bucket
-                            .iter()
-                            .filter(|b| b.volume == Some(*v))
-                            .copied()
-                            .collect()
-                    })
-                    .collect()
-            } else {
-                vec![bucket.clone()]
-            };
-            for mut part in parts {
-                // author sets: a book joins a cluster whose set contains its own or is contained
-                part.sort_by_key(|b| std::cmp::Reverse(b.authors.len()));
-                let mut clusters: Vec<(Vec<i64>, i64)> = Vec::new();
-                for b in part {
-                    let mut set = b.authors.clone();
-                    set.sort_unstable();
-                    set.dedup();
-                    let hit = clusters.iter().position(|(cs, _)| {
-                        set.iter().all(|a| cs.binary_search(a).is_ok())
-                            || cs.iter().all(|a| set.binary_search(a).is_ok())
-                    });
-                    match hit {
-                        Some(i) => union(&mut parent, clusters[i].1, b.work),
-                        None => {
-                            parent.entry(b.work).or_insert(b.work);
-                            clusters.push((set, b.work));
-                        }
+            let mut part = buckets[&k].clone();
+            // author sets: a book joins a cluster whose set contains its own or is contained
+            part.sort_by_key(|b| std::cmp::Reverse(b.authors.len()));
+            let mut clusters: Vec<(Vec<i64>, i64)> = Vec::new();
+            for b in part {
+                let mut set = b.authors.clone();
+                set.sort_unstable();
+                set.dedup();
+                let hit = clusters.iter().position(|(cs, _)| {
+                    set.iter().all(|a| cs.binary_search(a).is_ok())
+                        || cs.iter().all(|a| set.binary_search(a).is_ok())
+                });
+                match hit {
+                    Some(i) => union(&mut parent, clusters[i].1, b.work),
+                    None => {
+                        parent.entry(b.work).or_insert(b.work);
+                        clusters.push((set, b.work));
                     }
                 }
             }
@@ -521,21 +506,21 @@ mod tests {
         ];
         let w = works_of(books);
         let same = |ix: &[usize]| ix.iter().all(|&i| w[i] == w[ix[0]]);
-        assert!(same(&[0, 1, 2]), "#1");
+        assert!(same(&[1, 2]), "#1");
         assert!(same(&[3, 4, 5, 6]), "#3");
         assert!(same(&[7, 8]), "#5");
-        assert!(same(&[9, 10, 11, 12, 13]), "#6");
-        assert!(same(&[14, 15, 16, 17]), "#7");
+        assert!(same(&[9, 10, 11, 13]), "#6");
+        assert!(same(&[14, 16, 17]), "#7");
         assert!(same(&[27, 28]), "#2");
         // numbers stay apart
-        let firsts = [0, 27, 3, 7, 9, 14, 18, 19, 20];
+        let firsts = [1, 27, 3, 7, 9, 14, 18, 19, 20];
         for (a, &i) in firsts.iter().enumerate() {
             for &j in &firsts[a + 1..] {
                 assert_ne!(w[i], w[j], "{} / {}", books[i].0, books[j].0);
             }
         }
-        // unnumbered books are only their own work
-        for i in 21..=26 {
+        // omnibus volumes and unnumbered books are only their own work
+        for i in [0, 12, 15].into_iter().chain(21..=26) {
             assert!(
                 w.iter().enumerate().all(|(j, &x)| j == i || x != w[i]),
                 "{}",
