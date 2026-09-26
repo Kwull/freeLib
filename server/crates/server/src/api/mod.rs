@@ -11,6 +11,7 @@ pub mod browse;
 pub mod devices;
 pub mod jobs;
 pub mod libraries;
+pub mod oauth;
 pub mod oidc;
 pub mod session;
 pub mod settings;
@@ -84,6 +85,15 @@ pub fn router() -> Router<AppState> {
         .route("/me/tokens", get(tokens::list).post(tokens::create))
         .route("/me/tokens/audit", get(tokens::audit))
         .route("/me/tokens/{id}", axum::routing::delete(tokens::revoke))
+        .route("/me/oauth/apps", get(oauth::apps))
+        .route(
+            "/me/oauth/apps/{id}",
+            axum::routing::delete(oauth::revoke_app),
+        )
+        .route(
+            "/oauth/requests/{id}",
+            get(oauth::request).post(oauth::decide),
+        )
         .route(
             "/me/prefs",
             get(settings::get_prefs).put(settings::put_prefs),

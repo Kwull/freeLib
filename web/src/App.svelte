@@ -9,6 +9,7 @@
   import SearchPage from './lib/routes/SearchPage.svelte';
   import LibrariesPage from './lib/routes/LibrariesPage.svelte';
   import BookPhonePage from './lib/routes/BookPhonePage.svelte';
+  import OAuthConsentPage from './lib/routes/OAuthConsentPage.svelte';
 
   import { currentRoute, navigate } from './lib/router.svelte';
   import { loadSession, isLoggedIn } from './lib/stores/session.svelte';
@@ -108,6 +109,9 @@
       {/snippet}
     </StateCard>
   </div>
+{:else if currentRoute().name === 'oauthConsent' && (isLoggedIn() || (currentRoute() as { error: string | null }).error)}
+  {@const r = currentRoute() as { request: string | null; error: string | null }}
+  <OAuthConsentPage request={r.request} error={r.error} />
 {:else if !isLoggedIn()}
   <LoginPage />
 {:else}

@@ -2,7 +2,8 @@ import { ApiError } from './types';
 import type {
   Library, Book, BookDetail, Genre, Shelf, Device, Job, Session, NameListResponse,
   BooksResponse, SearchResponse, Settings, User, ConvertOptions, AuthorSummary, CoauthorsResponse,
-  Account, UserRow, RatingParams, TokensResponse, ApiToken, AuditRow, TokenScope,
+  Account, UserRow, RatingParams, TokensResponse, ApiToken, AuditRow, TokenScope, OAuthApp,
+  OAuthRequest,
 } from './types';
 
 const BASE = '/api/v1';
@@ -179,6 +180,12 @@ export const api = {
     request<{ token: ApiToken; secret: string }>('/me/tokens', { method: 'POST', body: JSON.stringify(body) }),
   revokeToken: (id: number) => request<void>(`/me/tokens/${id}`, { method: 'DELETE' }),
   tokenAudit: () => request<AuditRow[]>('/me/tokens/audit'),
+  // OAuth (apps connected by signing in)
+  oauthApps: () => request<OAuthApp[]>('/me/oauth/apps'),
+  revokeOAuthApp: (id: number) => request<void>(`/me/oauth/apps/${id}`, { method: 'DELETE' }),
+  oauthRequest: (id: string) => request<OAuthRequest>(`/oauth/requests/${encodeURIComponent(id)}`),
+  oauthDecide: (id: string, body: { approve: boolean; scopes: TokenScope[]; csrf: string }) =>
+    request<{ redirect: string }>(`/oauth/requests/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify(body) }),
 
   prefs: () => request<Record<string, unknown>>('/me/prefs'),
   setPrefs: (p: Record<string, unknown>) => request<Record<string, unknown>>('/me/prefs', { method: 'PUT', body: JSON.stringify(p) }),

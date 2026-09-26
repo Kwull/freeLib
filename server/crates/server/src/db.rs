@@ -195,6 +195,8 @@ fn adopt_open_mode_data(c: &Connection, id: i64) -> ApiResult<()> {
         "UPDATE OR IGNORE device_order SET user_id=?1 WHERE user_id=0",
         [id],
     )?;
+    // apps authorized anonymously in open mode do not get the new account
+    c.execute("DELETE FROM oauth_grant WHERE user_id=0", [])?;
     Ok(())
 }
 
@@ -230,6 +232,7 @@ pub fn delete_user(c: &Connection, id: i64) -> ApiResult<bool> {
     c.execute("DELETE FROM api_audit WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM book_history WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM device_order WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM oauth_grant WHERE user_id=?1", [id])?;
     Ok(c.execute("DELETE FROM user WHERE id=?1", [id])? > 0)
 }
 
@@ -1035,6 +1038,9 @@ pub struct AuditRow {
     pub token_id: Option<i64>,
     /// Name of the token at the time of the listing (`null` when revoked).
     pub token_name: Option<String>,
+    pub grant_id: Option<i64>,
+    /// Name of the authorized app (OAuth), while it is authorized.
+    pub app_name: Option<String>,
     pub tool: String,
     pub ok: bool,
     pub detail: String,
@@ -1044,18 +1050,21 @@ pub struct AuditRow {
 /// Audit entries kept per user.
 pub const AUDIT_MAX_PER_USER: i64 = 500;
 
+/// Adds an audit entry: an MCP tool call made with personal token `token_id` or OAuth grant
+/// `grant_id`, or an OAuth event (`oauth.authorize`, `oauth.revoke`, …).
 pub fn add_audit(
     c: &Connection,
     user_id: i64,
     token_id: Option<i64>,
+    grant_id: Option<i64>,
     tool: &str,
     ok: bool,
     detail: &str,
 ) -> ApiResult<()> {
     let detail: String = detail.chars().take(200).collect();
     c.execute(
-        "INSERT INTO api_audit(user_id, token_id, tool, ok, detail, at) VALUES (?1,?2,?3,?4,?5,?6)",
-        params![user_id, token_id, tool, ok, detail, now_rfc3339()],
+        "INSERT INTO api_audit(user_id, token_id, grant_id, tool, ok, detail, at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![user_id, token_id, grant_id, tool, ok, detail, now_rfc3339()],
     )?;
     c.execute(
         "DELETE FROM api_audit WHERE user_id=?1 AND id <= \
@@ -1068,14 +1077,17 @@ pub fn add_audit(
 /// The newest `limit` audit entries of `user_id`.
 pub fn audit(c: &Connection, user_id: i64, limit: i64) -> ApiResult<Vec<AuditRow>> {
     let mut st = c.prepare(
-        "SELECT a.id, a.token_id, t.name, a.tool, a.ok, a.detail, a.at FROM api_audit a \
-         LEFT JOIN api_token t ON t.id = a.token_id WHERE a.user_id=?1 ORDER BY a.id DESC LIMIT ?2",
+        "SELECT a.id, a.token_id, t.name, a.tool, a.ok, a.detail, a.at, a.grant_id, g.client_name \
+         FROM api_audit a LEFT JOIN api_token t ON t.id = a.token_id \
+         LEFT JOIN oauth_grant g ON g.id = a.grant_id WHERE a.user_id=?1 ORDER BY a.id DESC LIMIT ?2",
     )?;
     let rows = st.query_map(params![user_id, limit], |r| {
         Ok(AuditRow {
             id: r.get(0)?,
             token_id: r.get(1)?,
             token_name: r.get(2)?,
+            grant_id: r.get(7)?,
+            app_name: r.get(8)?,
             tool: r.get(3)?,
             ok: r.get(4)?,
             detail: r.get(5)?,
@@ -1266,7 +1278,8 @@ pub fn put_setting<T: Serialize>(c: &Connection, key: &str, v: &T) -> ApiResult<
     put_setting_raw(c, key, &s)
 }
 
-/// Stored SMTP settings (the password never leaves the server).
+/// Stored SMTP settings (the password never leaves the server and is stored encrypted:
+/// `enc:v1:…`, see [`crate::secrets`]; [`SmtpConfig::revealed`] decrypts it for sending).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SmtpConfig {
@@ -1308,6 +1321,15 @@ impl Default for SmtpConfig {
 }
 
 impl SmtpConfig {
+    /// This configuration with the password decrypted, for sending (the stored one is
+    /// encrypted, see [`crate::secrets`]).
+    pub fn revealed(mut self, s: &crate::secrets::Secrets) -> ApiResult<SmtpConfig> {
+        if let Some(p) = &self.password {
+            self.password = Some(s.reveal("smtp.password", p)?.to_string());
+        }
+        Ok(self)
+    }
+
     /// The mail subject for a book, from the [`subject`](Self::subject) template.
     pub fn subject_for(&self, title: &str, authors: &str) -> String {
         let tpl = if self.subject.trim().is_empty() {

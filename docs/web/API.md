@@ -234,16 +234,20 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | Method & path | Body | Response |
 |---|---|---|
 | `GET /settings` **(admin)** | – | `{ externalRatings: {enabled, source: "openlibrary", contactSet, progress: {lookedUp, found, rated, total}, queued, requests, pausedFor (s), lastError}, mcp: {enabled, url}, smtp: {host, port, security: "none"\|"starttls"\|"tls", username, from, passwordSet: boolean, pauseSeconds, allowedRecipients: string[], dailyLimitPerUser: number, subject: string (mail subject template: `%b` title, `%a` author; default `%b`)}, opds: {enabled: boolean, requireAuth: boolean}, calibre: {available: boolean, version: string\|null} }` |
-| `PUT /settings` **(admin)** | same shape (`externalRatings.enabled`, default true: when false the server sends nothing to Open Library; `mcp.enabled`, default true: when false `/mcp` answers 403; the other `externalRatings` fields are read-only); `smtp.password` write-only (omit to keep, `""` to remove). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100) | same as GET |
+| `PUT /settings` **(admin)** | same shape (`externalRatings.enabled`, default true: when false the server sends nothing to Open Library; `mcp.enabled`, default true: when false `/mcp` answers 403; the other `externalRatings` fields are read-only); `smtp.password` write-only (omit to keep, `""` to remove; stored encrypted, see ARCHITECTURE.md "Secrets at rest"). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100) | same as GET |
 | `POST /settings/smtp/test` **(admin)** | `{to}` | 204 or 400 with message |
 | `GET /users` **(admin)** | – | `[{id, username, role, hasPassword: boolean, sso: {issuer, email, createdAt, lastLogin} \| null}]` (`sso`: the linked single sign-on identity) |
 | `POST /users` **(admin)** | `{username, password, role}` | user; 409 when the name exists (case-insensitive). User ids are never reused |
 | `PATCH /users/:id` **(admin)** | `{password?, role?}` | user |
 | `DELETE /users/:id` **(admin)** | – | 204 (also cancels and removes the user's jobs and their files) |
-| `GET /me/tokens` | – | `{ tokens: ApiToken[], scopes: ["read","write","send"], mcp: {enabled, url} }` (`url`: `FREELIB_PUBLIC_URL` + `/mcp`, else built from the request's host) |
+| `GET /me/tokens` | – | `{ tokens: ApiToken[], scopes: ["read","write","send"], mcp: {enabled, url, oauth} }` (`url`: `FREELIB_PUBLIC_URL` + `/mcp`, else built from the request's host; `oauth`: apps can connect by signing in, i.e. `FREELIB_PUBLIC_URL` is `https://`) |
 | `POST /me/tokens` | `{name, scopes: ("read"\|"write"\|"send")[], expiresInDays?: 1..3650}` | `{ token: ApiToken, secret: "fl_…" }` — the secret is returned **only here**; the server keeps its SHA-256. At most 50 tokens per user (409) |
 | `DELETE /me/tokens/:id` | – | 204 (revoked at once, also for cached authentications); 404 for another user's token |
-| `GET /me/tokens/audit` | – | the last 50 MCP tool calls with the user's tokens: `[{id, tokenId, tokenName (null when revoked), tool, ok, detail (arguments, ≤ 200 chars), at}]` newest first |
+| `GET /me/tokens/audit` | – | the last 50 MCP tool calls with the user's tokens and authorized apps, and OAuth events (`oauth.authorize`, `oauth.revoke`, `oauth.refresh_reuse`, `oauth.code_reuse`): `[{id, tokenId, tokenName (null when revoked), grantId, appName (null when revoked), tool, ok, detail (arguments, ≤ 200 chars), at}]` newest first |
+| `GET /me/oauth/apps` | – | the user's authorized apps: `[{id, clientName, clientKind: "cimd"\|"dcr", verifiedHost (host of a CIMD client id) \| null, redirectHost, scopes, createdAt, lastUsedAt}]` |
+| `DELETE /me/oauth/apps/:id` | – | 204: all tokens of the app are revoked at once; 404 for another user's app |
+| `GET /oauth/requests/:id` | – | the pending authorization request shown by the consent page `/oauth/consent?request=:id`: `{client: {name, kind, verifiedHost, clientUri}, redirectUri, redirectHost, loopback, scopes, resource, csrf}`; 404 when unknown or expired (15 min) |
+| `POST /oauth/requests/:id` | `{approve: boolean, scopes: ("read"\|"write"\|"send")[] (a non-empty subset of the requested ones when approving), csrf}` | `{redirect: <redirect URI with code or error=access_denied, state, iss>}`; 403 for a wrong `csrf`, 404 when unknown, expired or already answered |
 | `GET /me/prefs`, `PUT /me/prefs` | arbitrary JSON ≤ 64 KB (UI state: pane and column widths, visible columns, sort orders, view mode, last library and device…; the SPA writes the whole object) | JSON |
 
 `ApiToken = { id, name, prefix /* "fl_" + 8 chars */, scopes, createdAt, lastUsedAt /* updated ≤ once a minute */, expiresAt: string | null }`.
@@ -253,10 +257,28 @@ Tokens are accepted by `/mcp` only (not by the REST API or OPDS); the REST endpo
 
 `POST /mcp` — Model Context Protocol, streamable HTTP transport (official Rust SDK `rmcp`), **stateless**: no
 `Mcp-Session-Id`; each POST carries one JSON-RPC message and is answered with `application/json` (or SSE when a tool
-streams notifications). Protocol versions up to `2026-07-28`. Requires `Authorization: Bearer fl_…` (401 with a
-`WWW-Authenticate: Bearer` challenge otherwise), 403 when `mcp.enabled` is false, 429 + `Retry-After` above
-`FREELIB_MCP_RATE` requests per token and minute (default 120). `tools/list` lists only the tools the token's scopes
-allow; every `tools/call` is checked again (a refused call is a tool error naming the missing scope) and audited.
+streams notifications). Protocol versions up to `2026-07-28`. Requires `Authorization: Bearer fl_…` (personal API
+token) or `Bearer flo_…` (OAuth access token, see below); otherwise 401 with `WWW-Authenticate: Bearer
+realm="freeLib"` plus, when OAuth is on, `resource_metadata="<public url>/.well-known/oauth-protected-resource/mcp",
+scope="read write send"` (and `error="invalid_token"` when a token was sent). 403 when `mcp.enabled` is false, 429 +
+`Retry-After` above `FREELIB_MCP_RATE` requests per token (or app) and minute (default 120). `tools/list` lists only
+the tools the token's scopes allow; every `tools/call` is checked again (for an API token a refused call is a tool
+error naming the missing scope; for an OAuth token it is HTTP 403 with `WWW-Authenticate: Bearer
+error="insufficient_scope", scope="<granted + needed>"`, so the client can ask the user for more) and audited.
+
+### OAuth (MCP authorization)
+
+Available when `FREELIB_PUBLIC_URL` is an `https://` origin (issuer = that URL, resource = `<issuer>/mcp`); otherwise
+these endpoints answer 404. Public clients only (`token_endpoint_auth_method: none`), PKCE `S256` required.
+
+| Method & path | Request | Response |
+|---|---|---|
+| `GET /.well-known/oauth-protected-resource`, `…/oauth-protected-resource/mcp` | – | RFC 9728: `{resource, authorization_servers: [issuer], scopes_supported: ["read","write","send"], bearer_methods_supported: ["header"], resource_name}` |
+| `GET /.well-known/oauth-authorization-server` | – | RFC 8414: `issuer`, `authorization_endpoint`, `token_endpoint`, `registration_endpoint`, `revocation_endpoint`, `scopes_supported`, `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code","refresh_token"]`, `token_endpoint_auth_methods_supported: ["none"]`, `code_challenge_methods_supported: ["S256"]`, `client_id_metadata_document_supported: true`, `authorization_response_iss_parameter_supported: true` |
+| `POST /oauth/register` | RFC 7591 JSON: `redirect_uris` (1–10; `https://` on `FREELIB_OAUTH_CLIENT_HOSTS` or `http://127.0.0.1\|[::1]\|localhost`), `client_name?`, `client_uri?`, `grant_types?`, `response_types?` | 201 `{client_id: "flc_…", client_id_issued_at, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method: "none"}`; 400 `invalid_redirect_uri` / `invalid_client_metadata`; 429 above 20 per address and hour; 503 when 500 clients are registered |
+| `GET /oauth/authorize` | `response_type=code`, `client_id` (registered, or an `https://` Client ID Metadata Document URL on a trusted host), `redirect_uri` (exact; loopback: any port), `code_challenge` + `code_challenge_method=S256`, `scope?` (none = all; `offline_access` ignored), `state?`, `resource?` | 303 to `/oauth/consent?request=<id>`; a bad client or redirect URI → 303 to `/oauth/consent?error=invalid_client\|invalid_redirect_uri` (never to the client); other errors → 303 to the redirect URI with `error` (`invalid_request`, `unsupported_response_type`, `invalid_scope`, `invalid_target`), `state`, `iss` |
+| `POST /oauth/token` | form: `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `code_verifier`, `resource?` — or `grant_type=refresh_token`, `refresh_token`, `client_id`, `scope?` (a subset), `resource?` | `{access_token: "flo_…", token_type: "Bearer", expires_in: 3600, refresh_token: "flr_…", scope}` with `Cache-Control: no-store`. Refresh tokens rotate on every use; presenting a used one revokes the app (`invalid_grant`), as does a second use of a code. Errors: 400 `invalid_request` / `invalid_grant` / `invalid_scope` / `invalid_target` / `unsupported_grant_type`, 401 `invalid_client`, 429 `slow_down` |
+| `POST /oauth/revoke` | form: `token`, `token_type_hint?`, `client_id?` | 200 (RFC 7009; a refresh token revokes the whole app, an access token itself) |
 
 | Tool | Scope | Arguments (all ids are per library; `library` optional, default library otherwise) |
 |---|---|---|

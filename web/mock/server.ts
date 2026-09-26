@@ -614,7 +614,7 @@ export function installMockApi(server: Connect.Server) {
       if (path === '/api/v1/me/tokens' && method === 'GET') {
         return send(res, 200, {
           tokens: store.tokens, scopes: ['read', 'write', 'send'],
-          mcp: { enabled: store.settings.mcp?.enabled ?? true, url: `http://${req.headers.host ?? 'localhost'}/mcp` },
+          mcp: { enabled: store.settings.mcp?.enabled ?? true, url: `http://${req.headers.host ?? 'localhost'}/mcp`, oauth: true },
         });
       }
       if (path === '/api/v1/me/tokens' && method === 'POST') {
@@ -640,6 +640,36 @@ export function installMockApi(server: Connect.Server) {
         const before = store.tokens.length;
         store.tokens = store.tokens.filter((x) => x.id !== Number(m![1]));
         return before === store.tokens.length ? fail(res, 404, 'not_found', 'token not found') : send(res, 204);
+      }
+
+      // ---- OAuth (consent page, authorized apps) ------------------------
+      if (path === '/api/v1/me/oauth/apps' && method === 'GET') return send(res, 200, store.oauthApps);
+      m = matchLib(req, /^\/api\/v1\/me\/oauth\/apps\/(\d+)$/);
+      if (m && method === 'DELETE') {
+        const before = store.oauthApps.length;
+        store.oauthApps = store.oauthApps.filter((x) => x.id !== Number(m![1]));
+        return before === store.oauthApps.length ? fail(res, 404, 'not_found', 'app not found') : send(res, 204);
+      }
+      m = matchLib(req, /^\/api\/v1\/oauth\/requests\/([\w-]+)$/);
+      if (m) {
+        const r = store.oauthRequests[m[1]];
+        if (!r) return fail(res, 404, 'not_found', 'this authorization request is unknown or expired; start the connection again in the app');
+        if (method === 'GET') return send(res, 200, r);
+        if (method === 'POST') {
+          const body = await readBody(req);
+          if (body.csrf !== r.csrf) return fail(res, 403, 'forbidden', 'invalid request token');
+          const u = new URL(r.redirectUri);
+          if (body.approve) {
+            const scopes = (body.scopes ?? []).filter((s: string) => r.scopes.includes(s as never));
+            if (!scopes.length) return fail(res, 400, 'bad_request', 'choose at least one permission');
+            u.searchParams.set('code', 'mock-code');
+          } else {
+            u.searchParams.set('error', 'access_denied');
+          }
+          u.searchParams.set('state', 'mock-state');
+          u.searchParams.set('iss', `http://${req.headers.host ?? 'localhost'}`);
+          return send(res, 200, { redirect: u.toString() });
+        }
       }
 
       // ---- Settings / users -------------------------------------------

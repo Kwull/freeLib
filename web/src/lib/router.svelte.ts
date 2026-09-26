@@ -43,6 +43,7 @@ export type Route =
   | { name: 'libraries' }
   | { name: 'settings'; section: string | null }
   | { name: 'login' }
+  | { name: 'oauthConsent'; request: string | null; error: string | null }
   | { name: 'notFound' };
 
 export function parseRoute(path: string, search: string): Route {
@@ -50,6 +51,7 @@ export function parseRoute(path: string, search: string): Route {
   const q = new URLSearchParams(search);
   if (segs.length === 0) return { name: 'home' };
   if (segs[0] === 'login') return { name: 'login' };
+  if (segs[0] === 'oauth' && segs[1] === 'consent') return { name: 'oauthConsent', request: q.get('request'), error: q.get('error') };
   if (segs[0] === 'libraries') return { name: 'libraries' };
   if (segs[0] === 'settings') return { name: 'settings', section: segs[1] ?? null };
   if (segs[0] === 'l' && segs[1]) {

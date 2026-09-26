@@ -239,7 +239,10 @@ impl Provider {
         let c = CoreClient::from_provider_metadata(
             meta,
             ClientId::new(self.cfg.client_id.clone()),
-            self.cfg.client_secret.clone().map(ClientSecret::new),
+            self.cfg
+                .client_secret
+                .clone()
+                .map(|s| ClientSecret::new(s.0)),
         )
         .set_redirect_uri(self.redirect.clone());
         if post_only {

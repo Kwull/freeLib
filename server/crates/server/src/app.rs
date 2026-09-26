@@ -27,6 +27,27 @@ pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
     }
     crate::cache::clean_on_start(&cfg.cache_dir);
     let db = AppDb::open(&cfg.data_dir.join("app.db"))?;
+    let secrets = std::sync::Arc::new(crate::secrets::Secrets::load(&cfg)?);
+    {
+        let rep = crate::secrets::migrate(&db.lock(), &secrets)?;
+        tracing::info!(
+            "stored secrets are encrypted with key {} from {}",
+            secrets.key_id(),
+            secrets.source
+        );
+        if rep.encrypted > 0 {
+            tracing::info!(
+                "encrypted {} stored secret(s) that were plain text",
+                rep.encrypted
+            );
+        }
+        if rep.rotated > 0 {
+            tracing::info!(
+                "re-encrypted {} stored secret(s) with the new key; FREELIB_SECRET_KEY_OLD can be removed",
+                rep.rotated
+            );
+        }
+    }
     let calibre = match &cfg.calibre {
         Some(p) => Calibre::detect(p).await,
         None => None,
@@ -63,7 +84,15 @@ pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
         let on = db::get_setting::<db::ExtRatingsConfig>(&c, "externalRatings")?.enabled;
         ext.set_enabled(on);
     }
-    let st = AppState::new(cfg, db, calibre, oidc, ext);
+    let st = AppState::new(cfg, db, calibre, oidc, ext, secrets);
+    match crate::oauth::issuer(&st) {
+        Some(iss) => {
+            tracing::info!("OAuth for MCP clients: add {iss}/mcp as a custom connector in Claude")
+        }
+        None => tracing::info!(
+            "OAuth for MCP clients is off (set FREELIB_PUBLIC_URL to this server's https:// address)"
+        ),
+    }
     bootstrap_users(&st)?;
     if let Some(p) = st.oidc.clone() {
         tokio::spawn(async move { p.probe().await });
@@ -271,6 +300,7 @@ fn spawn_cleanup(st: &AppState) {
                 crate::cache::evict(&cache, max);
             })
             .await;
+            crate::oauth::cleanup(&st).await;
         }
     });
 }
@@ -332,6 +362,7 @@ pub fn router(st: AppState) -> Router {
         )
         .merge(opds::router().layer(middleware::from_fn_with_state(st.clone(), opds::gate)))
         .merge(crate::mcp::router(st.clone()))
+        .merge(crate::oauth::router())
         .fallback(fallback)
         .layer(
             CompressionLayer::new()

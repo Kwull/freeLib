@@ -1,5 +1,5 @@
 import { generateLibrary, type MockLibrary } from './gen';
-import type { Device, Job, Shelf, Settings, User, Library, ConvertOptions, ApiToken, AuditRow } from '../src/lib/api/types';
+import type { Device, Job, Shelf, Settings, User, Library, ConvertOptions, ApiToken, AuditRow, OAuthApp, OAuthRequest } from '../src/lib/api/types';
 
 const defaultOptions: ConvertOptions = {
   hyphenate: 'soft', footnotes: 'end', dropCaps: false, breakAfterChapter: true,
@@ -43,7 +43,26 @@ export const store = {
     { id: 3, tokenId: 1, tokenName: 'Claude Desktop', tool: 'send_books', ok: true, detail: '{"book_ids":[5],"device":"default"}', at: '2026-09-24T19:40:00Z' },
     { id: 2, tokenId: 1, tokenName: 'Claude Desktop', tool: 'suggest_candidates', ok: true, detail: '{"limit":10}', at: '2026-09-24T19:38:10Z' },
     { id: 1, tokenId: 1, tokenName: 'Claude Desktop', tool: 'rate_book', ok: false, detail: '{"id":5,"rating":5}', at: '2026-09-24T19:37:02Z' },
+    { id: 4, tokenId: null, tokenName: null, grantId: 1, appName: 'Claude', tool: 'search_books', ok: true, detail: '{"query":"Стругацкие"}', at: '2026-09-25T10:02:00Z' },
   ] as AuditRow[],
+  oauthApps: [
+    { id: 1, clientName: 'Claude', clientKind: 'cimd', verifiedHost: 'claude.ai', redirectHost: 'claude.ai', scopes: ['read', 'write', 'send'], createdAt: '2026-09-20T18:00:00Z', lastUsedAt: '2026-09-25T10:02:00Z' },
+    { id: 2, clientName: 'Claude Code', clientKind: 'cimd', verifiedHost: 'claude.ai', redirectHost: 'localhost', scopes: ['read'], createdAt: '2026-09-22T09:30:00Z', lastUsedAt: null },
+    { id: 3, clientName: 'My MCP script', clientKind: 'dcr', verifiedHost: null, redirectHost: '127.0.0.1', scopes: ['read', 'write'], createdAt: '2026-09-23T12:00:00Z', lastUsedAt: '2026-09-23T12:05:00Z' },
+  ] as OAuthApp[],
+  /** pending consent requests by id (`claude`, `local`; anything else is unknown) */
+  oauthRequests: {
+    claude: {
+      client: { name: 'Claude', kind: 'cimd', verifiedHost: 'claude.ai', clientUri: 'https://claude.ai/oauth/mcp-oauth-client-metadata' },
+      redirectUri: 'https://claude.ai/api/mcp/auth_callback', redirectHost: 'claude.ai', loopback: false,
+      scopes: ['read', 'write', 'send'], resource: 'http://localhost/mcp', csrf: 'mock-csrf',
+    },
+    local: {
+      client: { name: 'My MCP script', kind: 'dcr', verifiedHost: null, clientUri: null },
+      redirectUri: 'http://127.0.0.1:43210/callback', redirectHost: '127.0.0.1', loopback: true,
+      scopes: ['read', 'write'], resource: 'http://localhost/mcp', csrf: 'mock-csrf',
+    },
+  } as Record<string, OAuthRequest>,
   nextClientId: 1,
   nextJobId: 1,
   nextDeviceId: 7,
