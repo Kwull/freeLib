@@ -13,6 +13,7 @@ serde.workspace = true
 thiserror.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 ab_glyph = "0.2"
+jpeg-encoder = { version = "0.6", default-features = false }
 
 [dev-dependencies]
 freelib-import = { path = "../import" }

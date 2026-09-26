@@ -92,6 +92,8 @@ type Device = {
   fileName: string;                // template, see below
   shared: boolean;                 // true = visible to all users (admin-created)
   options: ConvertOptions;
+  preset: "kindle-email" | "kindle-usb" | "apple-books" | "kobo" | "server-folder" | "original" | null;
+                                   // read-only: the default preset a shared device was seeded from (DEVICES.md)
 };
 type ConvertOptions = {
   hyphenate: "none" | "soft" | "full";
@@ -116,6 +118,19 @@ type Job = {
   log: string[];                   // last ≤ 50 lines (import)
   downloadUrl: string | null;      // for finished download/export jobs
   createdAt: string; finishedAt: string | null;
+  items: JobItem[];                // per-book results of send/export/download jobs (≤ 200 books; [] otherwise)
+  retryable: boolean;              // POST /jobs/:id/retry would redo failed or interrupted books
+  hint: { code: "kindle_approved_sender"; from: string; url: string; text: string } | null;
+                                   // after mails to @kindle.com: check the Approved Personal Document E-mail List
+};
+type JobItem = {
+  bookId: number; title: string;
+  state: "queued" | "converting" | "converted" | "sending" | "retrying" | "accepted" | "saved" | "ready" | "failed";
+                                   // e-mail: converting → converted → sending (handed to the mail server) → accepted
+  detail: string;                  // the server's reply ("250 2.0.0 Ok: queued as …"), the error, or the retry plan
+  attempts: number;                // delivery attempts
+  size: number | null;             // produced file size (bytes)
+  mail: number | null;             // which e-mail of the job carries the book (1-based)
 };
 ```
 
@@ -211,12 +226,13 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 
 | Method & path | Body | Response |
 |---|---|---|
-| `GET /devices` | – | `Device[]` (shared + own). A fresh install has shared defaults: "Kindle" (email, epub), "Kindle (USB)" (download, azw3), "Apple Books" (download, epub), "Kobo" (download, kepub), "Server folder" (folder, epub), "Original" (download, original) |
+| `GET /devices` | – | `Device[]` (shared + own). A fresh install has shared defaults with tuned options (see [DEVICES.md](DEVICES.md)): "Kindle" (email, epub), "Kindle (USB)" (download, azw3), "Apple Books" (download, epub), "Kobo" (download, kepub), "Server folder" (folder, epub), "Original" (download, original). `preset` is read-only; changing a device's conversion options stops preset upgrades for it |
 | `POST /devices` | `Device` without `id` | `Device` (`shared: true` and `kind: "folder"` need admin; an `email` target must match `smtp.allowedRecipients`, else 403) |
 | `PUT /devices/:id` | `Device` | `Device` (shared and folder devices: admin only) |
 | `DELETE /devices/:id` | – | 204 |
 | `PUT /devices/order` | `{ids: number[]}` | `Device[]` in the new order. Per user: `ids` first (any subset of the devices the user sees, shared ones included), the others after them. `GET /devices` returns the user's order (devices never ordered follow, oldest first). **The first device is the user's default** (the quick-send button, the Send dialog's preselection, MCP `device: "default"`). 404 for an unknown id, 400 for duplicates |
-| `POST /send` | `{library, books: number[], device: number, target?: string, fileName?: string, options?: Partial<ConvertOptions>}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`). `options` is merged (shallow) over the device's own options for this send only; the device itself is not changed. E-mail: the recipient must match `smtp.allowedRecipients` (403 `forbidden` otherwise, admins included) and the user's mails today plus this request's books must not exceed `smtp.dailyLimitPerUser` (429 `rate_limited`). Folder: readers may only use shared folder devices with their configured target (403). At most 5 queued + running send/export/download jobs per user (429 `rate_limited`). Exports never overwrite: an existing file gets a ` (2)`, ` (3)`, … sibling |
+| `POST /send` | `{library, books: number[], series?: number[], device: number, target?: string, fileName?: string, options?: Partial<ConvertOptions>}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`). `series` (≤ 20, "send whole series"): the series' live books in reading order, each title once (newest edition), after the explicit `books`; 404 for an unknown series. E-mail jobs convert all books, then send them in as few mails as `smtp.maxAttachments` / `smtp.maxMailMb` allow, retrying temporary SMTP failures (DEVICES.md); the job's `items` show each book's delivery state. `options` is merged (shallow) over the device's own options for this send only; the device itself is not changed. E-mail: the recipient must match `smtp.allowedRecipients` (403 `forbidden` otherwise, admins included) and the user's mails today plus this request's books must not exceed `smtp.dailyLimitPerUser` (429 `rate_limited`). Folder: readers may only use shared folder devices with their configured target (403). At most 5 queued + running send/export/download jobs per user (429 `rate_limited`). Exports never overwrite: an existing file gets a ` (2)`, ` (3)`, … sibling. The daily mail limit counts mails; a request needs at least ⌈books / maxAttachments⌉ |
+| `POST /handoff` | `{library, book, device?: number, format?: string}` | `{url: "/h/<token>", absoluteUrl, expiresAt, maxUses: 3, format, fileName, title}`: a link for "Send to my phone" / "Open in Books". Format and options from `device` (default: the Apple Books device; e-mail devices give EPUB), `format` overrides. 15 minutes, 3 downloads, 20 links per user per 10 minutes (429). See DEVICES.md for the security properties |
 | `GET /fonts` | – | `string[]` font family names available for embedding |
 
 ## Jobs and events
@@ -225,8 +241,9 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 |---|---|
 | `GET /jobs` | `Job[]` of the current user (admins also see imports), newest first, last 50 |
 | `POST /jobs/:id/cancel` | `Job` (a running Calibre conversion is killed) |
+| `POST /jobs/:id/retry` | `Job` (queued again): redoes the books of a failed, interrupted or partly failed job that did not get through (accepted/saved books are kept); 409 when there is nothing to retry, 404 for another user's job. Send/export/download jobs are stored in `app.db`: queued jobs resume after a restart, running ones become `failed` + `retryable` |
 | `DELETE /jobs?finished=1` | 204 (clears finished/failed/cancelled) |
-| `GET /jobs/:id/download` | the produced file (kept 24 h) |
+| `GET /jobs/:id/download` | the produced file (kept 24 h, also across restarts) |
 | `GET /events` | `text/event-stream`. Events: `event: job` data `Job`; `event: library` data `Library` (status/count changes). Heartbeat comment every 25 s. The stream ends when the session ends, the user is deleted or an admin is demoted (reconnect to continue) |
 
 ## Settings and users
@@ -234,7 +251,7 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | Method & path | Body | Response |
 |---|---|---|
 | `GET /settings` **(admin)** | – | `{ externalRatings: {enabled, source: "openlibrary", contactSet, progress: {lookedUp, found, rated, total}, queued, requests, pausedFor (s), lastError}, mcp: {enabled, url}, smtp: {host, port, security: "none"\|"starttls"\|"tls", username, from, passwordSet: boolean, pauseSeconds, allowedRecipients: string[], dailyLimitPerUser: number, subject: string (mail subject template: `%b` title, `%a` author; default `%b`)}, opds: {enabled: boolean, requireAuth: boolean}, calibre: {available: boolean, version: string\|null} }` |
-| `PUT /settings` **(admin)** | same shape (`externalRatings.enabled`, default true: when false the server sends nothing to Open Library; `mcp.enabled`, default true: when false `/mcp` answers 403; the other `externalRatings` fields are read-only); `smtp.password` write-only (omit to keep, `""` to remove). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100) | same as GET |
+| `PUT /settings` **(admin)** | same shape (`externalRatings.enabled`, default true: when false the server sends nothing to Open Library; `mcp.enabled`, default true: when false `/mcp` answers 403; the other `externalRatings` fields are read-only); `smtp.password` write-only (omit to keep, `""` to remove). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100). `maxAttachments` (1..100, default 25) and `maxMailMb` (1..200, default 50, base64 size): books per mail and mail size (Amazon's Send to Kindle limits). `retries` (0..10, default 3) and `retryDelaySeconds` (0..3600, default 30, ×4 per retry): automatic retries of temporary SMTP failures | same as GET |
 | `POST /settings/smtp/test` **(admin)** | `{to}` | 204 or 400 with message |
 | `GET /users` **(admin)** | – | `[{id, username, role, hasPassword: boolean, sso: {issuer, email, createdAt, lastLogin} \| null}]` (`sso`: the linked single sign-on identity) |
 | `POST /users` **(admin)** | `{username, password, role}` | user; 409 when the name exists (case-insensitive). User ids are never reused |
@@ -274,8 +291,8 @@ allow; every `tools/call` is checked again (a refused call is a tool error namin
 | `list_shelves` | read | – |
 | `add_to_shelf`, `remove_from_shelf` | write | `shelf_id` or `shelf` (name; `create: true` makes it), `book_ids` ≤ 500 |
 | `rate_book` | write | `id`, `rating` 0..5 |
-| `send_books` | send | `book_ids` ≤ 50, `device` (id or `"default"`) → `{jobId}`; same rules as `POST /send` (allowed recipients, daily limit, 5 jobs per user) |
-| `get_job` | send | `id` |
+| `send_books` | send | `book_ids` ≤ 50 and/or `series_id`, `device` (id or `"default"`) → `{jobId, books}`; same rules as `POST /send` (allowed recipients, daily limit, 5 jobs per user) |
+| `get_job` | send | `id` → state, message, log, `books` (`{id, title, state, detail, attempts, mail}` per book), `retryable`, `hint` (text) |
 
 Prompts: `suggest_next_book` (`wishes?`), `books_for_kid` (`age`, `interests?`), `similar_to` (`book_id`).
 
@@ -292,6 +309,16 @@ Basic auth when `opds.requireAuth` (same users and the same login rate limits). 
 - Legacy Qt paths `/opds_<lib>/…` redirect (301) to the new ones for the root, authors, series, genres, search.
 - Genre names are localized from the request's `Accept-Language` (`ru` or `uk` recognized, highest `q` wins); anything else, including no header, is served in English.
 - Pagination: 100 entries per page with `rel="next"`.
+
+## Phone hand-off pages (not under /api, no login)
+
+- `GET /h/:token` → a small HTML page (cover, title, author, series, "Open in Books" on iPhone/iPad, else "Download";
+  `ru`/`uk`/`en` from `Accept-Language`); 410 with an explanation when the link expired or was used up.
+  `Content-Security-Policy: default-src 'none'; img-src 'self'; style-src 'unsafe-inline'…`, `Cache-Control: no-store`,
+  `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex`.
+- `GET /h/:token/cover` → the cover thumbnail while the link is valid.
+- `GET /h/:token/file` → the book as an attachment (`application/epub+zip` for EPUB/KEPUB) with the device's file name;
+  counts one of the 3 uses (`HEAD` does not); 410 afterwards.
 
 ## Web app
 

@@ -4,8 +4,12 @@
   import { defaultDevice, deviceVerb, deviceCaption } from '../stores/devices.svelte';
 
   let {
-    count, onSend, onDownload, onShelf, onClear,
-  }: { count: number; onSend: () => void; onDownload: () => void; onShelf: () => void; onClear: () => void } = $props();
+    count, onSend, onDownload, onShelf, onClear, onSendSeries,
+  }: {
+    count: number; onSend: () => void; onDownload: () => void; onShelf: () => void; onClear: () => void;
+    /** "Whole series": send every book of the selected books' series */
+    onSendSeries?: () => void;
+  } = $props();
 
   let menuOpen = $state(false);
   const device = $derived(defaultDevice());
@@ -24,6 +28,9 @@
   <div role="region" aria-label="Selection" class="bar">
     <span class="count"><b>{count}</b> {t('selection.selected')}</span>
     <button type="button" class="primary desktop-only" data-testid="selection-send" title={device ? deviceCaption(device) : undefined} onclick={onSend}><Icon name={icon} size={16} />{verb}…</button>
+    {#if onSendSeries}
+      <button type="button" class="ghost desktop-only" data-testid="selection-send-series" onclick={onSendSeries}><Icon name="series" size={16} />{t('series.sendWhole')}</button>
+    {/if}
     <button type="button" class="ghost desktop-only" onclick={onDownload}><Icon name="download" size={16} />{t('selection.download')}</button>
     <button type="button" class="ghost desktop-only" onclick={onShelf}><Icon name="shelves" size={16} />{t('selection.shelf')}</button>
 
@@ -35,6 +42,9 @@
       <button type="button" class="icon" aria-label="More" aria-haspopup="true" aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}>⋯</button>
       {#if menuOpen}
         <div class="menu" role="menu">
+          {#if onSendSeries}
+            <button type="button" role="menuitem" onclick={() => act(onSendSeries)}><Icon name="series" size={16} />{t('series.sendWhole')}</button>
+          {/if}
           <button type="button" role="menuitem" onclick={() => act(onDownload)}><Icon name="download" size={16} />{t('selection.download')}</button>
           <button type="button" role="menuitem" onclick={() => act(onShelf)}><Icon name="shelves" size={16} />{t('selection.shelf')}</button>
           <button type="button" role="menuitem" onclick={() => act(onClear)}><Icon name="close" size={16} />{t('selection.clear')}</button>

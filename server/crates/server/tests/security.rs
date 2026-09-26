@@ -243,7 +243,7 @@ async fn mail_recipients_and_daily_limit() {
         )
         .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
-    // allowed recipient; the daily limit (2) counts every mail
+    // allowed recipient; the daily limit (2) counts every mail (two books travel in one mail)
     let r = app
         .post(
             "/api/v1/send",
@@ -253,6 +253,15 @@ async fn mail_recipients_and_daily_limit() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     let done = app.wait_job(r.json()["id"].as_str().unwrap()).await;
     assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(msgs.lock().unwrap().len(), 1);
+    let r = app
+        .post(
+            "/api/v1/send",
+            &json!({"library": lib, "books": [ids[2]], "device": kindle, "target": "me@kindle.com"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    app.wait_job(r.json()["id"].as_str().unwrap()).await;
     assert_eq!(msgs.lock().unwrap().len(), 2);
     let r = app
         .post(

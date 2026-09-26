@@ -105,6 +105,7 @@ pub async fn create(
     Json(mut d): Json<Device>,
 ) -> ApiResult<Json<Device>> {
     d.id = 0;
+    d.preset = None;
     validate(&mut d, &u, &smtp_config(&st).await?)?;
     let uid = u.id;
     let dev = st
@@ -131,11 +132,14 @@ pub async fn update(
         ));
     }
     d.id = id;
+    d.preset = existing.preset.clone();
     validate(&mut d, &u, &smtp_config(&st).await?)?;
+    let before = existing.options;
     let dev = st
         .db
         .run(move |c| {
             db::save_device(c, &d)?;
+            db::mark_customized_if_changed(c, id, &before, &d.options)?;
             db::get_device(c, uid, id)
         })
         .await?;
@@ -162,7 +166,11 @@ pub async fn delete(
 #[serde(rename_all = "camelCase")]
 pub struct SendBody {
     library: i64,
+    #[serde(default)]
     books: Vec<i64>,
+    /// Whole series ("Send whole series"): their live books in reading order.
+    #[serde(default)]
+    series: Vec<i64>,
     device: i64,
     target: Option<String>,
     file_name: Option<String>,
@@ -198,6 +206,7 @@ pub async fn send(
     let req = SendRequest {
         library: b.library,
         books: b.books,
+        series: b.series,
         device,
         target: b.target,
         file_name: b.file_name,

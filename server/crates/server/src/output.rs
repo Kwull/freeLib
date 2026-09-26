@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use freelib_catalog::BookDetail;
-use freelib_fb2conv::{ConvertOptions, NameFields};
+use freelib_fb2conv::{BookMeta, ConvertOptions, NameFields};
 
 use crate::bookio;
 use crate::error::{ApiError, ApiResult};
@@ -119,7 +119,29 @@ pub fn check_format(st: &AppState, ext: &str, format: &str) -> ApiResult<()> {
 }
 
 fn book_hash(d: &BookDetail) -> String {
-    short_hash(format!("{}\0{}\0{}", d.book.key, d.book.size, d.book.ext).as_bytes())
+    // the catalog metadata that goes into the file is part of the key
+    let m = book_meta(&d.book);
+    short_hash(
+        format!(
+            "{}\0{}\0{}\0{:?}\0{:?}\0{:?}",
+            d.book.key, d.book.size, d.book.ext, m.lang, m.series, m.serno
+        )
+        .as_bytes(),
+    )
+}
+
+/// Catalog metadata for a converted file: the book key (stable EPUB identifier), the
+/// catalog language (fallback) and series.
+pub fn book_meta(b: &freelib_catalog::Book) -> BookMeta {
+    BookMeta {
+        book_key: Some(b.key.clone()),
+        lang: Some(b.lang.clone()).filter(|l| !l.trim().is_empty()),
+        series: b.series.as_ref().map(|s| s.name.clone()),
+        serno: b
+            .serno
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n > 0),
+    }
 }
 
 fn profile_hash(st: &AppState, format: &str, opts: &ConvertOptions) -> String {
@@ -195,7 +217,8 @@ pub async fn produce(
             let bytes = read_original(lib_dir.to_path_buf(), d.clone()).await?;
             let conv = st.conv.clone();
             let o = opts.clone();
-            let data = tokio::task::spawn_blocking(move || conv.fb2_to_epub(&bytes, &o))
+            let meta = book_meta(&d.book);
+            let data = tokio::task::spawn_blocking(move || conv.fb2_to_epub(&bytes, &o, &meta))
                 .await?
                 .map_err(|e| ApiError::internal(format!("conversion failed: {e:#}")))?;
             write_atomic(st, &target, &data).await?;
@@ -246,7 +269,8 @@ async fn epub_bytes(
     let bytes = read_original(lib_dir.to_path_buf(), d.clone()).await?;
     let conv = st.conv.clone();
     let o = opts.clone();
-    let epub = tokio::task::spawn_blocking(move || conv.fb2_to_epub(&bytes, &o))
+    let meta = book_meta(&d.book);
+    let epub = tokio::task::spawn_blocking(move || conv.fb2_to_epub(&bytes, &o, &meta))
         .await?
         .map_err(|e| ApiError::internal(format!("conversion failed: {e:#}")))?;
     write_atomic(st, &cached, &epub).await?;
@@ -280,10 +304,26 @@ pub async fn calibre_run(
     tokio::fs::create_dir_all(&tmp).await?;
     let inp = tmp.join("in.epub");
     let out = tmp.join(format!("out.{to}"));
+    // the book's metadata and cover, passed explicitly so AZW3/MOBI get them in their EXTH
+    // headers (Kindle's library, series grouping and thumbnails) whatever Calibre's EPUB
+    // input makes of the package
+    let conv = st.conv.clone();
+    let epub = input.to_vec();
+    let info = tokio::task::spawn_blocking(move || conv.read_info(&epub).ok()).await?;
     let r = async {
         tokio::fs::write(&inp, input).await?;
+        let mut args = Vec::new();
+        if let Some(info) = &info {
+            args = crate::calibre::metadata_args(info);
+            if let Some(c) = &info.cover {
+                let ext = if c.mime == "image/png" { "png" } else { "jpg" };
+                let cover = tmp.join(format!("cover.{ext}"));
+                tokio::fs::write(&cover, &c.data).await?;
+                args.push(format!("--cover={}", cover.display()));
+            }
+        }
         calibre
-            .convert(&inp, &out, &tmp, st.cfg.calibre_timeout, cancel)
+            .convert(&inp, &out, &tmp, &args, st.cfg.calibre_timeout, cancel)
             .await?;
         Ok::<_, ApiError>(tokio::fs::read(&out).await?)
     }

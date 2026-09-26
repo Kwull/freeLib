@@ -24,7 +24,7 @@
   let listProgress = $state<{ bytes: number; rows: number } | null>(null);
   let reloadTick = $state(0);
   let selectedBookId = $state<number | null>(null);
-  let send = $state<{ ids: number[]; device?: number } | null>(null);
+  let send = $state<{ ids: number[]; device?: number; series?: number[] } | null>(null);
   let shelfIds = $state<number[] | null>(null);
   let mobilePane = $state<'list' | 'books' | 'detail'>('list');
   let summary = $state<AuthorSummary | null>(null);
@@ -134,6 +134,7 @@
       onPick={pickBook}
       onOpenSend={(ids) => (send = { ids })}
       onOpenShelf={(ids) => (shelfIds = ids)}
+      onSendSeries={(series) => (send = { ids: [], series })}
       {header}
       onBack={() => (mobilePane = 'list')}
     />
@@ -167,7 +168,7 @@
 </div>
 
 {#if send}
-  <SendDialog {lib} bookIds={send.ids} device={send.device} open={true} onClose={() => (send = null)} />
+  <SendDialog {lib} bookIds={send.ids} device={send.device} seriesIds={send.series} open={true} onClose={() => (send = null)} />
 {/if}
 {#if shelfIds}
   <ShelfDialog {lib} bookIds={shelfIds} open={true} onClose={() => (shelfIds = null)} />

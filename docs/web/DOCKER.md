@@ -311,6 +311,17 @@ Settings → Mail limits where books can be mailed: **Allowed recipients** (defa
 **Mails per user per day** (default 100). The rules apply to every user, administrators included,
 so the server's SMTP account cannot be used to mail arbitrary people.
 
+Several books (or a whole series) travel together: up to **25 books and 50 MB per e-mail**
+(Amazon's Send to Kindle limits; lower the size if your provider allows less — Gmail: 25 MB).
+Temporary SMTP failures are retried automatically (3 times: after 30 s, 2 min, 8 min); each
+book's delivery state, with the mail server's reply, is in the Activity panel, and jobs survive
+a container restart. **Add the From address to Amazon's Approved Personal Document E-mail List**
+(Amazon → Manage Your Content and Devices → Preferences → Personal Document Settings), otherwise
+Amazon silently drops the mails. See [DEVICES.md](DEVICES.md) for the default devices, the
+metadata and covers in every EPUB, "Send to my phone" and "Open in Books" on iPhone/iPad. Phone
+links point at `FREELIB_PUBLIC_URL` when it is set, else at the address the browser used — use
+an address the phone can reach (not `localhost`).
+
 ## Single sign-on (OpenID Connect)
 
 Users can sign in through an OpenID Connect provider — [Pocket ID](https://pocket-id.org), Authelia,

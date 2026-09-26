@@ -31,6 +31,15 @@ pub async fn cancel(
         .ok_or_else(|| ApiError::not_found("job not found"))
 }
 
+/// `POST /jobs/:id/retry`: redoes the failed or interrupted books of a job.
+pub async fn retry(
+    State(st): State<AppState>,
+    Auth(u): Auth,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Job>> {
+    Ok(Json(crate::sender::retry(&st, &u, &id)?))
+}
+
 #[derive(Deserialize)]
 pub struct ClearQuery {
     finished: Option<String>,

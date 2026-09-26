@@ -10,6 +10,7 @@ use crate::epub::{self, Package, Resource, SpineItem, TocEntry, XhtmlFile};
 use crate::hyph::Hyphenator;
 use crate::images::{self, Kind, Prepared};
 use crate::info::{BookInfo, parse_description};
+use crate::meta::{self, BookMeta};
 use crate::names::{NameFields, expand};
 use crate::options::{ConvertOptions, CreateCover, Footnotes, Hyphenate, TocPlacement};
 use crate::xml::{esc_attr, esc_text};
@@ -29,6 +30,8 @@ pub(crate) struct Labels {
     pub notes: &'static str,
     pub cover: &'static str,
     pub start: &'static str,
+    /// "Книга" in "Книга 3" on generated covers.
+    pub book: &'static str,
 }
 
 pub(crate) fn labels(lang: &str) -> Labels {
@@ -39,6 +42,7 @@ pub(crate) fn labels(lang: &str) -> Labels {
             notes: "Примечания",
             cover: "Обложка",
             start: "Начало",
+            book: "Книга",
         },
         "uk" => Labels {
             contents: "Зміст",
@@ -46,6 +50,7 @@ pub(crate) fn labels(lang: &str) -> Labels {
             notes: "Примітки",
             cover: "Обкладинка",
             start: "Початок",
+            book: "Книга",
         },
         "de" => Labels {
             contents: "Inhalt",
@@ -53,6 +58,7 @@ pub(crate) fn labels(lang: &str) -> Labels {
             notes: "Anmerkungen",
             cover: "Umschlag",
             start: "Anfang",
+            book: "Band",
         },
         _ => Labels {
             contents: "Contents",
@@ -60,6 +66,7 @@ pub(crate) fn labels(lang: &str) -> Labels {
             notes: "Notes",
             cover: "Cover",
             start: "Start",
+            book: "Book",
         },
     }
 }
@@ -97,31 +104,6 @@ impl Doc {
 
     fn fb(&self) -> &Element {
         dom::root_element(&self.root).expect("checked in load")
-    }
-}
-
-pub(crate) fn normalize_lang(lang: &str, sample: &str) -> String {
-    let l = lang.trim().replace('_', "-").to_ascii_lowercase();
-    let l = match l.as_str() {
-        "rus" => "ru".to_string(),
-        "eng" => "en".to_string(),
-        "ukr" => "uk".to_string(),
-        "ger" | "deu" => "de".to_string(),
-        "fra" | "fre" => "fr".to_string(),
-        _ => l,
-    };
-    let valid = !l.is_empty()
-        && l.split('-')
-            .all(|p| !p.is_empty() && p.len() <= 8 && p.chars().all(|c| c.is_ascii_alphanumeric()))
-        && l.split('-').next().is_some_and(|p| {
-            (2..=3).contains(&p.len()) && p.chars().all(|c| c.is_ascii_alphabetic())
-        });
-    if valid {
-        l
-    } else if sample.chars().any(|c| ('\u{400}'..='\u{4ff}').contains(&c)) {
-        "ru".into()
-    } else {
-        "en".into()
     }
 }
 
@@ -1459,13 +1441,17 @@ fn prepare_cover(
     key_prefix: &str,
 ) -> Option<usize> {
     let opts = b.opts;
-    let fb2_cover = doc.cover_id.as_deref().and_then(|id| {
-        let fb = doc.fb();
-        let bin = fb
-            .children_named("binary")
-            .find(|x| x.attr("id").map(str::trim) == Some(id))?;
-        images::prepare(base64_decode(&bin.text()))
-    });
+    let fb2_cover = doc
+        .cover_id
+        .as_deref()
+        .and_then(|id| {
+            let fb = doc.fb();
+            let bin = fb
+                .children_named("binary")
+                .find(|x| x.attr("id").map(str::trim) == Some(id))?;
+            images::prepare(base64_decode(&bin.text()))
+        })
+        .and_then(cover::checked);
     let label = opts
         .cover_label
         .as_deref()
@@ -1493,12 +1479,13 @@ fn prepare_cover(
         let bottom = label
             .clone()
             .unwrap_or_else(|| match (&info.series, info.serno) {
-                (Some(s), Some(n)) => format!("{s}\n{n}"),
+                (Some(s), Some(n)) => format!("{s}\n{} {n}", b.labels.book),
                 (Some(s), None) => s.clone(),
                 _ => String::new(),
             });
         let data = cover::generate_cover(b.assets, &authors, &info.title, &bottom);
-        let (w, h) = images::dimensions(&data, Kind::Jpeg).unwrap_or((800, 1280));
+        let (w, h) = images::dimensions(&data, Kind::Jpeg)
+            .unwrap_or((cover::COVER_WIDTH, cover::COVER_HEIGHT));
         Prepared {
             data,
             kind: Kind::Jpeg,
@@ -1609,14 +1596,37 @@ pub(crate) fn convert_docs(
     opts: &ConvertOptions,
     assets: &Assets,
     series_title: Option<&str>,
+    book_meta: &BookMeta,
 ) -> Result<Vec<u8>> {
     let first = docs
         .first()
         .ok_or_else(|| Error::Format("no books".into()))?;
     let joined = docs.len() > 1;
-    let lang = normalize_lang(&first.info.lang, &first.info.title);
+    let lang = meta::book_language(
+        &first.info.lang,
+        book_meta.lang.as_deref(),
+        &first.info.title,
+    );
     // metadata of the output
     let mut info = first.info.clone();
+    if !joined {
+        if let Some(s) = book_meta
+            .series
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            // the catalog's series (what the user browses and sends by) wins; the FB2 number
+            // is kept when it belongs to the same series
+            let same = info
+                .series
+                .as_deref()
+                .is_some_and(|f| f.trim().eq_ignore_ascii_case(s));
+            info.serno = book_meta.serno.or(if same { info.serno } else { None });
+            info.series = Some(s.to_string());
+        }
+        info.title = meta::clean_title(&info.title, info.serno);
+    }
     if joined {
         let series = series_title
             .map(str::to_string)
@@ -1719,14 +1729,22 @@ pub(crate) fn convert_docs(
     let css = build_css(opts, assets, &mut fonts);
     let mut resources = std::mem::take(&mut b.resources);
     resources.extend(fonts);
-    let identifier = epub::identifier(
-        &info.id,
-        first.hash
-            ^ docs
-                .iter()
-                .skip(1)
-                .fold(0u128, |a, d| a.rotate_left(7) ^ d.hash),
-    );
+    let identifier = match book_meta
+        .book_key
+        .as_deref()
+        .filter(|k| !k.trim().is_empty())
+    {
+        Some(k) => meta::book_uuid(k),
+        None => epub::identifier(
+            &info.id,
+            first.hash
+                ^ docs
+                    .iter()
+                    .skip(1)
+                    .fold(0u128, |a, d| a.rotate_left(7) ^ d.hash),
+        ),
+    };
+    let title_sort = meta::title_sort(&info.title, &lang);
     let mut spine = Vec::new();
     let nav_pos = match opts.toc_placement {
         TocPlacement::Start => Some(body_start),
@@ -1744,6 +1762,7 @@ pub(crate) fn convert_docs(
     let pkg = Package {
         info: &info,
         lang: &lang,
+        title_sort,
         identifier,
         files,
         resources,
@@ -1761,8 +1780,18 @@ pub(crate) fn convert_docs(
 
 /// Converts one FB2 (plain or zipped, any encoding) to EPUB 3.
 pub fn fb2_to_epub(bytes: &[u8], opts: &ConvertOptions, assets: &Assets) -> Result<Vec<u8>> {
+    fb2_to_epub_with(bytes, opts, assets, &BookMeta::default())
+}
+
+/// [`fb2_to_epub`] with catalog metadata (stable identifier, fallback language, series).
+pub fn fb2_to_epub_with(
+    bytes: &[u8],
+    opts: &ConvertOptions,
+    assets: &Assets,
+    meta: &BookMeta,
+) -> Result<Vec<u8>> {
     let doc = Doc::load(bytes)?;
-    convert_docs(std::slice::from_ref(&doc), opts, assets, None)
+    convert_docs(std::slice::from_ref(&doc), opts, assets, None, meta)
 }
 
 /// Joins several FB2 books (e.g. a series, in reading order) into one EPUB: a series title page,
@@ -1774,12 +1803,24 @@ pub fn join_to_epub(
     assets: &Assets,
     title: Option<&str>,
 ) -> Result<Vec<u8>> {
+    join_to_epub_with(books, opts, assets, title, &BookMeta::default())
+}
+
+/// [`join_to_epub`] with catalog metadata: `meta.book_key` identifies the joined file (e.g.
+/// all keys concatenated), `meta.lang` is the fallback language.
+pub fn join_to_epub_with(
+    books: &[&[u8]],
+    opts: &ConvertOptions,
+    assets: &Assets,
+    title: Option<&str>,
+    meta: &BookMeta,
+) -> Result<Vec<u8>> {
     let docs = books
         .iter()
         .map(|b| Doc::load(b))
         .collect::<Result<Vec<_>>>()?;
     if docs.len() == 1 {
-        return convert_docs(&docs, opts, assets, None);
+        return convert_docs(&docs, opts, assets, None, meta);
     }
-    convert_docs(&docs, opts, assets, title)
+    convert_docs(&docs, opts, assets, title, meta)
 }

@@ -50,6 +50,8 @@ pub(crate) enum SpineItem {
 pub(crate) struct Package<'a> {
     pub info: &'a BookInfo,
     pub lang: &'a str,
+    /// Sort form of the title (`file-as` of `dc:title`, `calibre:title_sort`).
+    pub title_sort: String,
     pub identifier: String,
     pub files: Vec<XhtmlFile>,
     pub resources: Vec<Resource>,
@@ -74,7 +76,7 @@ pub(crate) fn hash128(data: &[u8]) -> u128 {
     h
 }
 
-fn uuid_from(h: u128) -> String {
+pub(crate) fn uuid_from(h: u128) -> String {
     let mut b = h.to_be_bytes();
     b[6] = (b[6] & 0x0f) | 0x50; // version 5 style (name based)
     b[8] = (b[8] & 0x3f) | 0x80; // RFC 4122 variant
@@ -117,6 +119,27 @@ pub(crate) fn identifier(fb2_id: &str, content_hash: u128) -> String {
         hash128(id.as_bytes())
     };
     format!("urn:uuid:{}", uuid_from(h))
+}
+
+/// A W3C date (`YYYY`, `YYYY-MM-DD`) from a free-form FB2 date: the full date when it is
+/// one, otherwise its year.
+pub(crate) fn w3c_date(s: &str) -> Option<String> {
+    let s = s.trim();
+    let digits = |x: &str| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit());
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() == 3
+        && parts[0].len() == 4
+        && parts[1].len() == 2
+        && parts[2].len() == 2
+        && parts.iter().all(|p| digits(p))
+    {
+        let (m, d): (u32, u32) = (parts[1].parse().ok()?, parts[2].parse().ok()?);
+        if (1..=12).contains(&m) && (1..=31).contains(&d) {
+            return Some(s.to_string());
+        }
+    }
+    let y: String = s.chars().take(4).collect();
+    (y.len() == 4 && digits(&y) && y.as_str() > "0999").then_some(y)
 }
 
 /// Current UTC time as `CCYY-MM-DDThh:mm:ssZ`.
@@ -331,6 +354,13 @@ fn opf(p: &Package) -> String {
         "<dc:title id=\"title\">{}</dc:title>\n",
         esc(if i.title.is_empty() { "-" } else { &i.title })
     ));
+    m.push_str("<meta refines=\"#title\" property=\"title-type\">main</meta>\n");
+    if !p.title_sort.is_empty() {
+        m.push_str(&format!(
+            "<meta refines=\"#title\" property=\"file-as\">{}</meta>\n",
+            esc(&p.title_sort)
+        ));
+    }
     m.push_str(&format!("<dc:language>{}</dc:language>\n", esc(p.lang)));
     for (n, a) in i.authors.iter().enumerate() {
         let id = format!("creator{}", n + 1);
@@ -385,12 +415,8 @@ fn opf(p: &Package) -> String {
             esc(&i.publisher)
         ));
     }
-    let year = [&i.date, &i.year]
-        .iter()
-        .map(|d| d.trim().chars().take(4).collect::<String>())
-        .find(|y| y.len() == 4 && y.chars().all(|c| c.is_ascii_digit()));
-    if let Some(y) = year {
-        m.push_str(&format!("<dc:date>{y}</dc:date>\n"));
+    if let Some(d) = w3c_date(&i.date).or_else(|| w3c_date(&i.year)) {
+        m.push_str(&format!("<dc:date>{d}</dc:date>\n"));
     }
     if !i.isbn.is_empty() {
         m.push_str(&format!(
@@ -422,6 +448,12 @@ fn opf(p: &Package) -> String {
                 "<meta name=\"calibre:series_index\" content=\"{n}\"/>\n"
             ));
         }
+    }
+    if !p.title_sort.is_empty() {
+        m.push_str(&format!(
+            "<meta name=\"calibre:title_sort\" content=\"{}\"/>\n",
+            esc(&p.title_sort)
+        ));
     }
     let cover_idx = p.resources.iter().position(|r| r.cover_image);
     if cover_idx.is_some() {

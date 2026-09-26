@@ -2,7 +2,7 @@ import { ApiError } from './types';
 import type {
   Library, Book, BookDetail, Genre, Shelf, Device, Job, Session, NameListResponse,
   BooksResponse, SearchResponse, Settings, User, ConvertOptions, AuthorSummary, CoauthorsResponse,
-  Account, UserRow, RatingParams, TokensResponse, ApiToken, AuditRow, TokenScope,
+  Account, UserRow, RatingParams, TokensResponse, ApiToken, AuditRow, TokenScope, HandoffLink,
 } from './types';
 
 const BASE = '/api/v1';
@@ -153,12 +153,18 @@ export const api = {
   send: (body: {
     library: number; books: number[]; device: number; target?: string; fileName?: string;
     options?: Partial<ConvertOptions>;
+    /** whole series: their books in reading order */
+    series?: number[];
   }) => request<Job>('/send', { method: 'POST', body: JSON.stringify(body) }),
+  /** a 15-minute link that downloads one book on a phone (QR code, "Open in Books") */
+  handoff: (body: { library: number; book: number; device?: number; format?: string }) =>
+    request<HandoffLink>('/handoff', { method: 'POST', body: JSON.stringify(body) }),
   fonts: () => request<string[]>('/fonts'),
 
   // Jobs
   jobs: () => request<Job[]>('/jobs'),
   cancelJob: (id: string) => request<Job>(`/jobs/${id}/cancel`, { method: 'POST' }),
+  retryJob: (id: string) => request<Job>(`/jobs/${id}/retry`, { method: 'POST' }),
   clearFinishedJobs: () => request<void>('/jobs?finished=1', { method: 'DELETE' }),
   jobDownloadUrl: (id: string) => `${BASE}/jobs/${id}/download`,
 

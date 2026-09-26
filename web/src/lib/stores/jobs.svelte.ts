@@ -82,6 +82,12 @@ export async function cancelJob(id: string) {
   upsertJob(job);
 }
 
+export async function retryJob(id: string) {
+  const job = await api.retryJob(id);
+  watched.add(job.id);
+  upsertJob(job);
+}
+
 export async function clearFinished() {
   await api.clearFinishedJobs();
   jobsState.items = jobsState.items.filter((j) => j.state === 'running' || j.state === 'queued');

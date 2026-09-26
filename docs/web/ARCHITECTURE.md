@@ -194,7 +194,15 @@ Migration v5: `device_order(user_id, device_id, pos)`: each user's order of the 
 (quick send in the details pane and the selection bar, the Send dialog's preselection, MCP `device: "default"`). A
 first-in-order rule was chosen over "last used": it is explicit and stable — a one-off download no longer changes
 where the next "Send" goes. The old `lastDevice` UI pref is no longer read.
-Tokens, audit rows, history and device order are removed with their user; open-mode data (user 0) is adopted by the first account.
+Migration v6 (delivery): `device.preset`, `device.preset_version`, `device.customized` (tuned defaults of the
+seeded devices are upgraded while nobody changed their conversion options, see DEVICES.md);
+`job(id, owner, kind, title, state, progress, message, log, request, hint, file_path, file_name, file_mime, dir,
+created_at, finished_at, finished_unix)` and `job_item(job_id, pos, book_id, title, state, detail, attempts, size,
+mail, updated_at)`: send/export/download jobs with their per-book results, written through by a background writer
+(`jobs.rs`); `request` is what a resume or retry runs again; queued jobs resume at startup, running ones become failed
+and retryable; `handoff(token_hash, user_id, library_id, book_id, book_key, device_id, format, options, file_name,
+created_at, expires_at, uses, max_uses)`: phone links (only the SHA-256 of the token is stored).
+Tokens, audit rows, history, device order, jobs and phone links are removed with their user; open-mode data (user 0) is adopted by the first account.
 
 User data is keyed by `(library_id, book_key)`, so it survives re-imports.
 

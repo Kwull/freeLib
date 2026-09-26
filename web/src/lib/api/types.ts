@@ -96,7 +96,11 @@ export type Device = {
   fileName: string;
   shared: boolean;
   options: ConvertOptions;
+  /** The default preset a shared device was seeded from (read-only); null for own devices. */
+  preset?: DevicePreset | null;
 };
+
+export type DevicePreset = 'kindle-email' | 'kindle-usb' | 'apple-books' | 'kobo' | 'server-folder' | 'original';
 
 export type ConvertOptions = {
   hyphenate: 'none' | 'soft' | 'full';
@@ -116,6 +120,23 @@ export type ConvertOptions = {
 export type JobKind = 'import' | 'send' | 'export' | 'download';
 export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
+export type JobItemState =
+  | 'queued' | 'converting' | 'converted' | 'sending' | 'retrying' | 'accepted' | 'saved' | 'ready' | 'failed';
+
+/** One book of a send/export/download job and how far it got. */
+export type JobItem = {
+  bookId: number; title: string;
+  state: JobItemState;
+  /** the mail server's reply ("250 2.0.0 Ok: queued as …"), the error, or the retry plan */
+  detail: string;
+  attempts: number;
+  size: number | null;
+  /** which e-mail of the job carries the book (1-based) */
+  mail: number | null;
+};
+
+export type JobHint = { code: 'kindle_approved_sender'; from: string; url: string; text: string };
+
 export type Job = {
   id: string; kind: JobKind;
   title: string;
@@ -125,6 +146,17 @@ export type Job = {
   log: string[];
   downloadUrl: string | null;
   createdAt: string; finishedAt: string | null;
+  /** per-book results (≤ 200 books; empty for imports) */
+  items?: JobItem[];
+  /** POST /jobs/:id/retry redoes the failed or interrupted books */
+  retryable?: boolean;
+  hint?: JobHint | null;
+};
+
+/** POST /handoff: a short-lived link that downloads one book on another device. */
+export type HandoffLink = {
+  url: string; absoluteUrl: string; expiresAt: string; maxUses: number;
+  format: string; fileName: string; title: string;
 };
 
 export type User = { id: number; username: string; role: 'admin' | 'reader' };
@@ -196,6 +228,13 @@ export type SmtpSettings = {
   dailyLimitPerUser: number;
   /** Mail subject template: `%b` = book title, `%a` = author(s). */
   subject: string;
+  /** books per e-mail (Amazon: 25) */
+  maxAttachments?: number;
+  /** encoded size limit of one e-mail in MB (Amazon: 50) */
+  maxMailMb?: number;
+  /** automatic retries after temporary SMTP / network errors */
+  retries?: number;
+  retryDelaySeconds?: number;
   /** Write-only: send to change the SMTP password, `''` clears it, omit to keep it. */
   password?: string;
 };

@@ -21,16 +21,18 @@ mod images;
 mod info;
 mod kepub;
 pub mod limit;
+mod meta;
 mod names;
 mod options;
 mod xml;
 
 pub use assets::{Assets, FontFace, FontFamily};
-pub use convert::{fb2_to_epub, join_to_epub};
-pub use cover::generate_cover;
+pub use convert::{fb2_to_epub, fb2_to_epub_with, join_to_epub, join_to_epub_with};
+pub use cover::{COVER_HEIGHT, COVER_WIDTH, generate_cover};
 pub use epub_info::read_info_epub;
 pub use info::{BookInfo, CoverImage, Person, read_info, sanitize_html};
 pub use kepub::{kepubify_xhtml, to_kepub};
+pub use meta::{BookMeta, book_language, book_uuid, clean_title, normalize_language, title_sort};
 pub use names::{NameFields, expand as expand_template, file_name, transliteration};
 pub use options::{ConvertOptions, CreateCover, Footnotes, Hyphenate, TocPlacement};
 
