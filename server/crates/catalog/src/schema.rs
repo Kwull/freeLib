@@ -10,7 +10,9 @@ use rusqlite::Connection;
 ///    (editions of one work).
 /// 4: better edition detection: `work_id` also joins translations under other titles by
 ///    series number, title keys drop format notes / repeated volume numbers (re-import).
-pub const CATALOG_SCHEMA_VERSION: i64 = 4;
+/// 5: omnibus / part titles (`Миры Айзека Азимова. Книга 9`) no longer join a work by series
+///    number (re-import).
+pub const CATALOG_SCHEMA_VERSION: i64 = 5;
 
 /// Catalog tables. Created on an empty database by the importer *before* the bulk load;
 /// indexes ([`CATALOG_INDEXES`]) are created afterwards.

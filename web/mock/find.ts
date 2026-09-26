@@ -189,21 +189,19 @@ export function indexWorks(lib: MockLibrary) {
     if (max > 5 || (titlesByNo.size === 1 && all.size >= 3) || (all.size >= 6 && max * 2 > all.size)) continue;
     const buckets = new Map<string, MockBook[]>();
     for (const b of list) {
+      // a title naming a volume (an omnibus «… Книга 9», a part «… Том 1») joins only by title
+      if (volumeNumber(b.title) !== null) continue;
       const k = `${b.lang}|${b.serno}|${b.authorIds[0]}`;
       (buckets.get(k) ?? buckets.set(k, []).get(k)!).push(b);
     }
     for (const bucket of buckets.values()) {
-      const vols = new Set(bucket.map((b) => volumeNumber(b.title)).filter((v) => v !== null));
-      const parts = vols.size >= 2 ? [...vols].map((v) => bucket.filter((b) => volumeNumber(b.title) === v)) : [bucket];
-      for (const part of parts) {
-        const sorted = part.slice().sort((a, b) => b.authorIds.length - a.authorIds.length);
-        const clusters: { set: Set<number>; key: string }[] = [];
-        for (const b of sorted) {
-          const set = new Set(b.authorIds);
-          const c = clusters.find((cl) => [...set].every((a) => cl.set.has(a)) || [...cl.set].every((a) => set.has(a)));
-          if (c) union(c.key, titleWorkKey(b));
-          else clusters.push({ set, key: titleWorkKey(b) });
-        }
+      const sorted = bucket.slice().sort((a, b) => b.authorIds.length - a.authorIds.length);
+      const clusters: { set: Set<number>; key: string }[] = [];
+      for (const b of sorted) {
+        const set = new Set(b.authorIds);
+        const c = clusters.find((cl) => [...set].every((a) => cl.set.has(a)) || [...cl.set].every((a) => set.has(a)));
+        if (c) union(c.key, titleWorkKey(b));
+        else clusters.push({ set, key: titleWorkKey(b) });
       }
     }
   }

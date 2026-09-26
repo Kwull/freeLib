@@ -263,11 +263,11 @@ The importer gives every book a work (full rules: ARCHITECTURE.md, "Editions: ho
 language and same set of authors, and either the same title without trailing edition notes (`(другой перевод)`,
 `[иллюстрации]`, `(СИ)`, `(пер. …)`, `(ред. …)`, `[litres]`, `(fb2)`; other bracketed text such as `(Часть 2)` or
 `(сборник)` is kept; `Книга N` dropped only when it repeats the series number), or the same series and series number
-(> 0), different titles allowed (translations under other titles), unless the titles name different volumes or the
-series numbering looks unreliable. Books by "Автор неизвестен" and generic titles ("Избранное", "Рассказы",
+(> 0), different titles allowed (translations under other titles), unless a title names a volume (an omnibus
+`… Книга 9`, a part `Том 1`) or the series numbering looks unreliable. Books by "Автор неизвестен" and generic titles ("Избранное", "Рассказы",
 "Стихотворения", …) are never grouped by title. Editions of one work can therefore have different titles: an
 `Edition`'s own `title` is what the edition list shows. A grouped list shows each work once, at the position of its
-first edition in the list, as its **best copy**: not deleted > title names no volume (not an omnibus `Книга 9`) >
+first edition in the list, as its **best copy**: not deleted > title names no volume >
 has a cover (as far as the server knows — covers are known for books whose preview was
 extracted since the server started) > FB2 > EPUB > other > larger file (20 % steps, capped at 30 MB) > newer date >
 higher library rating > lower id. Sending or downloading a grouped row uses that id; any edition can be picked instead.
