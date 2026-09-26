@@ -111,7 +111,8 @@ CREATE TABLE book (
   stars INTEGER NOT NULL DEFAULT 0,
   keywords TEXT NOT NULL DEFAULT '',
   arch_offset INTEGER,         -- byte offset of the local file header inside the zip (NULL until resolved)
-  arch_csize INTEGER, arch_method INTEGER
+  arch_csize INTEGER, arch_method INTEGER,
+  work_id INTEGER NOT NULL DEFAULT 0  -- id of the first book of the same work (editions, see "Search and editions")
 );
 CREATE TABLE book_author (book_id INTEGER NOT NULL, author_id INTEGER NOT NULL,
   pos INTEGER NOT NULL,        -- author order in the INPX record (0 = first author)
@@ -120,10 +121,12 @@ CREATE TABLE book_genre  (book_id INTEGER NOT NULL, genre_id INTEGER NOT NULL, P
 CREATE TABLE genre_count (genre_id INTEGER PRIMARY KEY, count INTEGER NOT NULL);  -- live books; groups: distinct books in the group
 CREATE TABLE lang_count (lang TEXT PRIMARY KEY, count INTEGER NOT NULL) WITHOUT ROWID;  -- live books per language
 CREATE TABLE letter_index (kind TEXT NOT NULL, letter TEXT NOT NULL, count INTEGER NOT NULL, first_pos INTEGER NOT NULL, PRIMARY KEY (kind, letter)) WITHOUT ROWID;
--- FTS rows hold normalize()d text; rowid = book / author / series id.
-CREATE VIRTUAL TABLE book_fts USING fts5(title, authors, series, keywords, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2', prefix='2 3');
-CREATE VIRTUAL TABLE author_fts USING fts5(name, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
-CREATE VIRTUAL TABLE series_fts USING fts5(name, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+-- FTS rows hold normalize()d text; rowid = book / author / series id. `stems` = Snowball stems of the title, author and
+-- series words that differ from the word; `latin` = their Latin keys (transliteration, variants folded) that differ.
+CREATE VIRTUAL TABLE book_fts USING fts5(title, authors, series, keywords, stems, latin, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2', prefix='2 3');
+CREATE VIRTUAL TABLE author_fts USING fts5(name, stems, latin, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE series_fts USING fts5(name, stems, latin, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+CREATE TABLE vocab (word TEXT PRIMARY KEY, freq INTEGER NOT NULL) WITHOUT ROWID;  -- title/author/series words (≥ 3 chars) → live books
 -- indexes (created after bulk load)
 CREATE INDEX author_sort ON author(sort_key);
 CREATE INDEX series_sort ON series(sort_key);
@@ -133,7 +136,10 @@ CREATE INDEX book_date ON book(date);
 CREATE INDEX book_lang ON book(lang);
 CREATE INDEX book_ba_rev ON book_author(book_id, pos);
 CREATE INDEX book_bg_rev ON book_genre(book_id);
+CREATE INDEX book_work ON book(work_id);
 ```
+
+Catalog schema version 3 (stems, Latin keys, `vocab`, `work_id`); older catalogs are rebuilt at start.
 
 Additions to the original design and why:
 
@@ -161,6 +167,52 @@ Genres are global and static (`crates/catalog/data/genres.json`, exported from t
 spaces as `_` (as Qt does). Unknown codes map to the "…: прочее" genre of the top-level group that most codes
 with the same prefix (text before the first `_`) belong to — `sf_brand_new` → "Фантастика: прочее" — else to
 top-level "Прочее" (id 11). A book's genre ids are deduplicated; books without genre codes have no genre.
+
+## Search and editions
+
+`freelib_catalog::text` (stemming, Latin keys, edit distance, work keys), `search.rs`, `vocab.rs`, `works.rs`, `home.rs`.
+
+* **Word forms.** Every title/author/series word is stemmed at import (Snowball Russian for Cyrillic, English
+  (Porter2) for Latin, a small suffix stripper for words with `і ї є ґ` — Snowball has no Ukrainian); stems that differ
+  from the word go to the `stems` column. A query word of ≥ 3 letters also matches its stem exactly, so `книгу`,
+  `книгой` find `Книга`, `Книги`, and `стругацкие` finds `Стругацкий`.
+* **Transliteration.** `latin` holds each word's Latin key — the Open Library matcher's `word_key`, moved into the
+  catalog: Russian/Ukrainian → Latin, accents folded, `iy/ii/yi → y`, `ts → c`, `kh → h`, `ks → x`, … — when it differs
+  from the word. A query word of ≥ 3 letters also matches its own key (a prefix from 4 letters, exact for 3), in all
+  columns, so `strugatsky`, `Strugatskii`, `strugackie` find `Стругацкий`, `лем` finds `Lem`, and a Latin-script record
+  written `Strugatsky` is found by `Strugatskii` too. `ё = е` comes from `normalize`.
+* **One FTS query**: every word becomes `("word"* OR "stem" OR "key"*)`, AND-ed; a second query with plain prefixes and a
+  third with the phrase on the title column (`title : "война и мир"*`, one word: `title : ^ "word"*`) assign tiers:
+  phrase 3 > all prefixes 2 > word forms / transliterations 1; the score is `bm25 − 1000 × tier`, so the existing
+  relevance/rating ordering code is unchanged. Authors/series: name starts with the query, then all prefixes, then
+  the rest, each by book count.
+* **Typos.** When a search finds fewer than 3 matches, each word of ≥ 4 letters that is neither the prefix of a
+  vocabulary word nor (by its key) of a word's key is replaced by the closest vocabulary word (optimal string alignment,
+  ≤ 1 edit up to 7 letters, ≤ 2 from 8, in the word's own script and in Latin-key space, then by frequency). A 64-bit
+  character-set signature and the length pre-filter candidates. Nothing found → the corrected query is searched
+  (`corrected`); something found → offered (`didYouMean`) when it finds more. The vocabulary is held in memory per
+  catalog (loaded in the warm-up: arenas + 40 bytes/word).
+* **Highlighting**: the server returns the normalized words of the shown names that matched (prefix, stem or key);
+  the SPA marks whole words whose normalized form is in that set (`web/src/lib/utils/highlight.ts`).
+* **Editions** (`works.rs`): `work_id` = the first book with the same language, `work_title_key(title)` (normalized,
+  trailing edition notes such as `(другой перевод)`, `[иллюстрации]`, `(пер. …)`, `(СИ)` dropped; other brackets kept)
+  and author-id set; unknown authors and generic titles ("Избранное", "Рассказы", …) keep their own id. Lists group
+  in memory (`BookAttrs` now also holds size and work id, +8 bytes/book), each work at the position of its first edition;
+  the best copy: not deleted > known cover > FB2 > EPUB > other > larger (20 % buckets, ≤ 30 MB) > newer > library
+  rating > lower id. Covers are known per library and `book_key` from preview extraction since the server started
+  (`find::CoverHints`, not persisted) and passed as `RatingSource::has_cover`. Grouped pages are cut by offset from
+  the grouped selection. Search groups after ranking; MCP `search_books` always groups.
+
+### Start page
+
+`GET …/home` (`server/src/find.rs`, catalog `home.rs`): the user's history (`book_history`: latest time per book),
+ratings, shelves, follows and dismissed series are resolved to ids once. **Continue series**: for each series of a
+book done (history or rated), the series' works in series order (editions grouped; in a publisher series with more
+than 3 first authors only the books sharing an author with the user's books there), the next ≤ 2 works after the last
+one done that are not done; finished and dismissed series are dropped; ordered by latest activity. **New from authors**:
+live books dated ≥ since (previous visit, or the chosen window) by followed authors, in followed series, or by the
+authors of books done, rated ≥ 4 or shelved (not anthologies, not "Автор неизвестен"), minus works the user has,
+grouped, newest first. **Empty state**: the best library-rated works of the 30 days before the newest book.
 
 ## Application database (`app.db`)
 
@@ -229,6 +281,11 @@ encryption: nothing — not even the key — turns the database back into a work
 OAuth authorization codes and consent requests live only in memory. The key file next to `app.db` protects leaked
 database copies and backups, not a full compromise of the data volume; the environment / Docker secret options
 keep the key out of that volume.
+
+Migration v6: `follow(user_id, library_id, kind ∈ author|series, key, name, created_at)` and
+`series_dismiss(user_id, library_id, key, name, at)`, keyed by the author's / series' normalized name (`sort_key`,
+the importer's dedup key) because ids are not stable across imports.
+Tokens, audit rows, history, device order, follows and dismissed series are removed with their user; open-mode data (user 0) is adopted by the first account.
 
 User data is keyed by `(library_id, book_key)`, so it survives re-imports.
 
@@ -502,6 +559,28 @@ Reproduce: `cargo run --release -p freelib-import --bin bench` (generates `serve
 if missing). With archives and offset resolution:
 `gen-inpx --books 600000 --out bench-data/files600k/lib.inpx --with-files bench-data/files600k/lib`, then
 `bench --inpx bench-data/files600k/lib.inpx --lib-dir bench-data/files600k/lib --db bench-data/files_lib.db`.
+
+### Measured: search, editions, start page (catalog layer, 600k synthetic library)
+
+`bench` on a freshly generated `gen-inpx --books 600000` (600k records, 552,088 live, 179,592 authors, 61,696
+series; the generator now also marks some famous-title editions `(другой перевод)` / `[иллюстрации]`), same 4-core VM,
+warm cache, milliseconds:
+
+| Operation | p50 | p95 | max |
+|---|---|---|---|
+| Import (schema 3: stems, Latin keys, vocabulary, work ids) | | | 31.4 s (was 16.7 s); catalog 427 MB |
+| Search, 25 queries × 3 (kind=all, facets) | 29.6 | 86.3 | 96.7 |
+| Search, same + 16 word-form / transliteration / typo queries, grouped by work (123 runs) | 22.3 | **97.3** | 126.9 |
+| Word forms / transliteration only (`книгу`, `мирами`, `strugatsky`, `azimov`, `tolstoi`, `dark towers`…) | 11.6 | 67.4 | 82.5 |
+| Typos (`азимв`, `sheckley robrt`, … incl. the correction and the second search) | 8.9 | 13.7 | 13.7 |
+| Vocabulary load (once per catalog, in the warm-up) | | | < 1 (21,875 words, 1 MB; the synthetic vocabulary is small — a real Flibusta catalog has a few 100k words, est. ≈ 20 MB, ≈ 0.3 s) |
+| Grouped books of an author (400 authors, top 5,335 books) | 0.11 | 12.8 | 51.7 |
+| Grouped new arrivals, 30 days / all 552k books | 11.1 / 153.7 | 12.6 / 156.3 | |
+| Grouped biggest top-level genre | 47.6 | 49.3 | |
+| Start page: continue series (300 books read) / new from authors (30 days) | 22.3 / 20.9 | 34.4 / 28.5 | |
+
+Search p95 stays well under the 300 ms target. Reproduce: `gen-inpx --books 600000 --out bench-data/synthetic-600k.inpx`,
+then `bench --inpx bench-data/synthetic-600k.inpx`.
 
 ### Measured: ratings (release server, 600k synthetic library)
 

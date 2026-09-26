@@ -197,6 +197,14 @@ fn adopt_open_mode_data(c: &Connection, id: i64) -> ApiResult<()> {
     )?;
     // apps authorized anonymously in open mode do not get the new account
     c.execute("DELETE FROM oauth_grant WHERE user_id=0", [])?;
+    c.execute(
+        "UPDATE OR IGNORE follow SET user_id=?1 WHERE user_id=0",
+        [id],
+    )?;
+    c.execute(
+        "UPDATE OR IGNORE series_dismiss SET user_id=?1 WHERE user_id=0",
+        [id],
+    )?;
     Ok(())
 }
 
@@ -233,6 +241,8 @@ pub fn delete_user(c: &Connection, id: i64) -> ApiResult<bool> {
     c.execute("DELETE FROM book_history WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM device_order WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM oauth_grant WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM follow WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM series_dismiss WHERE user_id=?1", [id])?;
     Ok(c.execute("DELETE FROM user WHERE id=?1", [id])? > 0)
 }
 
@@ -599,6 +609,8 @@ pub fn update_library(c: &Connection, l: &LibraryRow) -> ApiResult<()> {
 pub fn delete_library(c: &Connection, id: i64) -> ApiResult<()> {
     c.execute("DELETE FROM shelf_book WHERE library_id=?1", [id])?;
     c.execute("DELETE FROM book_history WHERE library_id=?1", [id])?;
+    c.execute("DELETE FROM follow WHERE library_id=?1", [id])?;
+    c.execute("DELETE FROM series_dismiss WHERE library_id=?1", [id])?;
     c.execute("DELETE FROM rating WHERE library_id=?1", [id])?;
     c.execute("DELETE FROM library WHERE id=?1", [id])?;
     Ok(())

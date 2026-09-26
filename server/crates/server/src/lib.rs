@@ -13,6 +13,7 @@ pub mod conv;
 pub mod db;
 pub mod error;
 pub mod extrating;
+pub mod find;
 pub mod importer;
 pub mod jobs;
 pub mod mail;

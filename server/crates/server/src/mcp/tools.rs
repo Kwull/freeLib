@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::api::browse::{BookOut, with_marks, with_rating_source};
+use crate::api::browse::{BookOut, with_marks, with_rating_source, with_sources};
 use crate::db;
 use crate::error::{ApiError, ApiResult};
 use crate::mcp::suggest::{self, BookFacts, Profile, Seed};
@@ -56,7 +56,7 @@ pub fn definitions() -> Vec<(Tool, &'static str)> {
             t::<SearchArgs>(
                 "search_books",
                 "Search books",
-                "Find books by text (title, author, series, keywords; every word is a prefix) and/or filters: author, series, genre, language, date added, minimum ratings, kids age, not rated by me. Without `query` give an author, series, genre or added_after. Sort: relevance (default with a query), date, my_rating, library_rating, openlibrary_rating. Paginated (`cursor`).",
+                "Find books by text (title, author, series, keywords; every word is a prefix, other word forms and Latin/Cyrillic transliterations match too, and a query with a typo that finds nothing is corrected — see `corrected`) and/or filters: author, series, genre, language, date added, minimum ratings, kids age, not rated by me. Without `query` give an author, series, genre or added_after. One result per work: editions of the same title by the same authors are grouped under the best copy (`editions` = how many, `otherEditionIds`). Sort: relevance (default with a query), date, my_rating, library_rating, openlibrary_rating. Paginated (`cursor`).",
                 true,
             ),
             "read",
@@ -444,6 +444,8 @@ fn book_json(b: &BookOut) -> Value {
         "libraryRating": bk.lib_rating,
         "openLibrary": b.ext_rating.map(|e| json!({"avg": e.avg, "votes": e.votes})),
         "kidsAge": kids_label(bk.kids_age),
+        "editions": bk.editions.as_ref().map(|e| e.count).unwrap_or(1),
+        "otherEditionIds": bk.editions.as_ref().map(|e| e.ids[1..].to_vec()).unwrap_or_default(),
     })
 }
 
@@ -642,6 +644,7 @@ async fn search_books(st: &AppState, auth: &TokenAuth, a: SearchArgs) -> ToolRes
         (a.author.clone(), a.author_id, a.series.clone(), a.series_id);
     let out = st
         .catalog_call(lib, move |cat| -> ApiResult<Value> {
+            let mut corrected = None;
             let (books, total, note): (Vec<Book>, usize, Option<String>) = if let Some(q) = &query {
                 let mut qq = q.clone();
                 for extra in [&a_author, &a_series].into_iter().flatten() {
@@ -657,11 +660,13 @@ async fn search_books(st: &AppState, auth: &TokenAuth, a: SearchArgs) -> ToolRes
                     to: to.clone(),
                     limit: if by_date { 1000 } else { (offset + limit).min(1000) },
                     rating: rq.clone(),
+                    group: true,
                     ..Default::default()
                 };
-                let r = with_rating_source(&st2, uid, lib, cat, &rq, |src| {
+                let r = with_sources(&st2, uid, lib, cat, &rq, true, |src| {
                     Ok(cat.search_rated(&sq, src)?)
                 })?;
+                corrected = r.corrected.clone();
                 let mut books = r.books;
                 if by_date {
                     books.sort_by(|x, y| y.date.cmp(&x.date).then(x.id.cmp(&y.id)));
@@ -717,13 +722,13 @@ async fn search_books(st: &AppState, auth: &TokenAuth, a: SearchArgs) -> ToolRes
                 if by_date {
                     ids.sort_by(|x, y| attrs.date(*y).cmp(&attrs.date(*x)).then(x.cmp(y)));
                 }
-                with_rating_source(&st2, uid, lib, cat, &rq, |src| {
+                let groups = with_sources(&st2, uid, lib, cat, &rq, true, |src| {
                     rq.apply(&mut ids, &attrs, src);
-                    Ok(())
+                    Ok(cat.group_books(&ids, src)?)
                 })?;
-                let total = ids.len();
-                let page: Vec<i64> = ids.into_iter().skip(offset).take(limit).collect();
-                (cat.books_by_ids(&page)?, total, note)
+                let total = groups.len();
+                let page: Vec<_> = groups.into_iter().skip(offset).take(limit).collect();
+                (cat.load_grouped(&page)?, total, note)
             };
             let n = books.len();
             let marked = with_marks(&st2, uid, lib, books)?;
@@ -731,6 +736,7 @@ async fn search_books(st: &AppState, auth: &TokenAuth, a: SearchArgs) -> ToolRes
                 "library": lib,
                 "total": total,
                 "matched": note,
+                "corrected": corrected,
                 "books": marked.iter().map(book_json).collect::<Vec<_>>(),
                 "nextCursor": (offset + n < total && n > 0).then(|| (offset + n).to_string()),
             }))

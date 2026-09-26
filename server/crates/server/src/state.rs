@@ -64,6 +64,8 @@ pub struct Inner {
     pub secrets: Arc<crate::secrets::Secrets>,
     /// OAuth authorization server state (pending consents, codes, client metadata cache).
     pub oauth: crate::oauth::OAuth,
+    /// Cover presence of books whose preview was extracted (best copy of a work).
+    pub covers: crate::find::CoverHints,
 }
 
 impl AppState {
@@ -101,6 +103,7 @@ impl AppState {
             tokens: crate::tokens::Tokens::default(),
             secrets,
             oauth,
+            covers: crate::find::CoverHints::default(),
         }))
     }
 

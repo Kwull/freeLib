@@ -10,6 +10,10 @@ import { normalize } from './normalize';
 import { genreName } from './names';
 import type { Book, BookDetail, AuthorRef, SeriesRef } from '../src/lib/api/types';
 import { ANTHOLOGY_MIN_AUTHORS, type MockBook, type MockLibrary } from './gen';
+import {
+  correct, dismissed, editionNote, editionsOf, followsOf, groupBooks, highlightWords, homeOf, matchTier,
+  queryTokens, recordHistory, type Grouped,
+} from './find';
 
 // A small, real two-chapter Russian EPUB (see fixtures/build-epub.mjs) served
 // for `format=epub` so the in-browser reader has actual content to render,
@@ -126,6 +130,13 @@ function rateFilterSort(lib: MockLibrary, items: MockBook[], sp: URLSearchParams
   return out;
 }
 
+/** A grouped list row: the best copy, with `editions` when the work has several. */
+function toRow(lib: MockLibrary, g: Grouped): Book {
+  const b = toBook(lib, g.best);
+  if (g.members.length > 1) b.editions = { count: g.members.length, ids: g.members.map((m) => m.id) };
+  return b;
+}
+
 function toDetail(lib: MockLibrary, b: MockBook): BookDetail {
   const e = extRating(b);
   const h = hash(b.id + 31);
@@ -137,7 +148,7 @@ function toDetail(lib: MockLibrary, b: MockBook): BookDetail {
     annotation: b.annotation ?? `<p>The annotation for &laquo;${b.title}&raquo; will appear here after the file is first opened, and will be cached on the server.</p>`,
     hasCover: true,
     file: `${b.key.split(':')[0]}-archive.zip / ${b.id}.${b.ext}`,
-    keywords: '',
+    keywords: b.keywords ?? '',
     formats: ['original', 'epub', b.ext !== 'epub' ? 'epub' : 'fb2', 'kepub', 'azw3'].filter((v, i, a) => a.indexOf(v) === i),
   };
 }
@@ -330,8 +341,68 @@ export function installMockApi(server: Connect.Server) {
         if (typeof rated === 'string') return fail(res, 400, 'bad_request', rated);
         items = rated;
 
+        if (url.searchParams.get('group') === '1') {
+          const groups = groupBooks(items);
+          // with a rating sort a work is placed by its best copy's rating (what the row shows)
+          const s = url.searchParams.get('sort');
+          if (s === 'my' || s === 'lib' || s === 'ext') {
+            const key = (b: MockBook) => s === 'my' ? bookRating(lib.id, b.id) : s === 'lib' ? libRating(b)
+              : (extRating(b)?.avg ?? 0) * 1e6 + (extRating(b)?.votes ?? 0);
+            groups.sort((x, y) => key(y.best) - key(x.best));
+          }
+          const { page, next } = paginate(groups, cursor, limit);
+          return send(res, 200, { books: page.map((g) => toRow(lib, g)), nextCursor: next, total: groups.length });
+        }
         const { page, next } = paginate(items, cursor, limit);
         return send(res, 200, { books: page.map((b) => toBook(lib, b)), nextCursor: next, total: items.length });
+      }
+      m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/books\/(\d+)\/editions$/);
+      if (m && method === 'GET') {
+        const lib = catalog(Number(m[1]));
+        const eds = editionsOf(lib, Number(m[2]));
+        if (!eds) return fail(res, 404, 'not_found', 'book not found');
+        return send(res, 200, { best: eds[0].id, books: eds.map((b) => ({ ...toBook(lib, b), note: editionNote(b) })) });
+      }
+      m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/home$/);
+      if (m && method === 'GET') {
+        const lib = catalog(Number(m[1]));
+        const d = url.searchParams.get('days');
+        const days = d ? Number(d) : null;
+        if (days !== null && !(days >= 1 && days <= 3650)) return fail(res, 400, 'bad_request', 'days must be 1..3650');
+        const h = homeOf(lib, { days, ratings: store.ratings, fresh: !!sc?.flags.has('newuser') });
+        return send(res, 200, {
+          empty: h.empty,
+          continueSeries: h.continueSeries.map((s) => ({ ...s, next: s.next.map((g) => toRow(lib, g)) })),
+          newFromAuthors: { since: h.since, days, total: h.newTotal, books: h.newBooks.map(({ g, reason }) => ({ ...toRow(lib, g), reason })) },
+          picks: h.picks.map((g) => toRow(lib, g)),
+          following: h.following,
+        });
+      }
+      m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/home\/dismiss$/);
+      if (m && method === 'POST') {
+        const lib = catalog(Number(m[1]));
+        const body = await readBody(req);
+        if (!lib.series[body.series - 1]) return fail(res, 404, 'not_found', 'series not found');
+        const set = dismissed.get(lib.id) ?? new Set<number>();
+        if (body.dismissed === false) set.delete(body.series); else set.add(body.series);
+        dismissed.set(lib.id, set);
+        return send(res, 204);
+      }
+      m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/follows$/);
+      if (m && (method === 'GET' || method === 'PUT')) {
+        const lib = catalog(Number(m[1]));
+        const f = followsOf(lib.id);
+        if (method === 'PUT') {
+          const body = await readBody(req);
+          if (body.kind !== 'author' && body.kind !== 'series') return fail(res, 400, 'bad_request', 'kind must be author or series');
+          const exists = body.kind === 'author' ? lib.authors[body.id - 1] : lib.series[body.id - 1];
+          if (!exists) return fail(res, 404, 'not_found', `${body.kind} not found`);
+          const set = body.kind === 'author' ? f.authors : f.series;
+          if (body.follow) set.add(body.id); else set.delete(body.id);
+        }
+        const rows = (ids: Set<number>, list: { id: number; name: string; bookCount: number }[]) =>
+          [...ids].map((id) => ({ id, name: list[id - 1].name, count: list[id - 1].bookCount })).sort((a, b) => (a.name < b.name ? -1 : 1));
+        return send(res, 200, { authors: rows(f.authors, lib.authors), series: rows(f.series, lib.series) });
       }
       m = matchLib(req, /^\/api\/v1\/libraries\/(\d+)\/authors\/(\d+)\/(summary|coauthors)$/);
       if (m && method === 'GET') {
@@ -408,6 +479,7 @@ export function installMockApi(server: Connect.Server) {
         const format = url.searchParams.get('format') ?? 'original';
         if (format === 'pdf' && !store.settings.calibre.available) return fail(res, 501, 'unsupported_format', 'Calibre not available');
         const inline = url.searchParams.get('inline') === '1';
+        recordHistory(lib.id, [b.id]);
         const ext = format === 'original' ? b.ext : format;
         if (ext === 'epub') {
           const buf = getSampleEpub();
@@ -426,23 +498,42 @@ export function installMockApi(server: Connect.Server) {
       if (m && method === 'GET') {
         const lib = catalog(Number(m[1]));
         const q0 = url.searchParams.get('q') ?? '';
-        const q = normalize(q0);
-        const words = q.split(' ').filter(Boolean);
         const kind = url.searchParams.get('kind') ?? 'all';
         const t0 = Date.now();
-        const matchWords = (hay: string) => words.every((w) => hay.split(' ').some((tok) => tok.startsWith(w)));
-
-        const authors = kind === 'all' || kind === 'authors'
-          ? lib.authors.filter((a) => matchWords(a.sortKey)).slice(0, 20).map((a) => ({ id: a.id, name: a.name, count: a.bookCount }))
-          : [];
-        const seriesRes = kind === 'all' || kind === 'series'
-          ? lib.series.filter((s) => matchWords(s.sortKey)).slice(0, 20).map((s) => {
+        const run = (q: string) => {
+          const tokens = queryTokens(q);
+          const phrase = normalize(q);
+          // tiers like the server: name/title starts with the query 3, all prefixes 2, word forms / transliteration 1
+          const ranked = <T,>(items: T[], text: (x: T) => string, key: (x: T) => number) => items
+            .map((x, i) => { const t = text(x); const tier = matchTier(tokens, t); return { x, i, tier: tier && normalize(t).startsWith(phrase) ? 3 : tier }; })
+            .filter((r) => r.tier > 0)
+            .sort((a, b) => b.tier - a.tier || key(b.x) - key(a.x) || a.i - b.i)
+            .map((r) => r.x);
+          const authors = kind === 'all' || kind === 'authors' ? ranked(lib.authors, (a) => a.name, (a) => a.bookCount).slice(0, 20) : [];
+          const series = kind === 'all' || kind === 'series' ? ranked(lib.series, (s) => s.name, (s) => s.bookCount).slice(0, 20) : [];
+          const books = kind === 'all' || kind === 'books'
+            ? ranked(lib.books, (b) => `${b.title} ${b.authorIds.map((a) => lib.authors[a - 1].name).join(' ')} ${b.seriesId ? lib.series[b.seriesId - 1].name : ''} ${b.keywords ?? ''}`, () => 0)
+            : [];
+          return { tokens, authors, series, books };
+        };
+        let r = run(q0);
+        let corrected: string | null = null, didYouMean: string | null = null;
+        const found = (x: typeof r) => x.authors.length + x.series.length + x.books.length;
+        if (found(r) < 3) {
+          const fixed = correct(lib, q0);
+          if (fixed) {
+            const alt = run(fixed);
+            if (found(r) === 0 && found(alt) > 0) { r = alt; corrected = fixed; }
+            else if (found(alt) > found(r)) didYouMean = fixed;
+          }
+        }
+        const authors = r.authors.map((a) => ({ id: a.id, name: a.name, count: a.bookCount }));
+        const seriesRes = r.series.map((s) => {
               const bookIds = lib.booksBySeries.get(s.id) ?? [];
               const authorNames = [...new Set(bookIds.flatMap((id) => lib.bookById.get(id)!.authorIds.map((aid) => lib.authors[aid - 1].name)))];
               return { id: s.id, name: s.name, count: s.bookCount, authors: authorNames.slice(0, 3).join(', ') || 'various authors' };
-            })
-          : [];
-        let books = kind === 'all' || kind === 'books' ? lib.books.filter((b) => matchWords(b.sortKey)) : [];
+            });
+        let books = r.books;
         const genre = url.searchParams.get('genre');
         const langF = url.searchParams.get('lang');
         const extF = url.searchParams.get('ext');
@@ -463,14 +554,31 @@ export function installMockApi(server: Connect.Server) {
         if (typeof ratedBooks === 'string') return fail(res, 400, 'bad_request', ratedBooks);
         books = ratedBooks;
         const limit = Math.min(Number(url.searchParams.get('limit') ?? 200) || 200, 1000);
-        const total = books.length;
-        books = books.slice(0, limit);
+        const rows = url.searchParams.get('group') === '1'
+          ? (() => {
+              const groups = groupBooks(books);
+              const s = url.searchParams.get('sort');
+              if (s === 'my' || s === 'lib' || s === 'ext') {
+                const key = (b: MockBook) => s === 'my' ? bookRating(lib.id, b.id) : s === 'lib' ? libRating(b)
+                  : (extRating(b)?.avg ?? 0) * 1e6 + (extRating(b)?.votes ?? 0);
+                groups.sort((x, y) => key(y.best) - key(x.best));
+              }
+              return groups.map((g) => toRow(lib, g));
+            })()
+          : books.map((b) => toBook(lib, b));
+        const total = rows.length;
+        const shown = rows.slice(0, limit);
+        const highlight = highlightWords(r.tokens, [
+          ...authors.map((a) => a.name), ...seriesRes.map((s) => s.name),
+          ...shown.flatMap((b) => [b.title, ...b.authors.map((a) => a.name), b.series?.name ?? '']),
+        ]);
         return send(res, 200, {
           tookMs: Date.now() - t0,
-          authors, series: seriesRes, books: books.map((b) => toBook(lib, b)), total,
+          authors, series: seriesRes, books: shown, total,
           facets: {
             genre: [...facetGenre.entries()], lang: [...facetLang.entries()], ext: [...facetExt.entries()],
           },
+          corrected, didYouMean, highlight,
         });
       }
       if (path === '/api/v1/languages' && method === 'GET') {
@@ -566,6 +674,7 @@ export function installMockApi(server: Connect.Server) {
           if (!ok) return fail(res, 403, 'forbidden', `${to} is not an allowed recipient`);
         }
         const kind = device.kind === 'email' ? 'send' : device.kind === 'folder' ? 'export' : 'download';
+        recordHistory(Number(body.library), (body.books ?? []).map(Number));
         const job = createJob(kind, `${kind === 'send' ? 'Send to' : kind === 'export' ? 'Export to' : 'Download for'} ${device.name} · ${body.books.length} books`);
         runJobProgress(job);
         return send(res, 200, job);

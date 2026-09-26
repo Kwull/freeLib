@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import type { Book, Coauthor } from '../api/types';
+  import type { Book, Coauthor, Edition } from '../api/types';
+  import FollowButton from './FollowButton.svelte';
   import { api, errorText } from '../api/client';
   import Icon from './Icon.svelte';
   import CoverThumb from './CoverThumb.svelte';
@@ -42,6 +43,8 @@
     /** top co-authors of an author (see AuthorSummary) */
     coauthors?: Coauthor[];
     coauthorCount?: number;
+    /** a Follow button for this author / series */
+    follow?: { kind: 'author' | 'series'; id: number };
   };
 
   let {
@@ -114,6 +117,22 @@
         : getPref<SortKey>(sortPrefKey, 'date'),
   );
   const hideAnth = $derived(scope.kind === 'author' && getPref<boolean>('hideAnthologies', false));
+  /** one row per work (editions of the same title by the same authors), the best copy shown */
+  const groupEditions = $derived(getPref<boolean>('groupEditions', true));
+  /** grouped rows whose other editions are shown, and the editions loaded for them */
+  let openEditions = $state<Set<number>>(new Set());
+  let editionsOf = $state<Map<number, Edition[]>>(new Map());
+  function toggleEditions(id: number) {
+    const s = new Set(openEditions);
+    if (s.has(id)) { s.delete(id); openEditions = s; return; }
+    s.add(id);
+    openEditions = s;
+    if (!editionsOf.has(id)) {
+      api.editions(lib, id)
+        .then((r) => (editionsOf = new Map(editionsOf).set(id, r.books)))
+        .catch(() => { const o = new Set(openEditions); o.delete(id); openEditions = o; });
+    }
+  }
 
   let showDeleted = $state(false);
   let ratingFilters = $state<RatingFiltersT>(emptyRatingFilters());
@@ -149,11 +168,12 @@
       text = ''; q = ''; langFilter = null; extFilter = null; showDeleted = false;
       ratingFilters = emptyRatingFilters();
       coauthorsOpen = false; filterMenuOpen = false; columnMenuOpen = false;
+      openEditions = new Set(); editionsOf = new Map();
     });
   });
 
   function queryParams(): Record<string, unknown> {
-    const params: Record<string, unknown> = { deleted: showDeleted };
+    const params: Record<string, unknown> = { deleted: showDeleted, group: groupEditions };
     if (scope.kind === 'author') params.author = scope.id;
     else if (scope.kind === 'series') params.series = scope.id;
     else if (scope.kind === 'genre') params.genre = scope.id;
@@ -331,16 +351,26 @@
     });
   });
 
-  type FlatRow = { kind: 'group'; group: Group } | { kind: 'row'; row: Row; groupKey: string };
+  type FlatRow = { kind: 'group'; group: Group } | { kind: 'row'; row: Row; groupKey: string }
+    | { kind: 'edition'; ed: Edition; of: number };
   const flatRows = $derived.by<FlatRow[]>(() => {
     const out: FlatRow[] = [];
     for (const g of groups) {
       if (showGroupHeads) out.push({ kind: 'group', group: g });
       if (showGroupHeads && effectiveCollapsed.has(g.key)) continue;
-      for (const r of g.rows) out.push({ kind: 'row', row: r, groupKey: g.key });
+      for (const r of g.rows) {
+        out.push({ kind: 'row', row: r, groupKey: g.key });
+        if (openEditions.has(r.book.id)) {
+          for (const ed of editionsOf.get(r.book.id) ?? []) if (ed.id !== r.book.id) out.push({ kind: 'edition', ed, of: r.book.id });
+        }
+      }
     }
     return out;
   });
+  function editionLine(e: Edition): string {
+    return [e.ext.toUpperCase(), formatSize(e.size), formatDate(e.date, i18nState.lang), e.lang, e.libRating ? `★${e.libRating}` : '', e.note ?? '']
+      .filter(Boolean).join(' · ');
+  }
 
   $effect(() => {
     if (!onCounts) return;
@@ -503,6 +533,7 @@
 {#snippet filterMenu(phone: boolean)}
   <div class="col-menu" class:phone-menu={phone} role="menu">
     <label class="menu-check"><input type="checkbox" bind:checked={showDeleted} />{t('books.showDeleted')}</label>
+    <label class="menu-check" title={t('editions.groupHint')}><input type="checkbox" data-testid="group-editions" checked={groupEditions} onchange={() => setPref('groupEditions', !groupEditions)} />{t('editions.group')}</label>
     {#if availableLangs.length > 1 || langFilter}
       <div class="menu-group-title">{t('search.language')}</div>
       <label><input type="radio" name="langf-{phone}" checked={langFilter === null} onchange={() => (langFilter = null)} />{t('books.any')}</label>
@@ -556,7 +587,10 @@
   {#if header && !isMobile}
     <div class="scope-header">
       <div class="crumb">{header.crumb}</div>
-      <h1 title={header.name}>{header.name}</h1>
+      <div class="h1-row">
+        <h1 title={header.name}>{header.name}</h1>
+        {#if header.follow}<FollowButton {lib} kind={header.follow.kind} id={header.follow.id} />{/if}
+      </div>
       <div class="counts">
         <span>{tn('browse.booksCount', header.booksCount)}</span>
         {#if header.seriesCount}<span>· {tn('browse.seriesCount', header.seriesCount)}</span>{/if}
@@ -590,6 +624,7 @@
           {tn('browse.booksCount', header.booksCount)}{#if header.seriesCount}&nbsp;· {tn('browse.seriesCount', header.seriesCount)}{/if}
         </span>
       </div>
+      {#if header.follow}<FollowButton {lib} kind={header.follow.kind} id={header.follow.id} compact />{/if}
     </div>
   {/if}
 
@@ -684,6 +719,15 @@
               <span class="chev" class:open={!effectiveCollapsed.has(fr.group.key)}><Icon name="chevronRight" size={14} /></span>
               <span class="gname">{fr.group.name}</span><span class="gcount">{fr.group.count}</span>
             </button>
+          {:else if fr.kind === 'edition'}
+            {@const e = fr.ed}
+            <div class="m-row m-edition" role="row" tabindex="0" data-testid="edition-row" class:checked={isSelected(lib, e.id)}
+              onclick={() => onPick(e.id)} onkeydown={(ev) => { if (ev.key === 'Enter') onPick(e.id); }}>
+              <span class="ed-mark"><Icon name="layers" size={14} /></span>
+              <div class="m-info"><span class="m-meta">{editionLine(e)}</span></div>
+              <input type="checkbox" aria-label={t('books.select', { title: e.title })} checked={isSelected(lib, e.id)}
+                onclick={(ev) => ev.stopPropagation()} onchange={() => toggle(lib, e.id)} />
+            </div>
           {:else}
             {@const r = fr.row}
             <div
@@ -698,7 +742,7 @@
               <CoverThumb {lib} bookId={r.book.id} title={r.book.title} width={36} height={52} />
               <div class="m-info">
                 <span class="m-title-row"><span class="m-title">{r.book.title}</span><KidsBadge age={r.book.kidsAge} /></span>
-                <span class="m-meta">{rowMeta(r)}</span>
+                <span class="m-meta">{#if r.book.editions}<button type="button" class="ed-tag" data-testid="editions-toggle" aria-expanded={openEditions.has(r.book.id)} onclick={(ev) => { ev.stopPropagation(); toggleEditions(r.book.id); }}>{tn('editions.count', r.book.editions.count)}</button> {/if}{rowMeta(r)}</span>
               </div>
               <input
                 type="checkbox"
@@ -742,6 +786,16 @@
                   <a class="glink" href="/l/{lib}/series/{fr.group.seriesId}" data-link title={t('books.openSeries')} aria-label={t('books.openSeries')}><Icon name="external" size={13} /></a>
                 {/if}
               </div>
+            {:else if fr.kind === 'edition'}
+              {@const e = fr.ed}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <div class="brow edition-row" role="row" tabindex="-1" data-testid="edition-row"
+                class:selected={e.id === selectedBookId} class:checked={isSelected(lib, e.id)} class:deleted={e.deleted}
+                style="min-width: {tableMinWidth}px" onclick={() => onPick(e.id)}>
+                <span class="cell-check"><input type="checkbox" aria-label={t('books.select', { title: e.title })} checked={isSelected(lib, e.id)}
+                  onclick={(ev) => ev.stopPropagation()} onchange={() => toggle(lib, e.id)} /></span>
+                <span class="ed-line"><Icon name="layers" size={13} /><span class="ellipsis">{editionLine(e)}</span></span>
+              </div>
             {:else}
               {@const r = fr.row}
               {@const b = r.book}
@@ -770,6 +824,7 @@
                     <span class="title-cell sticky-title" title={b.title}>
                       <button type="button" class="title-btn" tabindex="-1" class:strong={b.id === selectedBookId}>{b.title}</button>
                       {#if scope.kind === 'author' && !grouped && b.series && !extraColumns.has('series')}<span class="sub">{b.series.name}{b.serno ? ` #${b.serno}` : ''}</span>{/if}
+                      {#if b.editions}<button type="button" class="tag ed-tag" data-testid="editions-toggle" tabindex="-1" aria-expanded={openEditions.has(b.id)} title={t('editions.toggleHint')} onclick={(ev) => { ev.stopPropagation(); toggleEditions(b.id); }}>{tn('editions.count', b.editions.count)}</button>{/if}
                       {#if isAnthology(b)}<span class="tag" title={b.authors.map((a) => a.name).join(', ')}>{tn('books.authorsCount', b.authors.length)}</span>{/if}
                       <KidsBadge age={b.kidsAge} />
                       {#if b.deleted}<span class="tag danger">{t('books.deleted')}</span>{/if}
@@ -839,6 +894,15 @@
     margin: 2px 0 2px; font-family: var(--font-display); font-size: 24px; font-weight: 600; line-height: 1.25;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .h1-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .h1-row h1 { min-width: 0; }
+  .ed-tag { border: none; cursor: pointer; font: inherit; font-size: 11px; color: var(--accent-soft-ink); background: var(--accent-soft); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+  .ed-tag:hover { text-decoration: underline; }
+  .ed-tag[aria-expanded='true'] { background: var(--accent); color: #fff; }
+  .edition-row { display: flex; --row-bg: var(--surface-alt); }
+  .ed-line { display: flex; align-items: center; gap: 8px; padding-left: 48px; font-size: 13px; color: var(--muted-2); min-width: 0; }
+  .m-edition { background: var(--surface-alt); }
+  .ed-mark { width: 36px; display: flex; justify-content: center; color: var(--muted); flex-shrink: 0; }
   .counts { display: flex; gap: 4px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; }
   .coauthors { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); min-width: 0; }
   .coauthors .lbl { flex-shrink: 0; }

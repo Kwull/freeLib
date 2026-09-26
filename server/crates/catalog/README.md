@@ -20,7 +20,7 @@ handle.close();                                 // before deleting the library
 * Take `handle.get()` **once per request** and use that `Arc<Catalog>` throughout, so a reload never
   mixes two catalog versions in one response. Old `Catalog`s keep working until dropped.
 * `Catalog::open(path) -> Result<Catalog>` fails with `CatalogError::SchemaVersion` when the file was
-  written by another schema version (→ re-import; the server starts one automatically at startup for libraries with an INPX; schema 2 = folded sort keys) and `CatalogError::NotFound` when missing.
+  written by another schema version (→ re-import; the server starts one automatically at startup for libraries with an INPX; schema 2 = folded sort keys; schema 3 = stems, Latin keys, `vocab`, `work_id`) and `CatalogError::NotFound` when missing.
 * Errors (`CatalogError`): `Sqlite`, `SchemaVersion` (re-import), `NotFound`, `BadCursor` (→ 400), `Stale` — an old
   `Catalog` needed a new connection after the file was replaced; take `handle.get()` again and retry.
 * Connections: read-only (`SQLITE_OPEN_READ_ONLY`, `query_only`, `mmap_size=1 GiB`, `cache_size=-65536`,
@@ -85,6 +85,21 @@ Semantics:
 does this); read `arch_csize` bytes and inflate raw deflate when `arch_method == 8` (0 = stored). If the offset is
 NULL or the header signature does not match, fall back to opening the zip and looking up `entry_name()`.
 Plain files (`archive == ""`) live at `library_path / relative_path()`.
+
+## Search, editions, start page
+
+* `search(&SearchQuery)` matches word forms (Snowball stems) and transliterations (Latin keys) besides prefixes, ranks
+  phrase > prefixes > forms, corrects typos from the vocabulary (`SearchResult.corrected` / `did_you_mean`) and returns
+  `highlight` (matched words). `SearchQuery.group` = one row per work. `Catalog::correct(q)`, `Catalog::vocab()`
+  (warm it with `attrs()`).
+* `works`: `books_page(sel, filter, rq, src, page, group)` (= `books_rated` without `group`), `group_books(ids, src)` /
+  `load_grouped(groups)`, `editions(id, include_deleted, src) -> Option<Vec<Edition>>` (best first, with `note`),
+  `edition_cmp` (the best-copy rule, see the module docs). `RatingSource::has_cover` (default `None`) feeds known covers.
+* `home`: `continue_series(done, dismissed, src, per_series, limit)`, `new_from(seeds, since, exclude, src, limit)`,
+  `reading_authors(book_ids)`, `picks(days, src, limit)`, `authors_by_keys` / `series_by_keys` / `author_key` /
+  `series_key` (follows are stored by sort key).
+* `text`: `stem`, `latin_key` / `word_key` / `translit`, `stems_text`, `latin_text`, `edit_distance`, `work_title_key`,
+  `edition_note`.
 
 ## Other modules
 

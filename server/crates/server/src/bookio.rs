@@ -248,6 +248,7 @@ mod tests {
                 deleted: false,
                 lib_rating: 0,
                 kids_age: None,
+                editions: None,
             },
             file: "1".into(),
             archive: archive.into(),

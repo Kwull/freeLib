@@ -9,6 +9,7 @@ use crate::state::AppState;
 pub mod books;
 pub mod browse;
 pub mod devices;
+pub mod find;
 pub mod jobs;
 pub mod libraries;
 pub mod oauth;
@@ -54,6 +55,13 @@ pub fn router() -> Router<AppState> {
         .route("/libraries/{lib}/search", get(browse::search))
         .route("/languages", get(browse::languages))
         .route("/libraries/{lib}/books/{id}", get(books::detail))
+        .route("/libraries/{lib}/books/{id}/editions", get(find::editions))
+        .route("/libraries/{lib}/home", get(find::home))
+        .route("/libraries/{lib}/home/dismiss", post(find::dismiss))
+        .route(
+            "/libraries/{lib}/follows",
+            get(find::follows).put(find::set_follow),
+        )
         .route("/libraries/{lib}/books/{id}/cover", get(books::cover))
         .route("/libraries/{lib}/books/{id}/file", get(books::file))
         .route("/libraries/{lib}/books/{id}/rating", put(shelves::rating))

@@ -31,6 +31,7 @@ document.addEventListener('click', (e) => {
 
 export type Route =
   | { name: 'home' }
+  | { name: 'start'; lib: number }
   | { name: 'new'; lib: number }
   | { name: 'authors'; lib: number; id: number | null }
   | { name: 'series'; lib: number; id: number | null }
@@ -57,7 +58,7 @@ export function parseRoute(path: string, search: string): Route {
   if (segs[0] === 'l' && segs[1]) {
     const lib = Number(segs[1]);
     const rest = segs[2];
-    if (!rest) return { name: 'authors', lib, id: null };
+    if (!rest || rest === 'home') return { name: 'start', lib };
     if (rest === 'new') return { name: 'new', lib };
     if (rest === 'authors') return { name: 'authors', lib, id: segs[3] ? Number(segs[3]) : null };
     if (rest === 'series') return { name: 'series', lib, id: segs[3] ? Number(segs[3]) : null };

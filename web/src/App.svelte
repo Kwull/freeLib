@@ -10,6 +10,7 @@
   import LibrariesPage from './lib/routes/LibrariesPage.svelte';
   import BookPhonePage from './lib/routes/BookPhonePage.svelte';
   import OAuthConsentPage from './lib/routes/OAuthConsentPage.svelte';
+  import HomePage from './lib/routes/HomePage.svelte';
 
   import { currentRoute, navigate } from './lib/router.svelte';
   import { loadSession, isLoggedIn } from './lib/stores/session.svelte';
@@ -88,13 +89,13 @@
     if (route.name === 'settings') import('./lib/routes/SettingsPage.svelte').then((m) => (settingsComp = m.default));
   });
 
-  // Redirect bare "/" to the current library's authors page once libraries are known.
+  // Redirect bare "/" to the current library's start page once libraries are known.
   $effect(() => {
     if (!libsReady || !isLoggedIn()) return;
     const route = currentRoute();
     if (route.name === 'home' || route.name === 'login') {
       const lib = currentLibrary();
-      if (lib) navigate(`/l/${lib.id}/authors`, { replace: true });
+      if (lib) navigate(`/l/${lib.id}/home`, { replace: true });
     }
   });
 </script>
@@ -119,6 +120,8 @@
   <Shell>
     {#if route.name === 'home'}
       <LibraryGate lib={null}><BrowseSkeleton label={t('libstate.loading')} /></LibraryGate>
+    {:else if route.name === 'start'}
+      <LibraryGate lib={route.lib}><HomePage lib={route.lib} /></LibraryGate>
     {:else if route.name === 'authors' || route.name === 'series'}
       <LibraryGate lib={route.lib}><BrowsePage kind={route.name} lib={route.lib} id={route.id} /></LibraryGate>
     {:else if route.name === 'genres'}

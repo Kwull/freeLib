@@ -66,6 +66,7 @@ Subcommands:
 | `secrets.rs` | encryption at rest of reversible secrets (XChaCha20-Poly1305, `enc:v1:<key id>:…`), key loading (`FREELIB_SECRET_KEY[_FILE]`, generated `secret.key`), start-up migration / rotation / wrong-key refusal |
 | `oauth/` | OAuth 2.1 authorization server for MCP clients: `mod.rs` (metadata documents, `/oauth/authorize`, `/token`, `/register`, `/revoke`, redirect URI policy, PKCE, resource binding, in-memory consents and codes, rate limits, cleanup), `cimd.rs` (Client ID Metadata Documents with SSRF guards), `store.rs` (`oauth_client` / `oauth_grant` / `oauth_token`); `api/oauth.rs` = consent page API and `/me/oauth/apps` |
 | `mcp/` | MCP server at `/mcp` (rmcp streamable HTTP, stateless): `mod.rs` (gate middleware, `ServerHandler`, prompts, instructions), `tools.rs` (17 tools with scopes and schemas), `suggest.rs` (candidate scoring) |
+| `find.rs`, `api/find.rs` | start page (`/home`: continue series, new from authors, picks), follows and dismissed series (`app.db` v6), editions endpoint, known covers (`CoverHints`) for the best copy |
 | `importer.rs` | import jobs: `freelib_import::import_inpx` in a blocking thread, progress → job/library events, catalog reload and warm-up |
 | `jobs.rs` | in-memory job list, cancel flags, produced files, SSE `Event`s with per-user visibility |
 | `sender.rs` | `/send` jobs: e-mail (one message per book, `pauseSeconds` between), folder export under `FREELIB_EXPORT_DIR/<target>`, download (single file or zip), `joinSeries` |

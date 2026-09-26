@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('browse an author, select books, open send dialog', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await expect(page.getByRole('heading', { name: 'Authors' })).toBeVisible({ timeout: 15000 });
 
   // The seeded Strugatsky author is filterable by name.

@@ -6,7 +6,7 @@ test('browse an author, select books, open send dialog', async ({ page, request 
   const books = await booksOfAuthor(request, author.id, 1, 2);
   test.skip(books.length < 2, 'picked author does not have 2 books in the synthetic library');
 
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await expect(page.getByRole('heading', { name: 'Authors' })).toBeVisible({ timeout: 15000 });
 
   await page.getByLabel('Filter authors').fill(author.name);

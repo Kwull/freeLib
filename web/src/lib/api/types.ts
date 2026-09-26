@@ -43,6 +43,26 @@ export type Book = {
   extRating: { avg: number; votes: number } | null;
   /** age suitability estimate (heuristic): 0, 6, 12, 16, 18; null = unknown */
   kidsAge: number | null;
+  /** set on a grouped row (`group=1`) that stands for several editions of one work: this book
+   *  is the best copy; `ids` = all editions in the list, the best first */
+  editions?: { count: number; ids: number[] } | null;
+};
+/** One edition of a work (`GET …/books/:id/editions`). */
+export type Edition = Book & { note: string | null };
+export type EditionsResponse = { best: number; books: Edition[] };
+export type Followed = { id: number; name: string; count: number };
+export type FollowList = { authors: Followed[]; series: Followed[] };
+export type NewReason = { kind: 'author' | 'series'; id: number; name: string; followed: boolean };
+export type HomeResponse = {
+  empty: boolean;
+  continueSeries: {
+    series: { id: number; name: string; count: number; authors: string };
+    works: number; done: number; lastAt: string;
+    next: Book[];
+  }[];
+  newFromAuthors: { since: string; days: number | null; total: number; books: (Book & { reason: NewReason })[] };
+  picks: Book[];
+  following: { authors: number; series: number };
 };
 
 /** The cached Open Library lookup of a book. */
@@ -203,6 +223,13 @@ export type SearchResponse = {
   books: Book[];
   total: number;
   facets: { genre: [number, number][]; lang: [string, number][]; ext: [string, number][] };
+  /** the results are for this corrected query (the query as typed found nothing) */
+  corrected?: string | null;
+  /** a corrected query to offer ("Did you mean …?") */
+  didYouMean?: string | null;
+  /** normalized words of the shown titles and names that matched (prefix, word form,
+   *  transliteration, typo fix) */
+  highlight?: string[];
 };
 
 export type SmtpSettings = {

@@ -10,7 +10,7 @@ test('phone layout navigates list -> books -> detail', async ({ page, request })
   const books = await booksOfAuthor(request, author.id, 1, 1);
   test.skip(books.length < 1, 'picked author has no books');
 
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await expect(page.locator('nav[aria-label="Main"]').last()).toBeVisible({ timeout: 15000 });
 
   await expect(page.getByLabel('Filter authors')).toBeVisible();

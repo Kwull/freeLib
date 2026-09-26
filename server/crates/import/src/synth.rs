@@ -1305,8 +1305,14 @@ fn make_book(seed: u64, i: usize, n: usize, pool: usize, codes: &[String]) -> Ge
             authors.push(famous_author(p));
         }
         if !f.titles.is_empty() && r.chance(0.35) {
-            // Several editions of the same famous title.
-            title_s = Some(r.pick(f.titles).to_string());
+            // Several editions of the same famous title; some marked as another translation
+            // (decided by the index, so the random stream stays as it was).
+            let t = r.pick(f.titles);
+            title_s = Some(match i.wrapping_mul(2_654_435_761) % 23 {
+                0 => format!("{t} (другой перевод)"),
+                1 => format!("{t} [иллюстрации]"),
+                _ => t.to_string(),
+            });
         }
         // Own series: the listed ones first, then generated ones, roughly one per 6 books;
         // some books are in (long-named) publisher series instead.

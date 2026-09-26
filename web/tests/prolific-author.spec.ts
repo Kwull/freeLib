@@ -3,7 +3,7 @@ import { test, expect, type Page } from '@playwright/test';
 // "Asimov Isaac" in the mock: ~320 live books in ~20 series, ~150 anthologies with 5–30
 // authors each (thousands of names share a book with him), one real co-author.
 async function openAsimov(page: Page) {
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await page.getByLabel('Filter authors').fill('Asimov Isaac');
   await page.getByRole('button', { name: /Asimov Isaac/ }).first().click();
   await expect(page.getByRole('heading', { level: 1, name: 'Asimov Isaac' })).toBeVisible();
@@ -84,7 +84,7 @@ test('details pane shows the author summary until a book is picked, and can be c
 });
 
 test('an author without series has no group headers', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await page.getByLabel('Filter authors').fill('Lem Stanis');
   await page.getByRole('button', { name: /Lem Stanisław/ }).first().click();
   await expect(page.locator('.scroll .brow').first()).toBeVisible();

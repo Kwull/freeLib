@@ -130,6 +130,19 @@ pub fn with_rating_source<R>(
     rq: &RatingQuery,
     f: impl FnOnce(&dyn RatingSource) -> ApiResult<R>,
 ) -> ApiResult<R> {
+    with_sources(st, user_id, lib, cat, rq, false, f)
+}
+
+/// [`with_rating_source`], plus the known covers when editions are grouped (`group`).
+pub fn with_sources<R>(
+    st: &AppState,
+    user_id: i64,
+    lib: i64,
+    cat: &Catalog,
+    rq: &RatingQuery,
+    group: bool,
+    f: impl FnOnce(&dyn RatingSource) -> ApiResult<R>,
+) -> ApiResult<R> {
     let needs_my = rq.min_my > 0 || rq.unrated_by_me || rq.sort == RatingSort::My;
     let needs_ext = rq.min_ext > 0 || rq.min_ext_votes > 0 || rq.sort == RatingSort::Ext;
     let mut my = std::collections::HashMap::new();
@@ -154,7 +167,17 @@ pub fn with_rating_source<R>(
     let guard = dense
         .as_ref()
         .map(|d| d.read().unwrap_or_else(|e| e.into_inner()));
-    let src = crate::extrating::Ratings { my, ext: guard };
+    // covers only matter for the best copy of grouped editions
+    let covers = if group {
+        st.covers.ids(lib, cat)
+    } else {
+        std::collections::HashMap::new()
+    };
+    let src = crate::extrating::Ratings {
+        my,
+        ext: guard,
+        covers,
+    };
     f(&src)
 }
 
@@ -333,6 +356,7 @@ pub struct BooksQuery {
     q: Option<String>,
     cursor: Option<String>,
     limit: Option<usize>,
+    group: Option<String>,
 }
 
 fn truthy(s: &Option<String>) -> bool {
@@ -410,6 +434,7 @@ pub async fn books(
     };
     let st2 = st.clone();
     let browse = matches!(sel, BookSelector::Author(_) | BookSelector::Series(_));
+    let group = truthy(&q.group);
     let first_page = page.cursor.is_none();
     let (out, ids) = st
         .catalog_call(
@@ -424,8 +449,8 @@ pub async fn books(
                     ),
                     (s, _) => s.clone(),
                 };
-                let p = with_rating_source(&st2, u.id, lib, cat, &rq, |src| {
-                    Ok(cat.books_rated(&sel, &filter, &rq, src, &page)?)
+                let p = with_sources(&st2, u.id, lib, cat, &rq, group, |src| {
+                    Ok(cat.books_page(&sel, &filter, &rq, src, &page, group)?)
                 })?;
                 let ids: Vec<i64> = p.books.iter().map(|b| b.id).collect();
                 let books = with_marks(&st2, u.id, lib, p.books)?;
@@ -500,6 +525,7 @@ pub struct SearchParams {
     to: Option<String>,
     limit: Option<usize>,
     deleted: Option<String>,
+    group: Option<String>,
 }
 
 fn opt_date(s: &Option<String>, name: &str) -> ApiResult<Option<String>> {
@@ -567,11 +593,12 @@ pub async fn search(
         include_deleted: truthy(&p.deleted),
         limit: p.limit.unwrap_or(200).clamp(1, 1000),
         rating: rp.query()?,
+        group: truthy(&p.group),
     };
     let st2 = st.clone();
     let v = st
         .catalog_call(lib, move |cat| -> ApiResult<serde_json::Value> {
-            let r = with_rating_source(&st2, u.id, lib, cat, &sq.rating, |src| {
+            let r = with_sources(&st2, u.id, lib, cat, &sq.rating, sq.group, |src| {
                 Ok(cat.search_rated(&sq, src)?)
             })?;
             let books = with_marks(&st2, u.id, lib, r.books)?;
@@ -582,6 +609,9 @@ pub async fn search(
                 "books": books,
                 "total": r.total,
                 "facets": r.facets,
+                "corrected": r.corrected,
+                "didYouMean": r.did_you_mean,
+                "highlight": r.highlight,
             }))
         })
         .await?;
