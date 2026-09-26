@@ -49,6 +49,8 @@ pub struct SearchQuery {
     pub rating: crate::rank::RatingQuery,
     /// One row per work (editions grouped, see [`crate::works`]); `total` then counts works.
     pub group: bool,
+    /// Search the query exactly as typed: no typo correction ("Search instead for …").
+    pub exact: bool,
 }
 
 pub(crate) const FLAG_EXISTS: u8 = 1;
@@ -521,10 +523,11 @@ impl Catalog {
     /// [`search`](Self::search) with the user's and external ratings for `sq.rating`.
     ///
     /// Words match as prefixes, word forms (Snowball stems) and transliterations (Latin keys);
-    /// results are ranked by tier (see [`Plan`]), then bm25. When the query finds almost
-    /// nothing, words unknown to the catalog are corrected by edit distance: with no result at
-    /// all the corrected query is searched instead (`corrected`), else it is offered
-    /// (`did_you_mean`).
+    /// results are ranked by tier (see [`Plan`]), then bm25. When the query finds fewer than 3
+    /// matches or no author/series, words unknown to the catalog are corrected by edit distance:
+    /// when the corrected query finds more (or finds authors/series the query did not) its
+    /// results are returned (`corrected`), else it is offered (`did_you_mean`). `exact` skips
+    /// the correction.
     pub fn search_rated(
         &self,
         sq: &SearchQuery,
@@ -542,12 +545,19 @@ impl Catalog {
         let mut used = p.tokens.clone();
         let found = |r: &SearchResult| r.total + r.authors.len() as i64 + r.series.len() as i64;
         let n = found(&res);
-        if n < FEW_RESULTS
+        let names = |r: &SearchResult| r.authors.len() + r.series.len();
+        let wants_names = sq.kind != SearchKind::Books;
+        if !sq.exact
+            && (n < FEW_RESULTS || (wants_names && names(&res) == 0))
             && let Some(fixed) = self.correct(&sq.q)?
             && let Some(fp) = plan(&fixed)
         {
             let alt = self.search_plan(&conn, &fp, sq, src)?;
-            if n == 0 && found(&alt) > 0 {
+            // the corrected query is shown instead when the query as typed found little, or no
+            // author/series where the corrected one finds some; else it is only offered
+            if (n < FEW_RESULTS && found(&alt) > n)
+                || (wants_names && names(&res) == 0 && names(&alt) > 0)
+            {
                 res = alt;
                 res.corrected = Some(fixed);
                 used = fp.tokens;

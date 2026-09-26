@@ -129,7 +129,7 @@
     {:else if route.name === 'shelf'}
       <LibraryGate lib={route.lib}><ShelfPage lib={route.lib} id={route.id} /></LibraryGate>
     {:else if route.name === 'search'}
-      <LibraryGate lib={route.lib}><SearchPage lib={route.lib} q={route.q} /></LibraryGate>
+      <LibraryGate lib={route.lib}><SearchPage lib={route.lib} q={route.q} exact={route.exact} /></LibraryGate>
     {:else if route.name === 'book'}
       <LibraryGate lib={route.lib}><BookPhonePage lib={route.lib} id={route.id} /></LibraryGate>
     {:else if route.name === 'read'}

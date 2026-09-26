@@ -519,11 +519,14 @@ export function installMockApi(server: Connect.Server) {
         let r = run(q0);
         let corrected: string | null = null, didYouMean: string | null = null;
         const found = (x: typeof r) => x.authors.length + x.series.length + x.books.length;
-        if (found(r) < 3) {
+        const names = (x: typeof r) => x.authors.length + x.series.length;
+        const wantsNames = kind !== 'books';
+        if (url.searchParams.get('exact') !== '1' && (found(r) < 3 || (wantsNames && names(r) === 0))) {
           const fixed = correct(lib, q0);
           if (fixed) {
             const alt = run(fixed);
-            if (found(r) === 0 && found(alt) > 0) { r = alt; corrected = fixed; }
+            // like the server: the corrected results replace little or no-author results
+            if ((found(r) < 3 && found(alt) > found(r)) || (wantsNames && names(r) === 0 && names(alt) > 0)) { r = alt; corrected = fixed; }
             else if (found(alt) > found(r)) didYouMean = fixed;
           }
         }

@@ -145,7 +145,7 @@ for (const scheme of ['light', 'dark'] as const) {
 
       test('search with did-you-mean', async ({ page }) => {
         await page.goto('/l/1/search?q=азимв');
-        await expect(page.getByTestId('did-you-mean')).toBeVisible();
+        await expect(page.getByTestId('search-corrected')).toBeVisible();
         await page.waitForTimeout(400);
         await page.screenshot({ path: `${DIR}/find-didyoumean-${scheme}-${size}.png` });
       });

@@ -38,7 +38,7 @@ export type Route =
   | { name: 'genres'; lib: number; id: number | null }
   | { name: 'shelvesIndex'; lib: number }
   | { name: 'shelf'; lib: number; id: number }
-  | { name: 'search'; lib: number; q: string }
+  | { name: 'search'; lib: number; q: string; exact: boolean }
   | { name: 'book'; lib: number; id: number }
   | { name: 'read'; lib: number; id: number }
   | { name: 'libraries' }
@@ -63,7 +63,7 @@ export function parseRoute(path: string, search: string): Route {
     if (rest === 'genres') return { name: 'genres', lib, id: segs[3] ? Number(segs[3]) : null };
     if (rest === 'shelves' && segs[3]) return { name: 'shelf', lib, id: Number(segs[3]) };
     if (rest === 'shelves') return { name: 'shelvesIndex', lib };
-    if (rest === 'search') return { name: 'search', lib, q: q.get('q') ?? '' };
+    if (rest === 'search') return { name: 'search', lib, q: q.get('q') ?? '', exact: q.get('exact') === '1' };
     if (rest === 'book' && segs[3]) return { name: 'book', lib, id: Number(segs[3]) };
     if (rest === 'read' && segs[3]) return { name: 'read', lib, id: Number(segs[3]) };
   }

@@ -614,8 +614,7 @@
   "home.picks": "Нові надходження з добрими оцінками",
   "home.allNew": "Усі нові надходження",
   "search.correctedTo": "Показано результати для",
-  "search.noneFor": "Нічого не знайдено за запитом",
   "search.didYouMean": "Можливо, ви мали на увазі",
-  "search.showingFor": "ПОКАЗАНО ДЛЯ",
-  "search.didYouMeanCaps": "МОЖЛИВО, ВИ МАЛИ НА УВАЗІ"
+  "search.didYouMeanCaps": "МОЖЛИВО, ВИ МАЛИ НА УВАЗІ",
+  "search.insteadFor": "Шукати натомість"
 }
