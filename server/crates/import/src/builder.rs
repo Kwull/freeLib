@@ -22,8 +22,11 @@ use freelib_catalog::normalize::{letter_of, normalize};
 use freelib_catalog::schema::{
     CATALOG_SCHEMA_VERSION, create_catalog_indexes, create_catalog_tables,
 };
-use freelib_catalog::text::{latin_text, stems_text, words, work_title_key};
+use freelib_catalog::text::{
+    latin_text, stems_text, volume_number, words, work_title_key_in_series,
+};
 use freelib_catalog::util::{now_millis, now_rfc3339};
+use freelib_catalog::works::{SeriesBook, series_number_merges};
 
 use crate::ImportError;
 use crate::inpx::{self, InpxInfo, ParseOptions, RawAuthor, RawBook};
@@ -68,6 +71,8 @@ pub struct ImportStats {
     /// Records dropped because both keys were already taken (exact duplicates).
     pub dropped_duplicates: u64,
     pub offsets_resolved: u64,
+    /// Works joined into another by the series-number rule (translations under other titles).
+    pub series_works_joined: u64,
     /// Archives referenced by the INPX but not found / unreadable in the library folder.
     pub missing_archives: Vec<String>,
     pub catalog_version: i64,
@@ -104,6 +109,8 @@ struct Prep {
     stems: String,
     latin: String,
     work_title: Option<String>,
+    /// volume / part number named by the title (`Том 1`)
+    volume: Option<u64>,
 }
 
 fn prepare(b: &RawBook) -> Prep {
@@ -120,7 +127,8 @@ fn prepare(b: &RawBook) -> Prep {
         stems: stems_text(&all),
         latin: latin_text(&all),
         keywords: normalize(&b.keywords),
-        work_title: work_title_key(&b.title),
+        work_title: work_title_key_in_series(&b.title, b.serno.filter(|_| !b.series.is_empty())),
+        volume: volume_number(&b.title),
         title,
         authors,
         series,
@@ -192,6 +200,8 @@ struct Agg {
     keys: HashSet<String>,
     /// work key (language, title key, author ids) → first book id
     works: HashMap<String, i64>,
+    /// numbered books in series, for the series-number rule (joined after the bulk load)
+    series_books: Vec<SeriesBook>,
     /// title words → live books
     vocab: HashMap<String, i64>,
     next_book_id: i64,
@@ -400,6 +410,10 @@ fn build(
     mark(&mut stats, "indexes");
     check_cancel(cancel)?;
 
+    let merged = join_series_works(&tx_conn, &mut agg)?;
+    stats.series_works_joined = merged as u64;
+    mark(&mut stats, "series works");
+
     progress(parts + 2, total, "Optimizing full-text index");
     tx_conn.execute_batch(
         "INSERT INTO book_fts(book_fts) VALUES('optimize'); \
@@ -523,17 +537,31 @@ impl<'c> Writer<'c> {
             .authors
             .iter()
             .any(|a| a.last == crate::inpx::UNKNOWN_AUTHOR);
+        let lang = b.lang.trim().to_lowercase();
         let work_id = match (&p.work_title, unknown) {
             (Some(t), false) => {
                 let mut ids = author_ids.clone();
                 ids.sort_unstable();
                 ids.dedup();
                 let ids: Vec<String> = ids.iter().map(i64::to_string).collect();
-                let key = format!("{}\x1f{t}\x1f{}", b.lang, ids.join(","));
+                let key = format!("{lang}\x1f{t}\x1f{}", ids.join(","));
                 *agg.works.entry(key).or_insert(id)
             }
             _ => id,
         };
+        if let (Some(t), false, Some(sid), Some(n)) = (&p.work_title, unknown, series_id, b.serno)
+            && n > 0
+        {
+            agg.series_books.push(SeriesBook {
+                work: work_id,
+                lang,
+                series: sid,
+                serno: n,
+                authors: author_ids.clone(),
+                title_key: t.clone(),
+                volume: p.volume,
+            });
+        }
 
         self.book.execute(params![
             id,
@@ -617,6 +645,18 @@ impl<'c> Writer<'c> {
         }
         Ok(())
     }
+}
+
+/// The series-number rule of `freelib_catalog::works` over the numbered books: rewrites the
+/// `work_id` of joined works. Returns the number of works joined into another.
+fn join_series_works(conn: &Connection, agg: &mut Agg) -> rusqlite::Result<usize> {
+    let books = std::mem::take(&mut agg.series_books);
+    let merges = series_number_merges(&books);
+    let mut st = conn.prepare("UPDATE book SET work_id=?2 WHERE work_id=?1")?;
+    for (old, new) in &merges {
+        st.execute(params![old, new])?;
+    }
+    Ok(merges.len())
 }
 
 /// Counts the words of normalized `text` (at least 3 characters with a letter) for the typo

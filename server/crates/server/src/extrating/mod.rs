@@ -710,35 +710,56 @@ struct BookQuery {
 }
 
 async fn load_query(st: &AppState, lib: i64, id: i64) -> ApiResult<BookQuery> {
-    st.catalog_call(lib, move |cat| {
-        let conn = cat.conn()?;
-        let (key, title): (String, String) = conn
-            .prepare_cached("SELECT book_key, title FROM book WHERE id=?1")?
-            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))
-            .optional()?
-            .ok_or_else(|| ApiError::not_found("book not found"))?;
-        let surnames: Vec<String> = conn
-            .prepare_cached(
-                "SELECT a.last FROM book_author ba JOIN author a ON a.id=ba.author_id \
-                 WHERE ba.book_id=?1 ORDER BY ba.pos LIMIT 3",
-            )?
-            .query_map([id], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        // "Автор неизвестен" is no author to match on
-        let surnames = surnames
-            .into_iter()
-            .filter(|s: &String| {
-                let n = freelib_catalog::normalize(s);
-                !n.is_empty() && n != "автор" && n != "unknown"
-            })
-            .collect();
-        Ok(BookQuery {
-            key,
-            version: cat.catalog_version(),
-            query: Query { title, surnames },
+    let (mut q, detail) = st
+        .catalog_call(lib, move |cat| {
+            let conn = cat.conn()?;
+            let (key, title): (String, String) = conn
+                .prepare_cached("SELECT book_key, title FROM book WHERE id=?1")?
+                .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .optional()?
+                .ok_or_else(|| ApiError::not_found("book not found"))?;
+            let surnames: Vec<String> = conn
+                .prepare_cached(
+                    "SELECT a.last FROM book_author ba JOIN author a ON a.id=ba.author_id \
+                     WHERE ba.book_id=?1 ORDER BY ba.pos LIMIT 3",
+                )?
+                .query_map([id], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            // "Автор неизвестен" is no author to match on
+            let surnames = surnames
+                .into_iter()
+                .filter(|s: &String| {
+                    let n = freelib_catalog::normalize(s);
+                    !n.is_empty() && n != "автор" && n != "unknown"
+                })
+                .collect();
+            let detail = cat.book(id)?;
+            Ok((
+                BookQuery {
+                    key,
+                    version: cat.catalog_version(),
+                    query: Query {
+                        title,
+                        surnames,
+                        isbns: Vec::new(),
+                    },
+                },
+                detail,
+            ))
         })
-    })
-    .await
+        .await?;
+    // ISBNs from the book's publish-info, when the details pane already read it (the sweep
+    // never opens book files just for this)
+    if let Some(d) = detail
+        && let Some(info) = crate::preview::cached_info(st, lib, &d).await
+    {
+        q.query.isbns = freelib_catalog::isbn::parse(&info.isbn)
+            .into_iter()
+            .map(|i| i.isbn13)
+            .take(3)
+            .collect();
+    }
+    Ok(q)
 }
 
 #[cfg(test)]

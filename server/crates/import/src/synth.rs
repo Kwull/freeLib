@@ -26,6 +26,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use freelib_catalog::genres::genres;
+use freelib_catalog::text::work_title_key_in_series;
 use freelib_catalog::util::{civil_from_days, days_from_civil};
 
 /// Generator options.
@@ -39,6 +40,8 @@ pub struct GenOptions {
     pub files_dir: Option<PathBuf>,
     /// Write an explicit `structure.info` (default order) into the INPX.
     pub structure_info: bool,
+    /// Add the fixed edition-detection showcase books (see `showcase_books`).
+    pub showcase: bool,
 }
 
 impl Default for GenOptions {
@@ -49,6 +52,7 @@ impl Default for GenOptions {
             seed: 42,
             files_dir: None,
             structure_info: true,
+            showcase: true,
         }
     }
 }
@@ -457,6 +461,7 @@ const LOREM: &[&str] = &[
 ];
 const COVER_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAADwAAABaCAIAAABrM6JiAAAAZklEQVR42u3OQQkAMAgAQJPsvYhGNMlyLIWCcHABLvLcdUJaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaeiT9KteRlpaWlpaWlpaWlpaWlpaWlpaWlm7zAUmgjIi1osSpAAAAAElFTkSuQmCC";
 
+#[derive(Clone)]
 struct Author {
     last: String,
     first: String,
@@ -600,6 +605,7 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+#[derive(Clone)]
 struct GenBook {
     authors: Vec<Author>,
     genres: Vec<String>,
@@ -615,6 +621,8 @@ struct GenBook {
     keywords: String,
     cover: bool,
     size: usize,
+    /// `<publish-info>`: publisher, year, ISBN as printed
+    publish: Option<(&'static str, &'static str, &'static str)>,
 }
 
 /// A well-known author: most of the head of the Zipf-like author distribution
@@ -1247,6 +1255,8 @@ fn make_book(seed: u64, i: usize, n: usize, pool: usize, codes: &[String]) -> Ge
     let mut authors = Vec::new();
     let mut series = String::new();
     let mut serno = None;
+    // an author's own series (not a publisher's or an anthology series): numbered by title
+    let mut own_series = false;
     let lang: &'static str;
     let mut title_s: Option<String> = None;
     let preferred: &[&str] = if kind < ANTHOLOGY_SHARE {
@@ -1328,6 +1338,7 @@ fn make_book(seed: u64, i: usize, n: usize, pool: usize, codes: &[String]) -> Ge
                     Some(s) => s.to_string(),
                     None => series_name(seed, 10_000_000 + k * 1000 + j),
                 };
+                own_series = true;
             }
             serno = Some(1 + r.below(15));
         }
@@ -1357,6 +1368,7 @@ fn make_book(seed: u64, i: usize, n: usize, pool: usize, codes: &[String]) -> Ge
             let sid = a0 * 3 + r.below(a0 % 4);
             series = series_name(seed, sid);
             serno = Some(1 + r.below(12));
+            own_series = true;
         }
         &[]
     };
@@ -1377,6 +1389,15 @@ fn make_book(seed: u64, i: usize, n: usize, pool: usize, codes: &[String]) -> Ge
         None if r.chance(0.02) => long_title(&mut r),
         None => title(&mut r, lang),
     };
+    if own_series {
+        // One number per title (editions of a title share it, other titles rarely do), so that
+        // the importer's series-number rule joins editions, not unrelated random titles.
+        let key = work_title_key_in_series(&title, None).unwrap_or_default();
+        let h = key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
+        });
+        serno = Some(1 + (h % 97) as usize);
+    }
     GenBook {
         title,
         authors,
@@ -1396,6 +1417,11 @@ fn make_book(seed: u64, i: usize, n: usize, pool: usize, codes: &[String]) -> Ge
         },
         cover: i % 3 == 0,
         size: 50_000 + r.below(2_000_000),
+        publish: match i % 5 {
+            0 => Some(("Эксмо", "2012", "978-5-699-12014-7")),
+            1 => Some(("АСТ", "2008", "5-17-012345-0; 978-5-17-012345-2")),
+            _ => None,
+        },
     }
 }
 
@@ -1436,8 +1462,17 @@ fn fb2(b: &GenBook, cover_b64: &str) -> String {
             b.serno.unwrap_or(0)
         ));
     }
+    s.push_str("</title-info>");
+    if let Some((publisher, year, isbn)) = b.publish {
+        s.push_str(&format!(
+            "<publish-info><book-name>{}</book-name><publisher>{}</publisher><year>{year}</year><isbn>{}</isbn></publish-info>",
+            esc(&b.title),
+            esc(publisher),
+            esc(isbn)
+        ));
+    }
     s.push_str(&format!(
-        "</title-info><document-info><author><nickname>gen-inpx</nickname></author><date>{}</date><id>synthetic-{}</id><version>1.0</version></document-info></description>\n",
+        "<document-info><author><nickname>gen-inpx</nickname></author><date>{}</date><id>synthetic-{}</id><version>1.0</version></document-info></description>\n",
         b.date, b.lib_id
     ));
     s.push_str(&format!("<body><title><p>{}</p></title>\n", esc(&b.title)));
@@ -1493,6 +1528,82 @@ fn inp_line(b: &GenBook, size: usize) -> String {
     s
 }
 
+/// Fixed books that show how editions are detected (lib ids 100..): Asimov's Foundation
+/// novels in several Russian translations under different titles and numbers of the series
+/// «Академия [Азимов]» (as in a real Flibusta library), unnumbered omnibus volumes, and
+/// Marinina's two-volume «Люди за спиной» (Каменская #37).
+fn showcase_books() -> Vec<GenBook> {
+    let asimov = || vec![famous_author(ASIMOV)];
+    let marinina = || {
+        vec![Author {
+            last: "Маринина".into(),
+            first: "Александра".into(),
+            middle: "Борисовна".into(),
+        }]
+    };
+    const A: &str = "Академия [Азимов]";
+    const K: &str = "Каменская";
+    let rows: Vec<(&str, &str, Option<usize>, bool)> = vec![
+        ("Прелюдия к Академии", A, Some(1), true),
+        ("Прелюдия к Основанию", A, Some(1), true),
+        ("Миры Айзека Азимова. Книга 5", A, Some(1), true),
+        ("Академия", A, Some(3), true),
+        ("Основание", A, Some(3), true),
+        ("Основание (другой перевод)", A, Some(3), true),
+        ("Установление", A, Some(3), true),
+        ("Фонд", A, Some(2), true),
+        ("Фонд [litres]", A, Some(2), true),
+        ("Второй Фонд", A, Some(5), true),
+        ("Дублеры", A, Some(5), true),
+        ("Академия на краю гибели", A, Some(6), true),
+        ("Академия на краю гибели", A, Some(6), true),
+        ("Академия на краю гибели (fb2)", A, Some(6), true),
+        ("Край Основания", A, Some(6), true),
+        ("Миры Айзека Азимова. Книга 9", A, Some(6), true),
+        ("Сообщество на краю", A, Some(6), true),
+        ("Академия и Земля", A, Some(7), true),
+        ("Академия и Земля", A, Some(7), true),
+        ("Миры Айзека Азимова. Книга 10", A, Some(7), true),
+        ("Основание и Земля", A, Some(7), true),
+        ("Сообщество и Земля", A, Some(7), true),
+        ("Страхи Академии", A, Some(8), true),
+        ("Академия и Хаос", A, Some(9), true),
+        ("Триумф Академии", A, Some(10), true),
+        ("Академия. Книги 1-7", A, None, true),
+        ("Академия. Начало", A, None, true),
+        ("Академия. Первая трилогия", A, None, true),
+        ("Миры Айзека Азимова. Книга 7", A, None, true),
+        ("Путь к Академии", A, None, true),
+        ("Люди за спиной. Том 1", K, Some(37), false),
+        ("Люди за спиной, том 1", K, Some(37), false),
+        ("Люди за спиной. Том 2", K, Some(37), false),
+    ];
+    rows.into_iter()
+        .enumerate()
+        .map(|(j, (title, series, serno, is_asimov))| GenBook {
+            authors: if is_asimov { asimov() } else { marinina() },
+            genres: vec![if is_asimov { "sf" } else { "det_police" }.to_string()],
+            title: title.to_string(),
+            series: series.to_string(),
+            serno,
+            lib_id: 100 + j,
+            deleted: false,
+            ext: "fb2",
+            date: format!("20{:02}-0{}-1{}", 8 + j % 10, 1 + j % 9, j % 10),
+            lang: "ru",
+            stars: if j % 3 == 0 { 4 } else { 0 },
+            keywords: String::new(),
+            cover: j % 2 == 0,
+            size: 300_000 + j * 17_000,
+            publish: match j % 3 {
+                0 => Some(("Эксмо", "2018", "978-5-699-12014-7")),
+                1 => Some(("АСТ", "2012", "ISBN 5-17-012345-0")),
+                _ => None,
+            },
+        })
+        .collect()
+}
+
 /// Generate `out` (an `.inpx`) and, optionally, the archives.
 pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
     let n = opts.books;
@@ -1504,6 +1615,12 @@ pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
         .flat_map(|g| g.keys.iter().cloned())
         .collect();
     let parts = n.div_ceil(per);
+    // the last part also carries the showcase books
+    let showcase = if opts.showcase {
+        showcase_books()
+    } else {
+        Vec::new()
+    };
     if let Some(dir) = &opts.files_dir {
         std::fs::create_dir_all(dir)?;
     }
@@ -1524,8 +1641,9 @@ pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
             let zopts = SimpleFileOptions::default()
                 .compression_method(CompressionMethod::Deflated)
                 .compression_level(Some(1));
-            for i in lo..hi {
-                let b = make_book(opts.seed, i, n, pool, &codes);
+            let extra: &[GenBook] = if p + 1 == parts { &showcase } else { &[] };
+            let made = (lo..hi).map(|i| make_book(opts.seed, i, n, pool, &codes));
+            for b in made.chain(extra.iter().cloned()) {
                 let size = if let Some(z) = zw.as_mut() {
                     let content: Vec<u8> = if b.ext == "fb2" {
                         fb2(&b, COVER_PNG_B64).into_bytes()
@@ -1566,7 +1684,7 @@ pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
         zw.write_all(crate::inpx::DEFAULT_STRUCTURE.as_bytes())?;
     }
     let mut stats = GenStats {
-        books: n,
+        books: n + showcase.len(),
         parts,
         author_pool: pool,
         file_bytes: 0,

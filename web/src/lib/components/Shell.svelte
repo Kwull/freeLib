@@ -13,12 +13,15 @@
   import { navigate, currentRoute } from '../router.svelte';
   import { shelvesState } from '../stores/shelves.svelte';
   import Splitter from './Splitter.svelte';
+  import { dismissable } from '../utils/dismiss';
   import { PANE_LIMITS, paneWidth, setPaneWidth } from '../stores/layout.svelte';
 
   let { children }: { children: Snippet } = $props();
 
   let libMenuOpen = $state(false);
   let accountMenuOpen = $state(false);
+  let libBtn = $state<HTMLButtonElement | undefined>();
+  let accountBtn = $state<HTMLButtonElement | undefined>();
   const lib = $derived(currentLibrary());
   const route = $derived(currentRoute());
 
@@ -48,13 +51,13 @@
     {/if}
     {#if librariesState.items.length}
       <div class="lib-switch">
-        <button type="button" onclick={() => (libMenuOpen = !libMenuOpen)} aria-haspopup="true" aria-expanded={libMenuOpen}>
+        <button type="button" bind:this={libBtn} onclick={() => (libMenuOpen = !libMenuOpen)} aria-haspopup="true" aria-expanded={libMenuOpen}>
           <span class="dot {statusClass(lib)}" title={lib ? t(`libraries.status.${lib.status.state}`) : ''}></span>
           <span class="lib-name">{lib?.name ?? ''}</span>
           <Icon name="chevronDown" size={16} />
         </button>
         {#if libMenuOpen}
-          <div class="menu" role="menu">
+          <div class="menu" role="menu" aria-label={t('nav.libraries')} use:dismissable={{ onClose: () => (libMenuOpen = false), trigger: () => libBtn }}>
             {#each librariesState.items as l (l.id)}
               <button
                 type="button"
@@ -69,16 +72,16 @@
     {#if lib && isBrowsable(lib)}<GlobalSearch lib={lib.id} />
     {:else if !librariesState.loaded && !librariesState.error}<span class="sk sk-search" aria-hidden="true"></span>{/if}
     <div class="grow"></div>
-    <button type="button" class="icon-btn" aria-label="Activity" onclick={() => toggleActivity()}>
+    <button type="button" class="icon-btn activity-btn" aria-label="Activity" aria-expanded={jobsState.activityOpen} onclick={() => toggleActivity()}>
       <Icon name="activity" size={20} strokeWidth={1.8} />
       {#if runningCount() > 0}<span class="badge"></span>{/if}
     </button>
     <div class="account">
-      <button type="button" class="avatar" aria-label="Account" onclick={() => (accountMenuOpen = !accountMenuOpen)}>
+      <button type="button" class="avatar" bind:this={accountBtn} aria-label="Account" aria-haspopup="true" aria-expanded={accountMenuOpen} onclick={() => (accountMenuOpen = !accountMenuOpen)}>
         {(sessionState.user?.username ?? '?').charAt(0).toUpperCase()}
       </button>
       {#if accountMenuOpen}
-        <div class="menu" role="menu">
+        <div class="menu" role="menu" aria-label={t('account.menu')} use:dismissable={{ onClose: () => (accountMenuOpen = false), trigger: () => accountBtn }}>
           <div class="menu-section">{t('account.theme')}</div>
           <div class="seg">
             <button type="button" class:on={themeState.value === 'light'} onclick={() => setTheme('light')}>{t('theme.light')}</button>

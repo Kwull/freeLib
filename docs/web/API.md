@@ -69,6 +69,16 @@ type BookDetail = Book & {
     source: "openlibrary"; status: "found" | "not_found" | "error";
     average: number | null; count: number; workKey: string | null; url: string | null; fetchedAt: string;
   } | null;
+  // from the FB2 <publish-info> (read with the annotation; empty / null for other formats or when absent)
+  isbn: Isbn[];                    // valid ISBNs (checksum verified), in the order printed, an ISBN-10 and its ISBN-13 once
+  isbnRaw: string | null;          // the field as printed when it holds no valid ISBN (shown as unverified)
+  publisher: string | null;
+  publishYear: string | null;      // as printed, usually a year
+};
+type Isbn = {
+  isbn13: string;                  // 13 digits, no separators
+  isbn10: string | null;           // 10 characters (last may be "X"); null for 979- ISBNs
+  display: string;                 // as printed when it was printed as a hyphenated ISBN-13, else the bare ISBN-13
 };
 type Genre = { id: number; name: string; parent: number /*0 = top*/; count: number };
 type AuthorSummary = {             // GET /libraries/:lib/authors/:id/summary; live books only
@@ -249,11 +259,16 @@ type HomeResponse = {
 
 ### Editions
 
-The importer gives every book a work: same language, same title without trailing edition notes (`(другой перевод)`,
-`[иллюстрации]`, `(СИ)`, `(пер. …)`, `(ред. …)`; other bracketed text such as `(Часть 2)` or `(сборник)` is kept),
-same set of authors. Books by "Автор неизвестен" and generic titles ("Избранное", "Рассказы", "Стихотворения", …) are
-never grouped. A grouped list shows each work once, at the position of its first edition in the list, as its **best
-copy**: not deleted > has a cover (as far as the server knows — covers are known for books whose preview was
+The importer gives every book a work (full rules: ARCHITECTURE.md, "Editions: how works are detected"): same
+language and same set of authors, and either the same title without trailing edition notes (`(другой перевод)`,
+`[иллюстрации]`, `(СИ)`, `(пер. …)`, `(ред. …)`, `[litres]`, `(fb2)`; other bracketed text such as `(Часть 2)` or
+`(сборник)` is kept; `Книга N` dropped only when it repeats the series number), or the same series and series number
+(> 0), different titles allowed (translations under other titles), unless the titles name different volumes or the
+series numbering looks unreliable. Books by "Автор неизвестен" and generic titles ("Избранное", "Рассказы",
+"Стихотворения", …) are never grouped by title. Editions of one work can therefore have different titles: an
+`Edition`'s own `title` is what the edition list shows. A grouped list shows each work once, at the position of its
+first edition in the list, as its **best copy**: not deleted > title names no volume (not an omnibus `Книга 9`) >
+has a cover (as far as the server knows — covers are known for books whose preview was
 extracted since the server started) > FB2 > EPUB > other > larger file (20 % steps, capped at 30 MB) > newer date >
 higher library rating > lower id. Sending or downloading a grouped row uses that id; any edition can be picked instead.
 
@@ -348,7 +363,7 @@ these endpoints answer 404. Public clients only (`token_endpoint_auth_method: no
 |---|---|---|
 | `list_libraries` | read | – |
 | `search_books` | read | `query`, `author`/`author_id`, `series`/`series_id`, `genre`/`genre_id`, `language`, `added_after`, `added_before`, `min_my_rating`, `min_library_rating`, `min_openlibrary_rating`, `min_openlibrary_votes`, `unrated_by_me`, `kids_max_age`, `sort` (`relevance`\|`date`\|`my_rating`\|`library_rating`\|`openlibrary_rating`), `limit` ≤ 50, `cursor` → one result per work (`editions`, `otherEditionIds`), `corrected` when a typo was fixed; the query matches like `GET search` |
-| `get_book` | read | `id` → authors, series + number, genres, language, added, size, format, formats, annotation (plain text ≤ 4000 chars), keywords, my / library / Open Library rating, kids age, my shelves, `myHistory {lastSent, lastDownloaded, lastRead}` |
+| `get_book` | read | `id` → authors, series + number, genres, language, added, size, format, formats, annotation (plain text ≤ 4000 chars), keywords, `isbn` (valid ISBN-13s), `publisher`, `publishYear` (when the FB2 has them), my / library / Open Library rating, kids age, my shelves, `myHistory {lastSent, lastDownloaded, lastRead}` |
 | `get_author` | read | `id` or `name` → counts, series, genres, languages, years, co-authors, best-rated books |
 | `list_author_books` | read | `author_id`, `sort`, `limit` ≤ 100, `cursor` |
 | `get_series` | read | `id` or `name` → books in order with my actions, `nextUnread` |

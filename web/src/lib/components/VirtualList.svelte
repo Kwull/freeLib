@@ -63,6 +63,18 @@
     onScrollX?.(viewport.scrollLeft);
   }
 
+  /** Current horizontal scroll (the book table's header follows it). */
+  export function scrollLeft(): number {
+    return viewport?.scrollLeft ?? 0;
+  }
+
+  // Fewer rows (a group collapsed, "Collapse all", a filter): the browser clamps scrollTop;
+  // pick that up at once so the rendered window never points past the end.
+  $effect(() => {
+    total;
+    if (viewport && viewport.scrollTop !== scrollTop) scrollTop = viewport.scrollTop;
+  });
+
   /** Back to the left edge (a new sort or filter). */
   export function resetX() {
     if (viewport && viewport.scrollLeft !== 0) {

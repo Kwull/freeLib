@@ -34,7 +34,8 @@
           <span class="date" class:hl={differs((x) => x.date)}>{formatDate(e.date, i18nState.lang)}</span>
           {#if differs((x) => x.lang)}<span class="lang hl">{e.lang}</span>{/if}
           {#if e.libRating}<span class="lib" title={t('ratings.libTooltip', { n: e.libRating })}>★{e.libRating}</span>{/if}
-          <span class="note">{e.note ?? (differs((x) => x.title) ? e.title : '')}</span>
+          {#if differs((x) => x.title)}<span class="etitle" data-testid="edition-title">{e.title}</span>{/if}
+          {#if e.note}<span class="note">{e.note}</span>{/if}
           {#if i === 0}<span class="best" title={t('editions.bestHint')}>{t('editions.best')}</span>{/if}
           {#if e.deleted}<span class="del">{t('books.deleted')}</span>{/if}
         </button>
@@ -54,13 +55,14 @@
   .ed.deleted { opacity: .6; }
   .pick { all: unset; flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted-2); cursor: pointer; }
   .pick:focus-visible { outline: 2px solid var(--focus); }
-  .pick:hover .note { color: var(--accent); }
+  .pick:hover .etitle { color: var(--accent); }
   .fmt { font-weight: 600; min-width: 36px; }
   .size { min-width: 60px; text-align: right; font-variant-numeric: tabular-nums; }
   .date { min-width: 84px; font-variant-numeric: tabular-nums; }
   .hl { color: var(--ink); font-weight: 600; }
   .lib { color: var(--amber); }
-  .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--ink); }
+  .etitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--ink); flex: 0 1 auto; }
+  .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--muted-2); flex: 0 10 auto; }
   .best { flex-shrink: 0; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-soft-ink); }
   .del { flex-shrink: 0; font-size: 11px; color: var(--danger); }
   .send { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 28px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); }

@@ -1,5 +1,6 @@
 import { mulberry32, pick, int } from './rng';
 import { normalize, letterOf } from './normalize';
+import { indexWorks } from './find';
 import {
   SURNAMES, FIRST_NAMES_M, FIRST_NAMES_F, PATRONYMIC_M, PATRONYMIC_F,
   SERIES_WORDS_A, SERIES_WORDS_B, TITLE_WORDS_A, TITLE_WORDS_B, GENRES, LANGS, EXTS,
@@ -315,6 +316,47 @@ export function generateLibrary(id: number, seed: number): MockLibrary {
     ['Книга о книгах', [azimov], null, null, 'fb2', 300_000, '2026-09-21'],
     ['Записки на полях', [azimov], null, null, 'fb2', 200_000, '2021-01-01', 'азимвв'],
   ];
+  // Asimov's Foundation novels in several Russian translations under different titles and
+  // numbers (as in a real Flibusta library), unnumbered omnibus volumes, and a two-volume
+  // novel: the importer's edition rules (docs/web/ARCHITECTURE.md, "Editions").
+  const academy = addSeries('Академия [Азимов]');
+  const marinina = addAuthor('Маринина Александра');
+  const kamenskaya = addSeries('Каменская');
+  curated.push(
+    ['Прелюдия к Академии', [azimov], academy, 1, 'fb2', 764_000, '2018-07-09'],
+    ['Прелюдия к Основанию', [azimov], academy, 1, 'fb2', 429_000, '2012-11-15'],
+    ['Миры Айзека Азимова. Книга 5', [azimov], academy, 1, 'fb2', 2_900_000, '2010-02-02'],
+    ['Академия', [azimov], academy, 3, 'fb2', 380_000, '2016-03-01'],
+    ['Основание', [azimov], academy, 3, 'fb2', 402_000, '2011-05-01'],
+    ['Основание (другой перевод)', [azimov], academy, 3, 'epub', 450_000, '2019-05-01', 'перевод Н. Сосновской'],
+    ['Установление', [azimov], academy, 3, 'fb2', 350_000, '2009-01-20'],
+    ['Фонд', [azimov], academy, 2, 'fb2', 390_000, '2015-01-01'],
+    ['Фонд [litres]', [azimov], academy, 2, 'fb2', 395_000, '2021-01-01'],
+    ['Второй Фонд', [azimov], academy, 5, 'fb2', 420_000, '2014-04-04'],
+    ['Дублеры', [azimov], academy, 5, 'fb2', 410_000, '2008-08-08'],
+    ['Академия на краю гибели', [azimov], academy, 6, 'fb2', 610_000, '2017-06-01'],
+    ['Академия на краю гибели', [azimov], academy, 6, 'fb2', 598_000, '2013-06-01'],
+    ['Академия на краю гибели (fb2)', [azimov], academy, 6, 'fb2', 605_000, '2020-06-01'],
+    ['Край Основания', [azimov], academy, 6, 'fb2', 640_000, '2012-02-01'],
+    ['Миры Айзека Азимова. Книга 9', [azimov], academy, 6, 'fb2', 3_100_000, '2010-03-03'],
+    ['Сообщество на краю', [azimov], academy, 6, 'fb2', 590_000, '2007-09-09'],
+    ['Академия и Земля', [azimov], academy, 7, 'fb2', 700_000, '2017-07-01'],
+    ['Академия и Земля', [azimov], academy, 7, 'epub', 720_000, '2022-07-01'],
+    ['Миры Айзека Азимова. Книга 10', [azimov], academy, 7, 'fb2', 3_000_000, '2010-04-04'],
+    ['Основание и Земля', [azimov], academy, 7, 'fb2', 690_000, '2012-12-12'],
+    ['Сообщество и Земля', [azimov], academy, 7, 'fb2', 680_000, '2007-10-10'],
+    ['Страхи Академии', [azimov], academy, 8, 'fb2', 500_000, '2016-01-15'],
+    ['Академия и Хаос', [azimov], academy, 9, 'fb2', 520_000, '2016-02-15'],
+    ['Триумф Академии', [azimov], academy, 10, 'fb2', 530_000, '2016-03-15'],
+    ['Академия. Книги 1-7', [azimov], academy, null, 'fb2', 4_800_000, '2019-09-09'],
+    ['Академия. Начало', [azimov], academy, null, 'fb2', 1_200_000, '2020-01-01'],
+    ['Академия. Первая трилогия', [azimov], academy, null, 'fb2', 1_900_000, '2018-01-01'],
+    ['Миры Айзека Азимова. Книга 7', [azimov], academy, null, 'fb2', 2_800_000, '2010-05-05'],
+    ['Путь к Академии', [azimov], academy, null, 'fb2', 300_000, '2021-05-05'],
+    ['Люди за спиной. Том 1', [marinina], kamenskaya, 37, 'fb2', 820_000, '2024-01-10'],
+    ['Люди за спиной, том 1', [marinina], kamenskaya, 37, 'fb2', 810_000, '2023-11-10'],
+    ['Люди за спиной. Том 2', [marinina], kamenskaya, 37, 'fb2', 790_000, '2024-02-10'],
+  );
   for (const [title, aids, sid, serno, ext, size, date, keywords] of curated) {
     addBook({
       id: nextId, key: `ru:${nextId}`, title, sortKey: normalize(title),
@@ -331,8 +373,10 @@ export function generateLibrary(id: number, seed: number): MockLibrary {
   const al = nameList(authors.slice().sort(byKey));
   const sl = nameList(series.slice().sort(byKey));
 
-  return {
+  const lib: MockLibrary = {
     id, authors, series, genres, books, booksByAuthor, booksBySeries, bookById,
     authorRows: al.rows, seriesRows: sl.rows, authorLetters: al.letters, seriesLetters: sl.letters,
   };
+  indexWorks(lib);
+  return lib;
 }

@@ -8,7 +8,9 @@ use rusqlite::Connection;
 /// 2: sort keys fold accented Latin letters (`Čapek` sorts and indexes under `C`).
 /// 3: stems and Latin keys in the FTS tables, `vocab` (typo tolerance), `book.work_id`
 ///    (editions of one work).
-pub const CATALOG_SCHEMA_VERSION: i64 = 3;
+/// 4: better edition detection: `work_id` also joins translations under other titles by
+///    series number, title keys drop format notes / repeated volume numbers (re-import).
+pub const CATALOG_SCHEMA_VERSION: i64 = 4;
 
 /// Catalog tables. Created on an empty database by the importer *before* the bulk load;
 /// indexes ([`CATALOG_INDEXES`]) are created afterwards.

@@ -13,6 +13,7 @@
   import { navigate } from '../router.svelte';
   import { defaultDevice, devicesState, deviceVerb, deviceCaption, appleBooksDevice, openInBooks } from '../stores/devices.svelte';
   import PhoneDialog from './PhoneDialog.svelte';
+  import { dismissable } from '../utils/dismiss';
   import { isIOS } from '../utils/platform';
   import { showToast } from '../stores/toast.svelte';
   import { shelvesState } from '../stores/shelves.svelte';
@@ -59,6 +60,15 @@
   });
   $effect(() => { summary?.id; allSeries = false; });
 
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(t('tokens.copied'));
+    } catch {
+      showToast(t('tokens.copyFailed'), 'error');
+    }
+  }
+
   async function rate(v: number) {
     if (!detail) return;
     detail = { ...detail, rating: v };
@@ -68,6 +78,8 @@
 
   const dev = $derived(defaultDevice());
   let deviceMenuOpen = $state(false);
+  let deviceBtn = $state<HTMLButtonElement | undefined>();
+  let downloadBtn = $state<HTMLButtonElement | undefined>();
   let phoneOpen = $state(false);
   let opening = $state(false);
   // on iPhone/iPad the Apple Books device becomes the primary action: "Open in Books"
@@ -170,11 +182,11 @@
                 <button type="button" class="primary main" data-testid="open-in-books" aria-describedby="send-caption" disabled={opening} onclick={openBooks}>
                   <Icon name="read" size={16} /><span class="ellipsis">{opening ? t('books.opening') : t('books.openInBooks')}</span>
                 </button>
-                <button type="button" class="primary chev" aria-label={t('details.otherDevice')} title={t('details.otherDevice')} aria-haspopup="true" aria-expanded={deviceMenuOpen} onclick={() => { deviceMenuOpen = !deviceMenuOpen; downloadMenuOpen = false; }}>
+                <button type="button" class="primary chev" bind:this={deviceBtn} aria-label={t('details.otherDevice')} title={t('details.otherDevice')} aria-haspopup="true" aria-expanded={deviceMenuOpen} onclick={() => { deviceMenuOpen = !deviceMenuOpen; downloadMenuOpen = false; }}>
                   <Icon name="chevronDown" size={14} />
                 </button>
                 {#if deviceMenuOpen}
-                  <div class="dl-menu dev-menu" role="menu">
+                  <div class="dl-menu dev-menu" role="menu" aria-label={t('details.otherDevice')} use:dismissable={{ onClose: () => (deviceMenuOpen = false), trigger: () => deviceBtn }}>
                     {#each devicesState.items as d (d.id)}
                       <button type="button" role="menuitem" onclick={() => { deviceMenuOpen = false; onSend([detail!.id], d.id); }}>
                         <span class="verb">{t(`device.action.${deviceVerb(d)}`)}</span><span class="muted">{deviceCaption(d)}</span>
@@ -191,11 +203,11 @@
                 <button type="button" class="primary main" data-testid="quick-send" title={deviceCaption(dev)} aria-describedby="send-caption" onclick={() => onSend([detail!.id], dev.id)}>
                   <Icon name={deviceVerb(dev) === 'send' ? 'send' : 'download'} size={16} /><span class="ellipsis">{t(`device.action.${deviceVerb(dev)}`)}</span>
                 </button>
-                <button type="button" class="primary chev" aria-label={t('details.otherDevice')} title={t('details.otherDevice')} aria-haspopup="true" aria-expanded={deviceMenuOpen} onclick={() => { deviceMenuOpen = !deviceMenuOpen; downloadMenuOpen = false; }}>
+                <button type="button" class="primary chev" bind:this={deviceBtn} aria-label={t('details.otherDevice')} title={t('details.otherDevice')} aria-haspopup="true" aria-expanded={deviceMenuOpen} onclick={() => { deviceMenuOpen = !deviceMenuOpen; downloadMenuOpen = false; }}>
                   <Icon name="chevronDown" size={14} />
                 </button>
                 {#if deviceMenuOpen}
-                  <div class="dl-menu dev-menu" role="menu">
+                  <div class="dl-menu dev-menu" role="menu" aria-label={t('details.otherDevice')} use:dismissable={{ onClose: () => (deviceMenuOpen = false), trigger: () => deviceBtn }}>
                     {#each devicesState.items as d (d.id)}
                       <button type="button" role="menuitem" onclick={() => { deviceMenuOpen = false; onSend([detail!.id], d.id); }}>
                         <span class="verb">{t(`device.action.${deviceVerb(d)}`)}</span><span class="muted">{deviceCaption(d)}</span>
@@ -208,11 +220,11 @@
             </div>
           {/if}
           <div class="dl-wrap">
-            <button type="button" class="secondary icon-only" aria-label={t('details.downloadAs')} title={t('details.downloadAs')} aria-haspopup="true" aria-expanded={downloadMenuOpen} onclick={() => (downloadMenuOpen = !downloadMenuOpen)}>
+            <button type="button" class="secondary icon-only" bind:this={downloadBtn} aria-label={t('details.downloadAs')} title={t('details.downloadAs')} aria-haspopup="true" aria-expanded={downloadMenuOpen} onclick={() => (downloadMenuOpen = !downloadMenuOpen)}>
               <Icon name="download" size={16} /><Icon name="chevronDown" size={14} />
             </button>
             {#if downloadMenuOpen}
-              <div class="dl-menu" role="menu">
+              <div class="dl-menu" role="menu" aria-label={t('details.downloadAs')} use:dismissable={{ onClose: () => (downloadMenuOpen = false), trigger: () => downloadBtn }}>
                 {#each detail.formats as f (f)}
                   <a href={api.fileUrl(lib, detail.id, f)} data-link={false} role="menuitem" onclick={() => (downloadMenuOpen = false)}>{f === 'original' ? `${t('details.original')} (${detail.ext})` : f}</a>
                 {/each}
@@ -252,6 +264,27 @@
 
         <dl class="meta-list">
           <dt>{t('details.added')}</dt><dd>{formatDate(detail.date, i18nState.lang)}</dd>
+          {#if detail.isbn?.length || detail.isbnRaw}
+            <dt>{t('details.isbn')}</dt>
+            <dd class="isbn-cell" data-testid="isbn">
+              {#each detail.isbn ?? [] as i (i.isbn13)}
+                <span class="isbn-line">
+                  <span class="isbn">{i.display}</span>
+                  <button type="button" class="copy-btn" aria-label={t('details.copyIsbn', { isbn: i.isbn13 })} title={t('details.copyIsbn', { isbn: i.isbn13 })} onclick={() => copyText(i.isbn13)}>
+                    <Icon name="copy" size={13} />
+                  </button>
+                  {#if i.isbn10}<span class="muted small isbn10" title={t('details.isbn10', { isbn: i.isbn10 })}>ISBN-10 {i.isbn10}</span>{/if}
+                </span>
+              {/each}
+              {#if !detail.isbn?.length && detail.isbnRaw}
+                <span class="isbn-line"><span class="ellipsis" title={detail.isbnRaw}>{detail.isbnRaw}</span><span class="muted small">{t('details.isbnUnverified')}</span></span>
+              {/if}
+            </dd>
+          {/if}
+          {#if detail.publisher || detail.publishYear}
+            <dt>{t('details.publisher')}</dt>
+            <dd data-testid="publisher">{[detail.publisher, detail.publishYear].filter(Boolean).join(', ')}</dd>
+          {/if}
           <dt>{t('ratings.my')}</dt><dd data-testid="my-rating"><Rating value={detail.rating} onChange={rate} /></dd>
           <dt>{t('ratings.lib')}</dt>
           <dd data-testid="lib-rating" title={t('ratings.libSource')}>
@@ -423,6 +456,13 @@
   .meta-list { margin: 18px 24px 24px; padding-top: 14px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 96px minmax(0,1fr); row-gap: 8px; font-size: 13px; }
   .meta-list dt { color: var(--muted); }
   .meta-list dd { margin: 0; }
+  .isbn-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .isbn-line { display: flex; align-items: center; flex-wrap: wrap; column-gap: 6px; min-width: 0; }
+  .isbn10 { flex-basis: 100%; font-variant-numeric: tabular-nums; }
+  .isbn { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .copy-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px; padding: 0; border: none; border-radius: 4px; background: transparent; color: var(--muted); flex-shrink: 0; }
+  .copy-btn:hover { background: var(--surface-hover); color: var(--ink); }
+  .copy-btn:focus-visible { outline: 2px solid var(--focus); }
   .shelves-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .link-btn { all: unset; color: var(--accent); font-size: 12px; cursor: pointer; }

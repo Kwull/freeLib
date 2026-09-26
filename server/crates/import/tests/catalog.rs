@@ -63,6 +63,7 @@ fn generated_catalog_end_to_end() {
     let gs = generate(
         &inpx,
         &GenOptions {
+            showcase: false,
             books: 3000,
             per_archive: 500,
             seed: 11,
@@ -1061,4 +1062,93 @@ fn name_lists_fold_diacritics_and_put_non_letters_last() {
         "author names match too (Čapek, Capek, anthology)"
     );
     assert!(p.next_cursor.is_some());
+}
+
+#[test]
+fn showcase_editions_are_grouped() {
+    let dir = tempfile::tempdir().unwrap();
+    let inpx = dir.path().join("lib.inpx");
+    generate(
+        &inpx,
+        &GenOptions {
+            showcase: true,
+            books: 300,
+            per_archive: 500,
+            seed: 3,
+            files_dir: None,
+            structure_info: true,
+        },
+    )
+    .unwrap();
+    let db = dir.path().join("lib_1.db");
+    let opts = ImportOptions {
+        inpx,
+        db_path: db.clone(),
+        ..Default::default()
+    };
+    let stats = import_inpx(&opts, &|_, _, _: &str| {}, &AtomicBool::new(false)).unwrap();
+    assert!(
+        stats.series_works_joined >= 10,
+        "{}",
+        stats.series_works_joined
+    );
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let work = |title: &str| -> Vec<i64> {
+        conn.prepare("SELECT work_id FROM book WHERE title=?1 AND id IN (SELECT book_id FROM book_author ba JOIN author a ON a.id=ba.author_id WHERE a.last IN ('Азимов','Маринина'))")
+            .unwrap()
+            .query_map([title], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    let one = |t: &str| {
+        let v = work(t);
+        assert!(!v.is_empty(), "{t}");
+        v[0]
+    };
+    for group in [
+        &["Второй Фонд", "Дублеры"][..],
+        &[
+            "Академия на краю гибели",
+            "Академия на краю гибели (fb2)",
+            "Край Основания",
+            "Миры Айзека Азимова. Книга 9",
+            "Сообщество на краю",
+        ],
+        &[
+            "Академия и Земля",
+            "Миры Айзека Азимова. Книга 10",
+            "Основание и Земля",
+            "Сообщество и Земля",
+        ],
+        &["Люди за спиной. Том 1", "Люди за спиной, том 1"],
+        &["Фонд", "Фонд [litres]"],
+    ] {
+        let w = one(group[0]);
+        for t in group {
+            assert!(
+                work(t).iter().all(|&x| x == w),
+                "{t} not in the work of {}",
+                group[0]
+            );
+        }
+    }
+    assert_ne!(one("Люди за спиной. Том 1"), one("Люди за спиной. Том 2"));
+    assert_ne!(one("Страхи Академии"), one("Академия и Хаос"));
+    assert_ne!(one("Академия на краю гибели"), one("Академия и Земля"));
+    for t in [
+        "Академия. Книги 1-7",
+        "Академия. Начало",
+        "Академия. Первая трилогия",
+        "Миры Айзека Азимова. Книга 7",
+        "Путь к Академии",
+    ] {
+        let w = one(t);
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM book WHERE work_id=?1", [w], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 1, "{t}");
+    }
 }

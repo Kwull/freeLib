@@ -3,6 +3,7 @@
   import { jobsState, toggleActivity, cancelJob, retryJob, clearFinished } from '../stores/jobs.svelte';
   import { api, errorText } from '../api/client';
   import { t } from '../i18n';
+  import { dismissable } from '../utils/dismiss';
   import { showToast } from '../stores/toast.svelte';
   import { formatSize } from '../utils/format';
   import type { Job, JobItem } from '../api/types';
@@ -40,7 +41,8 @@
 
 {#if jobsState.activityOpen}
   <div class="scrim" onclick={() => toggleActivity(false)} role="presentation"></div>
-  <aside class="panel" aria-label={t('activity.title')}>
+  <aside class="panel" aria-label={t('activity.title')}
+    use:dismissable={{ onClose: () => toggleActivity(false), trigger: () => document.querySelector<HTMLElement>('.activity-btn') }}>
     <div class="head">
       <h2>{t('activity.title')}</h2>
       <button type="button" class="link-btn" onclick={() => clearFinished()}>{t('activity.clearFinished')}</button>
