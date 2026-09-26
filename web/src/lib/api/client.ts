@@ -138,9 +138,10 @@ export const api = {
     `${BASE}/libraries/${lib}/books/${id}/file${qs({ format, device: opts?.device, inline: opts?.inline ? 1 : undefined })}`,
   search: (lib: number, params: {
     q: string; kind?: 'all' | 'books' | 'authors' | 'series'; genre?: string; lang?: string;
-    ext?: string; from?: string; to?: string; limit?: number; group?: boolean;
+    ext?: string; from?: string; to?: string; limit?: number; group?: boolean; exact?: boolean;
   } & RatingParams) => request<SearchResponse>(`/libraries/${lib}/search${qs({
     ...params, unratedByMe: params.unratedByMe ? 1 : undefined, group: params.group ? 1 : undefined,
+    exact: params.exact ? 1 : undefined,
   })}`),
   languages: (lib: number) => request<[string, number][]>(`/languages${qs({ lib })}`),
   setRating: (lib: number, id: number, rating: number) =>

@@ -650,8 +650,7 @@
   "home.picks": "Новые поступления с хорошей оценкой",
   "home.allNew": "Все новые поступления",
   "search.correctedTo": "Показаны результаты для",
-  "search.noneFor": "Ничего не найдено по запросу",
   "search.didYouMean": "Возможно, вы имели в виду",
-  "search.showingFor": "ПОКАЗАНО ДЛЯ",
-  "search.didYouMeanCaps": "ВОЗМОЖНО, ВЫ ИМЕЛИ В ВИДУ"
+  "search.didYouMeanCaps": "ВОЗМОЖНО, ВЫ ИМЕЛИ В ВИДУ",
+  "search.insteadFor": "Искать вместо этого"
 }

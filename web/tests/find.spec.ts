@@ -85,18 +85,21 @@ test('search: word forms, transliteration, typo correction and did-you-mean', as
   await expect(page.getByTestId('search-corrected')).toContainText('стругацкий');
   await expect(page.locator('.series-card', { hasText: 'Стругацкий Аркадий' }).first()).toBeVisible();
 
-  // little found → "Did you mean"
+  // little found and no author → the corrected results, with a way back to the query as typed
   await page.goto('/l/1/search?q=азимв');
-  const dym = page.getByTestId('did-you-mean');
-  await expect(dym).toContainText('Did you mean');
-  await dym.getByRole('link', { name: 'азимов' }).click();
-  await expect(page).toHaveURL(/q=%D0%B0%D0%B7%D0%B8%D0%BC%D0%BE%D0%B2/);
+  await expect(page.getByTestId('search-corrected')).toContainText('Showing results for азимов');
   await expect(page.locator('.series-card', { hasText: 'Азимов Айзек' }).locator('mark')).toHaveText('Азимов');
+  await page.getByTestId('search-exact').click();
+  await expect(page).toHaveURL(/exact=1/);
+  await expect(page.getByTestId('search-book')).toHaveCount(1);
+  await expect(page.getByTestId('search-book')).toContainText('Записки на полях');
+  await expect(page.getByTestId('search-corrected')).toHaveCount(0);
 
-  // the typeahead offers the correction too
+  // the typeahead shows the corrected results too
   await page.goto('/l/1/authors');
-  await page.getByRole('combobox').fill('Сругацкий');
-  await expect(page.getByTestId('typeahead-fix')).toHaveText('стругацкий');
+  await page.getByRole('combobox').fill('азимв');
+  await expect(page.getByTestId('typeahead-corrected')).toContainText('азимов');
+  await expect(page.getByRole('option', { name: /Азимов Айзек/ }).first()).toBeVisible();
 });
 
 test('editions: one row per work, expand, pick another, grouping switch', async ({ page }) => {

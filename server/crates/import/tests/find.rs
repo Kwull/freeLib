@@ -301,11 +301,24 @@ fn word_forms_translit_typos_and_ranking() {
     let r = search(&cat, "пикнк", false);
     assert_eq!(r.corrected.as_deref(), Some("пикник"));
     assert!(ids(&r).contains(&1));
-    // little found (a keyword) → a suggestion only
+    // little found (one book by a keyword) and no author → the corrected results are shown
     let r = search(&cat, "азимв", false);
+    assert_eq!(r.corrected.as_deref(), Some("азимов"));
+    assert_eq!(r.authors[0].name, "Азимов Айзек");
+    assert!(ids(&r).contains(&4));
+    // … unless asked for the query as typed
+    let r = cat
+        .search(&SearchQuery {
+            q: "азимв".into(),
+            exact: true,
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(ids(&r), [16]);
-    assert!(r.corrected.is_none());
-    assert_eq!(r.did_you_mean.as_deref(), Some("азимов"));
+    assert!(r.corrected.is_none() && r.did_you_mean.is_none());
+    // enough found, authors too: nothing corrected
+    let r = search(&cat, "книга", false);
+    assert!(r.corrected.is_none() && r.did_you_mean.is_none());
     // stems are highlighted as whole words
     let r = search(&cat, "книгу", false);
     assert!(

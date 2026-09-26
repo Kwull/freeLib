@@ -606,8 +606,7 @@
   "home.picks": "Well-rated new arrivals",
   "home.allNew": "All new arrivals",
   "search.correctedTo": "Showing results for",
-  "search.noneFor": "Nothing was found for",
   "search.didYouMean": "Did you mean",
-  "search.showingFor": "SHOWING RESULTS FOR",
-  "search.didYouMeanCaps": "DID YOU MEAN"
+  "search.didYouMeanCaps": "DID YOU MEAN",
+  "search.insteadFor": "Search instead for"
 }

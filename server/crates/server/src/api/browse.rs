@@ -526,6 +526,7 @@ pub struct SearchParams {
     limit: Option<usize>,
     deleted: Option<String>,
     group: Option<String>,
+    exact: Option<String>,
 }
 
 fn opt_date(s: &Option<String>, name: &str) -> ApiResult<Option<String>> {
@@ -594,6 +595,7 @@ pub async fn search(
         limit: p.limit.unwrap_or(200).clamp(1, 1000),
         rating: rp.query()?,
         group: truthy(&p.group),
+        exact: truthy(&p.exact),
     };
     let st2 = st.clone();
     let v = st

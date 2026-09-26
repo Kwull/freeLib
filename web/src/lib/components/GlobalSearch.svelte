@@ -33,8 +33,8 @@
   const items = $derived.by<Item[]>(() => {
     if (!result) return [];
     const out: Item[] = [];
-    const fix = result.corrected ?? result.didYouMean;
-    if (fix) out.push({ group: 'fix', href: `/l/${lib}/search?q=${encodeURIComponent(fix)}`, label: fix });
+    // corrected results are listed below; only a mere suggestion gets its own row
+    if (result.didYouMean) out.push({ group: 'fix', href: `/l/${lib}/search?q=${encodeURIComponent(result.didYouMean)}`, label: result.didYouMean });
     for (const a of result.authors.slice(0, 4)) out.push({ group: 'authors', href: `/l/${lib}/authors/${a.id}`, label: a.name, n: String(a.count) });
     for (const s of result.series.slice(0, 3)) out.push({ group: 'series', href: `/l/${lib}/series/${s.id}`, label: s.name, sub: s.authors, n: String(s.count) });
     for (const b of result.books.slice(0, 5)) {
@@ -83,7 +83,7 @@
 
   const groupLabel: Record<string, string> = $derived({
     authors: t('search.authors'), series: t('search.series'), books: t('search.books'),
-    fix: result?.corrected ? t('search.showingFor') : t('search.didYouMeanCaps'),
+    fix: t('search.didYouMeanCaps'),
   });
   const hl = $derived(new Set(result?.highlight ?? []));
 </script>
@@ -110,6 +110,7 @@
   </label>
   {#if open && query.trim().length >= 2 && result}
     <div class="dropdown" id="global-search-list" role="listbox">
+      {#if result.corrected}<div class="group-label corrected" data-testid="typeahead-corrected">{t('search.correctedTo')} <b>{result.corrected}</b></div>{/if}
       {#each items as it, i (it.href)}
         {#if i === 0 || items[i - 1].group !== it.group}<div class="group-label">{groupLabel[it.group]}</div>{/if}
         <a
@@ -134,6 +135,7 @@
 </div>
 
 <style>
+  .corrected { text-transform: none; letter-spacing: 0; }
   .wrap { position: relative; flex-grow: 1; max-width: 640px; }
   .box {
     display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 14px; border-radius: 8px;

@@ -19,7 +19,7 @@
     emptyRatingFilters, ratingFilterCount, ratingParams, type RatingFilters as RatingFiltersT, type RatingSortKey,
   } from '../utils/ratings';
 
-  let { lib, q }: { lib: number; q: string } = $props();
+  let { lib, q, exact = false }: { lib: number; q: string; exact?: boolean } = $props();
 
   let query = $state('');
   let result = $state<SearchResponse | null>(null);
@@ -58,6 +58,7 @@
       lang: [...langFilter].join(',') || undefined,
       ext: [...extFilter].join(',') || undefined,
       group: groupEditions,
+      exact,
       ...ratingParams(ratingFilters, sortKey === 'relevance' ? null : sortKey),
     }).then((r) => { if (!cancelled) result = r; })
       .catch((e) => { if (!cancelled) error = errorText(e); })
@@ -101,24 +102,22 @@
     <CoverThumb {lib} bookId={b.id} title={b.title} />
     <div class="info">
       <a href="/l/{lib}/book/{b.id}" class="title" onclick={(e) => { e.preventDefault(); pick(b); }}><Hl text={b.title} words={hl} /></a>
-      <span class="muted ellipsis"><Hl text={authorsLine(b)} words={hl} />{#if b.series}{' · '}<Hl text={`${b.series.name}${b.serno ? ` #${b.serno}` : ''}`} words={hl} />{/if}</span>
-      {#if b.libRating || b.extRating || b.rating || (b.kidsAge !== null && b.kidsAge !== undefined)}
-        <span class="rates">
-          {#if b.rating}<span class="my" title={t('ratings.myTooltip')}>★ {b.rating}</span>{/if}
-          {#if b.libRating}<span class="lib" title={t('ratings.libTooltip', { n: b.libRating })}>{t('ratings.libShort')} {b.libRating}/5</span>{/if}
-          <ExtRating value={b.extRating} />
-          <KidsBadge age={b.kidsAge} />
-        </span>
-      {/if}
-      {#if b.editions}
-        <button type="button" class="editions" data-testid="editions-toggle" aria-expanded={expanded.has(b.id)} onclick={() => (expanded = toggleSet(expanded, b.id))}>
-          {expanded.has(b.id) ? t('search.hideEditions') : tn('editions.countBest', b.editions.count)}
-        </button>
-      {/if}
+      <span class="muted byline"><Hl text={authorsLine(b)} words={hl} />{#if b.series}{' · '}<Hl text={`${b.series.name}${b.serno ? ` #${b.serno}` : ''}`} words={hl} />{/if}</span>
+      <span class="meta">
+        {#if genreLine(b)}<span class="genre">{genreLine(b)}</span>{/if}
+        <span class="date">{formatDate(b.date, i18nState.lang)}</span>
+        {#if b.rating}<span class="my" title={t('ratings.myTooltip')}>★ {b.rating}</span>{/if}
+        {#if b.libRating}<span class="lib" title={t('ratings.libTooltip', { n: b.libRating })}>{t('ratings.libShort')} {b.libRating}/5</span>{/if}
+        <ExtRating value={b.extRating} />
+        <KidsBadge age={b.kidsAge} />
+        {#if b.editions}
+          <button type="button" class="editions" data-testid="editions-toggle" aria-expanded={expanded.has(b.id)} onclick={() => (expanded = toggleSet(expanded, b.id))}>
+            <Icon name="layers" size={12} />{expanded.has(b.id) ? t('search.hideEditions') : tn('editions.countBest', b.editions.count)}
+          </button>
+        {/if}
+      </span>
     </div>
-    <span class="muted genre">{genreLine(b)}</span>
-    <span class="muted date-col">{formatDate(b.date, i18nState.lang)}</span>
-    <button type="button" class="send-btn" aria-label={t('selection.sendTo')} onclick={() => (send = { ids: [b.id] })}><Icon name="send" size={14} /><span>{t('selection.sendTo')}</span></button>
+    <button type="button" class="send-btn" aria-label={t('selection.sendTo')} title={t('selection.sendTo')} onclick={() => (send = { ids: [b.id] })}><Icon name="send" size={14} /><span>{t('selection.sendTo')}</span></button>
   </div>
 {/snippet}
 
@@ -213,7 +212,7 @@
 
       {#if result.corrected}
         <p class="dym" data-testid="search-corrected">
-          {t('search.correctedTo')} <b>{result.corrected}</b>. {t('search.noneFor')} «{q}».
+          {t('search.correctedTo')} <b>{result.corrected}</b> · {t('search.insteadFor')} <a href="{searchFor(q)}&exact=1" data-link data-testid="search-exact">{q}</a>
         </p>
       {:else if result.didYouMean}
         <p class="dym" data-testid="did-you-mean">
@@ -301,8 +300,12 @@
   .summary { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); flex-wrap: wrap; }
   .summary.stale { opacity: .6; }
   .sort-sel select { height: 28px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted-2); font: inherit; font-size: 13px; }
-  .rates { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
-  .rates .my { color: var(--amber); }
+  .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--muted); }
+  .meta .my { color: var(--amber); }
+  .meta .date { font-variant-numeric: tabular-nums; }
+  .meta .genre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+  .byline { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .facets :global(.rf) { min-width: 0; }
   .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: var(--accent-soft); color: var(--accent-soft-ink); font-size: 12px; border: none; }
   h2 { margin: 0 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; display: flex; gap: 10px; align-items: baseline; }
   .cap { font-weight: 400; letter-spacing: 0; }
@@ -314,31 +317,31 @@
   .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .books-section { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; flex-shrink: 0; }
   .books-section h2 { margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
-  .res-row { display: grid; grid-template-columns: 44px minmax(0,1fr) minmax(0, 150px) 90px auto; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line-soft); }
+  .res-row { display: grid; grid-template-columns: 44px minmax(0,1fr) auto; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line-soft); }
   .res-row.selected { background: var(--accent-soft); }
   .res-row:last-child { border-bottom: none; }
   .info { display: flex; flex-direction: column; gap: 3px; min-width: 0; align-items: flex-start; }
   .info > * { max-width: 100%; }
-  .title { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .title { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--ink); text-decoration: none; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
   .title:hover { color: var(--accent); }
-  .editions { all: unset; font-size: 12px; color: var(--accent); cursor: pointer; }
+  .editions { all: unset; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--accent); cursor: pointer; white-space: nowrap; }
   .dym { margin: 0; font-size: 15px; color: var(--ink); }
   .dym a { font-weight: 600; }
   .group-toggle { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-weight: 400; letter-spacing: 0; font-size: 12px; color: var(--muted-2); text-transform: none; }
   .group-toggle input { accent-color: var(--accent); }
   .editions:hover { text-decoration: underline; }
   .editions:focus-visible { outline: 2px solid var(--focus); }
-  .genre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .date-col { font-variant-numeric: tabular-nums; }
   .send-btn { justify-self: end; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 13px; white-space: nowrap; flex-shrink: 0; }
   .send-btn:hover { background: var(--surface-hover); }
   .send-btn :global(svg) { flex-shrink: 0; }
   .badge { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
 
-  @media (max-width: 1280px) {
-    .res-row { grid-template-columns: 44px minmax(0,1fr) 90px auto; }
-    .res-row .genre { display: none; }
+  /* the results column narrows with the details pane open: icon-only send, no genre */
+  .results { container-type: inline-size; }
+  @container (max-width: 720px) {
+    .send-btn { padding: 0 10px; }
     .send-btn span { display: none; }
+    .meta .genre { display: none; }
   }
   @media (max-width: 900px) {
     .search-page { flex-direction: column; overflow-y: auto; overflow-x: hidden; }
@@ -350,6 +353,5 @@
     .results { padding: 14px 12px 24px; gap: 16px; overflow: visible; }
     .series-grid { grid-template-columns: 1fr; }
     .res-row { grid-template-columns: 40px minmax(0,1fr) auto; gap: 10px; padding: 10px 12px; }
-    .res-row .genre, .res-row .date-col { display: none; }
   }
 </style>

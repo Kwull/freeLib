@@ -186,11 +186,12 @@ top-level "Прочее" (id 11). A book's genre ids are deduplicated; books wit
   phrase 3 > all prefixes 2 > word forms / transliterations 1; the score is `bm25 − 1000 × tier`, so the existing
   relevance/rating ordering code is unchanged. Authors/series: name starts with the query, then all prefixes, then
   the rest, each by book count.
-* **Typos.** When a search finds fewer than 3 matches, each word of ≥ 4 letters that is neither the prefix of a
+* **Typos.** When a search finds fewer than 3 matches (or no author/series), each word of ≥ 4 letters that is neither the prefix of a
   vocabulary word nor (by its key) of a word's key is replaced by the closest vocabulary word (optimal string alignment,
   ≤ 1 edit up to 7 letters, ≤ 2 from 8, in the word's own script and in Latin-key space, then by frequency). A 64-bit
-  character-set signature and the length pre-filter candidates. Nothing found → the corrected query is searched
-  (`corrected`); something found → offered (`didYouMean`) when it finds more. The vocabulary is held in memory per
+  character-set signature and the length pre-filter candidates. When the corrected query finds more (or finds
+  authors/series the query did not), its results are returned (`corrected`, "Showing results for … · Search instead
+  for …", `exact=1` skips the correction); otherwise it is only offered (`didYouMean`). The vocabulary is held in memory per
   catalog (loaded in the warm-up: arenas + 40 bytes/word).
 * **Highlighting**: the server returns the normalized words of the shown names that matched (prefix, stem or key);
   the SPA marks whole words whose normalized form is in that set (`web/src/lib/utils/highlight.ts`).

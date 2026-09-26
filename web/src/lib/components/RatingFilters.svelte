@@ -57,11 +57,12 @@
 <style>
   .rf { display: flex; flex-direction: column; gap: 2px; min-width: 240px; }
   .line span, .check { white-space: nowrap; }
+  .line span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .line { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; padding: 3px 6px; border-radius: 4px; }
   .line.sub { padding-left: 18px; color: var(--muted); }
   .line select {
     height: 26px; padding: 0 4px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface);
-    color: var(--ink); font: inherit; font-size: 12.5px; min-width: 76px;
+    color: var(--ink); font: inherit; font-size: 12.5px; min-width: 64px; max-width: 96px; flex-shrink: 0;
   }
   .check { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 6px; border-radius: 4px; }
   .check input { width: 15px; height: 15px; accent-color: var(--accent); }
