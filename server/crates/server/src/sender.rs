@@ -59,7 +59,11 @@ pub async fn start(st: &AppState, user: &User, req: SendRequest) -> ApiResult<Jo
             if !to.contains('@') {
                 return Err(ApiError::bad_request("an e-mail address is required"));
             }
-            let smtp: SmtpConfig = st.db.run(|c| db::get_setting(c, "smtp")).await?;
+            let smtp: SmtpConfig = st
+                .db
+                .run(|c| db::get_setting::<SmtpConfig>(c, "smtp"))
+                .await?
+                .revealed(&st.secrets)?;
             if smtp.host.trim().is_empty() {
                 return Err(ApiError::bad_request(
                     "SMTP server is not configured (Settings → Mail)",

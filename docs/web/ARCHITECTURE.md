@@ -9,7 +9,9 @@ Browser (Svelte 5 SPA) ──HTTP/JSON + SSE──▶ freelib-server (Rust, axum
                                              ├─ app.db             users, sessions, libraries, devices, shelves, ratings, settings, API tokens, history
                                              ├─ ratings.db         Open Library rating cache (safe to delete)
                                              ├─ rating worker      Open Library lookups, ≥ 1 s apart, priority queue
-                                             ├─ /mcp               MCP server (rmcp, streamable HTTP, bearer tokens)
+                                             ├─ secret.key         key of the encrypted secrets in app.db (unless FREELIB_SECRET_KEY[_FILE])
+                                             ├─ /mcp               MCP server (rmcp, streamable HTTP, API tokens or OAuth access tokens)
+                                             ├─ /oauth/*           OAuth 2.1 authorization server for MCP clients (+ /.well-known metadata)
                                              ├─ lib_<id>.db        one read-only catalog per library (SQLite, FTS5)
                                              ├─ import worker      INPX → lib_<id>.new.db → atomic rename
                                              ├─ job queue          send / export / convert (N workers = CPU cores)
@@ -59,7 +61,11 @@ Browser (Svelte 5 SPA) ──HTTP/JSON + SSE──▶ freelib-server (Rust, axum
 | `FREELIB_CALIBRE_TIMEOUT` | `300` | Seconds before a Calibre conversion is killed (`FREELIB_CALIBRE=none` disables Calibre) |
 | `FREELIB_CONTACT_EMAIL` | unset | Contact address in the User-Agent of Open Library requests (`freeLib/<version> (+https://github.com/Kwull/freeLib; <email>)`), as Open Library asks of API users |
 | `FREELIB_OPENLIBRARY_URL` | `https://openlibrary.org` | Base URL of Open Library (tests point it at a local fake) |
-| `FREELIB_MCP_RATE` | `120` | MCP requests per API token and minute |
+| `FREELIB_MCP_RATE` | `120` | MCP requests per API token (or authorized app) and minute |
+| `FREELIB_SECRET_KEY` | unset | Key of the secrets stored in `app.db`: 32 bytes as 64 hex digits or base64 |
+| `FREELIB_SECRET_KEY_FILE` | unset | File with the key (Docker secret); without both, `<data dir>/secret.key` is generated (0600) |
+| `FREELIB_SECRET_KEY_OLD` | unset | Previous key during a key change; stored secrets are re-encrypted at start |
+| `FREELIB_OAUTH_CLIENT_HOSTS` | `claude.ai, claude.com` | Hosts whose `https://` redirect URIs and Client ID Metadata Documents OAuth clients may use (`*.x` sub-domains, `*` any public host); loopback redirects are always allowed |
 | `RUST_LOG` | `info` | Logging |
 
 Admin settings (Settings → Server, stored in `app.db` `setting`): `externalRatings.enabled` (default true — when
@@ -194,7 +200,35 @@ Migration v5: `device_order(user_id, device_id, pos)`: each user's order of the 
 (quick send in the details pane and the selection bar, the Send dialog's preselection, MCP `device: "default"`). A
 first-in-order rule was chosen over "last used": it is explicit and stable — a one-off download no longer changes
 where the next "Send" goes. The old `lastDevice` UI pref is no longer read.
-Tokens, audit rows, history and device order are removed with their user; open-mode data (user 0) is adopted by the first account.
+Migration v6 (OAuth): `oauth_client(client_id, name, redirect_uris JSON, client_uri, created_at, last_used_at)`
+(dynamically registered clients), `oauth_grant(id, user_id, client_id, client_name, client_kind ∈ cimd|dcr,
+redirect_uri, scopes, resource, created_at, last_used_at)` (one per authorization = one "authorized app"),
+`oauth_token(token_hash, grant_id → oauth_grant ON DELETE CASCADE, kind ∈ access|refresh, scopes, expires_at,
+rotated_at)` (SHA-256 of the secret only; unix times), and `api_audit.grant_id`.
+Tokens, audit rows, history, device order and OAuth grants are removed with their user; open-mode data (user 0) is
+adopted by the first account, except OAuth grants made in open mode, which are deleted.
+
+### Secrets at rest
+
+`server/src/secrets.rs`. Values the server must read back (today `setting.smtp.password`; every such field is listed
+in `secrets::SECRET_FIELDS`) are stored as `enc:v1:<key id>:<base64url(nonce ‖ ciphertext ‖ tag)>`:
+XChaCha20-Poly1305, a random 192-bit nonce per value, associated data `freelib/v1/<field name>` (a value moved to
+another field does not decrypt), key id = first 4 bytes of SHA-256 over the key (says which key encrypted a value
+without revealing it). The key: `FREELIB_SECRET_KEY`, else `FREELIB_SECRET_KEY_FILE`, else `<data dir>/secret.key`
+(created with `O_EXCL` and mode 0600 on the first start, with a log line asking to back it up with `app.db`; looser
+permissions are tightened). At start `secrets::migrate` runs in one transaction: plain-text values are encrypted,
+values of `FREELIB_SECRET_KEY_OLD` are re-encrypted with the current key, and a value encrypted with an unknown key
+(or failing authentication) stops the start with an explanation; `freelib-server forget-secrets` removes the stored
+secrets when the key is lost. The settings API encrypts the SMTP password before it reaches the database;
+`SmtpConfig::revealed` decrypts it just before sending. Keys and secrets never appear in logs or `Debug` output
+(`secrets::Redacted` wraps `FREELIB_ADMIN_PASSWORD`, `FREELIB_OIDC_CLIENT_SECRET` and the keys in `Config`).
+
+Why not encrypt everything: login passwords are Argon2id hashes and session / API / OAuth tokens SHA-256 hashes of
+256-bit random values. The server only compares them, so a one-way hash is strictly better than reversible
+encryption: nothing — not even the key — turns the database back into a working credential. OIDC pending sign-ins,
+OAuth authorization codes and consent requests live only in memory. The key file next to `app.db` protects leaked
+database copies and backups, not a full compromise of the data volume; the environment / Docker secret options
+keep the key out of that volume.
 
 User data is keyed by `(library_id, book_key)`, so it survives re-imports.
 
@@ -282,6 +316,56 @@ books of the 15 best-weighted authors, of the seed series, and up to 1 500 well-
 Library ≥ 4.0 with ≥ 5 votes) of the 5 top genres; read/rated/shelved books are excluded by default. Score:
 same author `3 × w/max`, next unread number of a series `+5` (later numbers `+2`), shared genres up to `+2`, library
 rating `(stars − 3) × 0.5`, Open Library `(avg − 3.5)`, disliked author down to `−3` — each part explained in `reasons`.
+
+### OAuth for MCP clients
+
+`server/src/oauth/` (flows, `cimd.rs`, `store.rs`) and `api/oauth.rs` (consent page API, authorized apps). freeLib is
+its own authorization server following the MCP authorization spec (2025-11-25 / 2026-07-28) and Claude's connector
+requirements, so claude.ai, Claude Desktop/mobile and Claude Code connect by signing in. Enabled when
+`FREELIB_PUBLIC_URL` is an `https://` origin (or `http://localhost`); the issuer is that URL and the only resource is
+`<issuer>/mcp`.
+
+* **Discovery**: `/mcp` without a valid token → `401` + `WWW-Authenticate: Bearer realm="freeLib",
+  resource_metadata="<issuer>/.well-known/oauth-protected-resource/mcp", scope="read write send"` (+ `error=
+  "invalid_token"` when a token was sent). `/.well-known/oauth-protected-resource[/mcp]` (RFC 9728: `resource`,
+  `authorization_servers`, `scopes_supported`), `/.well-known/oauth-authorization-server` (RFC 8414: endpoints,
+  `code_challenge_methods_supported: ["S256"]`, `token_endpoint_auth_methods_supported: ["none"]`,
+  `client_id_metadata_document_supported`, `authorization_response_iss_parameter_supported`). No
+  `openid-configuration`: freeLib issues no ID tokens, and MCP clients try RFC 8414 first.
+* **Clients** are public (PKCE, no secrets). *Client ID Metadata Documents*: a `client_id` that is an `https://` URL
+  with a path on a trusted host (`FREELIB_OAUTH_CLIENT_HOSTS`) is fetched (public addresses only, connection pinned
+  to the checked address, no redirects, 5 s, 64 KiB, cached per `max-age` 1 min … 1 day); its `client_id` must equal
+  the URL. Claude's two documents are built in as a fallback. *Dynamic Client Registration* (`POST /oauth/register`,
+  RFC 7591, deprecated by MCP but still used by many clients): 20 per address and hour, at most 500 clients; clients
+  never used are removed after a day, unused ones without grants after 90 days. Redirect URIs: `https://` on a trusted
+  host or `http://127.0.0.1|[::1]|localhost` (RFC 8252); matching is exact, except that the port of a loopback URI
+  is ignored.
+* **Authorization** (`GET /oauth/authorize`): an unknown client or unregistered redirect URI is never redirected to
+  (the browser goes to `/oauth/consent?error=…`); then `response_type=code`, PKCE `S256`, known scopes
+  (`offline_access` ignored, none = all) and `resource` (RFC 8707, `<issuer>/mcp` or `<issuer>`) are checked, errors
+  redirected with `state` and `iss`. A pending request (15 min, ≤ 30 per address) is created and the browser goes to
+  the SPA's consent page `/oauth/consent?request=<id>`. The page (after the normal sign-in, password or SSO) reads
+  `GET /api/v1/oauth/requests/{id}` (app name, the verified host of a CIMD client id, redirect host, loopback warning,
+  scopes, a per-request CSRF token) and posts the decision with the chosen subset of scopes; the API's CSRF layer
+  applies (JSON only, `Origin`, `Sec-Fetch-Site`), and `frame-ancestors 'self'` prevents clickjacking. The answer is
+  the redirect URL with `code` (32 random bytes, 5 min, single use, in memory) or `error=access_denied`, `state` and
+  `iss`; the decision is written to the audit log.
+* **Tokens** (`POST /oauth/token`, form-encoded, `Cache-Control: no-store`): `authorization_code` needs the same
+  client, `redirect_uri`, the PKCE verifier and (if sent) the same resource; a second use of a code revokes the grant
+  made from it. It creates a grant with an access token `flo_…` (1 h) and a refresh token `flr_…` (90 days), both
+  stored as SHA-256. `refresh_token` rotates (the old one is marked `rotated_at` and kept until it expires); a rotated
+  refresh token presented again revokes the whole grant (reuse detection) and is audited; an optional narrower
+  `scope` applies to the new access token. Errors are RFC 6749 codes (`invalid_grant`, `invalid_client`, …).
+  `POST /oauth/revoke` (RFC 7009): a refresh token revokes its grant, an access token only itself; always 200.
+* **Resource server**: `tokens::authenticate` accepts `fl_` API tokens and `flo_` access tokens (unexpired, grant and
+  user exist, grant resource = the current `<issuer>/mcp` — audience binding). The 60 s cache never outlives the access
+  token and is cleared on every revocation. For OAuth tokens the gate reads the JSON-RPC body: a `tools/call` of a tool
+  outside the granted scopes gets `403` + `WWW-Authenticate: Bearer error="insufficient_scope", scope="<granted +
+  needed>"` (step-up); `tools/list` shows only the granted tools. Tool calls are audited with the grant; the per-token
+  rate limit applies per grant.
+* **Settings → Account → API tokens & MCP** lists the authorized apps (`GET /me/oauth/apps`: name, verified host,
+  redirect host, scopes, created, last used) with revoke (`DELETE /me/oauth/apps/{id}`), and shows the connector
+  steps. Cleanup (every 10 min): expired tokens, grants without tokens, stale clients, expired in-memory state.
 
 ## Single sign-on (OpenID Connect)
 

@@ -68,9 +68,26 @@ export type ApiToken = {
   createdAt: string; lastUsedAt: string | null; expiresAt: string | null;
 };
 export type TokenScope = 'read' | 'write' | 'send';
-export type TokensResponse = { tokens: ApiToken[]; scopes: TokenScope[]; mcp: { enabled: boolean; url: string } };
+export type TokensResponse = {
+  tokens: ApiToken[]; scopes: TokenScope[];
+  /** `oauth`: apps can connect by signing in (FREELIB_PUBLIC_URL is https) */
+  mcp: { enabled: boolean; url: string; oauth?: boolean };
+};
 export type AuditRow = {
-  id: number; tokenId: number | null; tokenName: string | null; tool: string; ok: boolean; detail: string; at: string;
+  id: number; tokenId: number | null; tokenName: string | null;
+  grantId?: number | null; appName?: string | null;
+  tool: string; ok: boolean; detail: string; at: string;
+};
+/** An app authorized through OAuth (Settings → Account). */
+export type OAuthApp = {
+  id: number; clientName: string; clientKind: 'cimd' | 'dcr'; verifiedHost: string | null;
+  redirectHost: string; scopes: TokenScope[]; createdAt: string; lastUsedAt: string | null;
+};
+/** A pending OAuth authorization request (the consent page). */
+export type OAuthRequest = {
+  client: { name: string; kind: 'cimd' | 'dcr'; verifiedHost: string | null; clientUri: string | null };
+  redirectUri: string; redirectHost: string; loopback: boolean;
+  scopes: TokenScope[]; resource: string; csrf: string;
 };
 
 export type BookDetail = Book & {

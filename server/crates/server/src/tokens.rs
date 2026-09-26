@@ -4,6 +4,9 @@
 //! A token is `fl_` + 43 characters (32 random bytes, base64url). Only its SHA-256 (hex) is
 //! stored; the secret is shown once when created. Scopes: `read` (catalog and own profile),
 //! `write` (shelves, ratings), `send` (send to Kindle / devices).
+//!
+//! [`authenticate`] also accepts OAuth access tokens (`flo_…`, see [`crate::oauth`]) with the
+//! same scopes, so `/mcp` serves both kinds of clients.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -87,16 +90,61 @@ pub fn bearer(headers: &HeaderMap) -> Option<&str> {
         .filter(|t| !t.is_empty())
 }
 
+/// How a request to `/mcp` authenticated.
+#[derive(Debug, Clone)]
+pub enum Credential {
+    /// A personal API token (`fl_…`).
+    Personal(ApiToken),
+    /// An OAuth access token (`flo_…`) of an authorized app.
+    OAuth {
+        grant_id: i64,
+        client_name: String,
+        /// Unix time the access token expires.
+        expires_at: i64,
+    },
+}
+
 /// An authenticated token and its user.
 #[derive(Debug, Clone)]
 pub struct TokenAuth {
-    pub token: ApiToken,
     pub user: User,
+    pub scopes: Vec<String>,
+    pub cred: Credential,
 }
 
 impl TokenAuth {
     pub fn has(&self, scope: &str) -> bool {
-        self.token.scopes.iter().any(|s| s == scope)
+        self.scopes.iter().any(|s| s == scope)
+    }
+    /// The personal token id.
+    pub fn token_id(&self) -> Option<i64> {
+        match &self.cred {
+            Credential::Personal(t) => Some(t.id),
+            Credential::OAuth { .. } => None,
+        }
+    }
+    /// The OAuth grant id.
+    pub fn grant_id(&self) -> Option<i64> {
+        match &self.cred {
+            Credential::OAuth { grant_id, .. } => Some(*grant_id),
+            Credential::Personal(_) => None,
+        }
+    }
+    pub fn is_oauth(&self) -> bool {
+        matches!(self.cred, Credential::OAuth { .. })
+    }
+    /// Rate limiting key: personal tokens by id, OAuth grants by negative id.
+    pub fn rate_key(&self) -> i64 {
+        match &self.cred {
+            Credential::Personal(t) => t.id,
+            Credential::OAuth { grant_id, .. } => -grant_id,
+        }
+    }
+    fn still_valid(&self) -> bool {
+        match &self.cred {
+            Credential::OAuth { expires_at, .. } => *expires_at > crate::util::unix_now(),
+            Credential::Personal(_) => true,
+        }
     }
 }
 
@@ -136,9 +184,11 @@ impl Tokens {
     }
 }
 
-/// Authenticates a bearer token (cached for a minute; revocations clear the cache).
+/// Authenticates a bearer token: a personal API token or an OAuth access token (cached for a
+/// minute, never past the access token's expiry; revocations clear the cache).
 pub async fn authenticate(st: &AppState, secret: &str) -> ApiResult<Option<TokenAuth>> {
-    if !well_formed(secret) {
+    let oauth = crate::oauth::is_access_token(secret);
+    if !well_formed(secret) && !oauth {
         return Ok(None);
     }
     let h = hash(secret);
@@ -149,28 +199,49 @@ pub async fn authenticate(st: &AppState, secret: &str) -> ApiResult<Option<Token
         .unwrap_or_else(|e| e.into_inner())
         .get(&h)
         && at.elapsed() < CACHE_TTL
+        && a.still_valid()
     {
-        return Ok(Some(a.clone()));
+        // open-mode tokens only work while the server is in open mode
+        return Ok((a.user.id != 0 || st.open_mode()).then(|| a.clone()));
     }
-    let h2 = h.clone();
-    let found = st
-        .db
-        .run(move |c| {
-            let r = db::token_by_hash(c, &h2)?;
-            if let Some((t, _)) = &r {
-                db::touch_token(c, t.id)?;
-            }
-            Ok(r)
-        })
-        .await?;
-    let Some((token, user)) = found else {
-        return Ok(None);
+    let a = if oauth {
+        let Some(x) = crate::oauth::authenticate(st, secret).await? else {
+            return Ok(None);
+        };
+        TokenAuth {
+            user: x.user,
+            scopes: x.row.scopes,
+            cred: Credential::OAuth {
+                grant_id: x.row.grant_id,
+                client_name: x.row.client_name,
+                expires_at: x.row.expires_at,
+            },
+        }
+    } else {
+        let h2 = h.clone();
+        let found = st
+            .db
+            .run(move |c| {
+                let r = db::token_by_hash(c, &h2)?;
+                if let Some((t, _)) = &r {
+                    db::touch_token(c, t.id)?;
+                }
+                Ok(r)
+            })
+            .await?;
+        let Some((token, user)) = found else {
+            return Ok(None);
+        };
+        TokenAuth {
+            user,
+            scopes: token.scopes.clone(),
+            cred: Credential::Personal(token),
+        }
     };
     // open-mode tokens only work while the server is in open mode
-    if user.id == 0 && !st.open_mode() {
+    if a.user.id == 0 && !st.open_mode() {
         return Ok(None);
     }
-    let a = TokenAuth { token, user };
     let mut g = st.tokens.cache.lock().unwrap_or_else(|e| e.into_inner());
     if g.len() > 10_000 {
         g.clear();

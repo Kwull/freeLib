@@ -17,4 +17,8 @@ services:
       PUID: ${PUID:-1000}   # user the server runs as; owns ./data, ./cache, ./export
       PGID: ${PGID:-1000}
       # FREELIB_AUTOIMPORT: /books/library.inpx
+      # https address behind your reverse proxy: single sign-on and "Add custom connector" in Claude
+      # FREELIB_PUBLIC_URL: https://books.example.org
+      # key of the encrypted secrets in app.db; default: generated ./data/secret.key (back it up!)
+      # FREELIB_SECRET_KEY_FILE: /run/secrets/freelib_key
     restart: unless-stopped

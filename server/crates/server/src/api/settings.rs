@@ -160,6 +160,12 @@ pub async fn put(
             "security must be none, starttls or tls",
         ));
     }
+    // the password is encrypted before it reaches app.db
+    let new_password = b
+        .smtp
+        .as_ref()
+        .and_then(|s| s.password.as_deref())
+        .map(|v| (!v.is_empty()).then(|| st.secrets.encrypt("smtp.password", v)));
     let patterns = match b.smtp.as_ref().and_then(|s| s.allowed_recipients.clone()) {
         Some(v) => Some(clean_patterns(v)?),
         None => None,
@@ -197,9 +203,9 @@ pub async fn put(
                 if let Some(v) = s.from {
                     smtp.from = v.trim().to_string();
                 }
-                if let Some(v) = s.password {
+                if let Some(v) = new_password {
                     // write-only; an empty string clears it
-                    smtp.password = (!v.is_empty()).then_some(v);
+                    smtp.password = v;
                 }
                 if let Some(v) = s.pause_seconds {
                     smtp.pause_seconds = v.min(600);
@@ -243,7 +249,11 @@ pub async fn smtp_test(
     Admin(_): Admin,
     Json(b): Json<SmtpTest>,
 ) -> ApiResult<StatusCode> {
-    let smtp: SmtpConfig = st.db.run(|c| db::get_setting(c, "smtp")).await?;
+    let smtp: SmtpConfig = st
+        .db
+        .run(|c| db::get_setting::<SmtpConfig>(c, "smtp"))
+        .await?
+        .revealed(&st.secrets)?;
     crate::mail::send(
         &smtp,
         &b.to,

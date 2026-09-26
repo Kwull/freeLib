@@ -2,7 +2,7 @@
   // Settings → Account → "API tokens & MCP": personal tokens for MCP clients (Claude Desktop,
   // Claude Code, …), the MCP URL with copy-paste configs, and the audit log of tool calls.
   import { api, errorText } from '../api/client';
-  import type { ApiToken, AuditRow, TokenScope, TokensResponse } from '../api/types';
+  import type { ApiToken, AuditRow, OAuthApp, TokenScope, TokensResponse } from '../api/types';
   import { t } from '../i18n';
   import { showToast } from '../stores/toast.svelte';
   import { formatDate } from '../utils/format';
@@ -11,6 +11,7 @@
 
   let data = $state<TokensResponse | null>(null);
   let audit = $state<AuditRow[]>([]);
+  let apps = $state<OAuthApp[] | null>(null);
   let error = $state<string | null>(null);
   let name = $state('');
   let scopes = $state<Record<TokenScope, boolean>>({ read: true, write: false, send: false });
@@ -23,13 +24,17 @@
   function load() {
     api.tokens().then((d) => { data = d; error = null; }).catch((e) => (error = errorText(e)));
     api.tokenAudit().then((a) => (audit = a)).catch(() => {});
+    api.oauthApps().then((a) => (apps = a)).catch(() => (apps = []));
   }
   $effect(() => { load(); });
 
   const url = $derived(data?.mcp.url ?? `${location.origin}/mcp`);
+  const oauth = $derived(data?.mcp.oauth ?? false);
   const secretShown = $derived(fresh?.secret ?? 'fl_YOUR_TOKEN');
   const snippets = $derived({
-    code: `claude mcp add --transport http freelib ${url} --header "Authorization: Bearer ${secretShown}"`,
+    code: oauth && !fresh
+      ? `claude mcp add --transport http freelib ${url}`
+      : `claude mcp add --transport http freelib ${url} --header "Authorization: Bearer ${secretShown}"`,
     desktop: JSON.stringify({
       mcpServers: {
         freelib: {
@@ -80,6 +85,16 @@
     }
   }
 
+  async function revokeApp(a: OAuthApp) {
+    if (!confirm(t('oauthApps.revokeConfirm', { name: a.clientName }))) return;
+    try {
+      await api.revokeOAuthApp(a.id);
+      load();
+    } catch (err) {
+      showToast(errorText(err), 'error');
+    }
+  }
+
   const when = (s: string | null) => (s ? formatDate(s.slice(0, 10), i18nState.lang) : '—');
   const time = (s: string) => {
     try { return new Date(s).toLocaleString(i18nState.lang); } catch { return s; }
@@ -98,6 +113,39 @@
     <button type="button" class="btn" onclick={() => copy(url)}>{t('tokens.copy')}</button>
   </div>
 
+  <div class="connect" data-testid="oauth-connect">
+    <h4>{t('oauthApps.connectTitle')}</h4>
+    {#if oauth}
+      <ol>
+        <li>{t('oauthApps.step1')}</li>
+        <li>{t('oauthApps.step2')} <code>{url}</code></li>
+        <li>{t('oauthApps.step3')}</li>
+      </ol>
+      <p class="muted hint">{t('oauthApps.codeHint')} <code>claude mcp add --transport http freelib {url}</code></p>
+    {:else}
+      <p class="muted hint" data-testid="oauth-off">{t('oauthApps.off')}</p>
+    {/if}
+  </div>
+
+  <h4>{t('oauthApps.title')}</h4>
+  <div class="list" data-testid="oauth-apps">
+    {#if apps && apps.length === 0}<p class="muted">{t('oauthApps.none')}</p>{/if}
+    {#each apps ?? [] as a (a.id)}
+      <div class="tok" data-testid="oauth-app-row">
+        <div class="tinfo">
+          <span class="tname">{a.clientName}
+            {#if a.verifiedHost}<span class="host" title={t('oauthApps.verifiedTitle')}>✓ {a.verifiedHost}</span>{:else}<span class="host unver">{t('oauthApps.unverified')}</span>{/if}
+          </span>
+          <span class="muted small">{t('oauthApps.redirect')} <code>{a.redirectHost}</code> · {t('oauthApps.authorized')} {when(a.createdAt)} · {t('tokens.lastUsed')} {when(a.lastUsedAt)}</span>
+        </div>
+        {#each a.scopes as s (s)}<span class="badge">{s}</span>{/each}
+        <button type="button" class="danger" onclick={() => revokeApp(a)}>{t('tokens.revoke')}</button>
+      </div>
+    {/each}
+  </div>
+
+  <h4>{t('tokens.personal')}</h4>
+  <p class="muted hint">{t('tokens.personalHint')}</p>
   <form class="create" onsubmit={create}>
     <label class="field">{t('tokens.name')}
       <input type="text" bind:value={name} placeholder={t('tokens.namePlaceholder')} maxlength="100" required data-testid="token-name" />
@@ -168,7 +216,7 @@
         <div class="arow" class:denied={!a.ok}>
           <span class="muted small">{time(a.at)}</span>
           <code>{a.tool}</code>
-          <span class="small">{a.tokenName ?? t('tokens.revoked')}</span>
+          <span class="small">{a.tokenName ?? a.appName ?? t('tokens.revoked')}</span>
           <span class="small" class:warn={!a.ok}>{a.ok ? t('tokens.ok') : t('tokens.failed')}</span>
           <span class="muted small det" title={a.detail}>{a.detail}</span>
         </div>
@@ -208,6 +256,11 @@
   .tok { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
   .tinfo { display: flex; flex-direction: column; gap: 2px; flex-grow: 1; min-width: 0; }
   .tname { font-weight: 500; font-size: 14px; }
+  .connect { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 8px; background: var(--surface-alt); border: 1px solid var(--line); }
+  .connect h4 { margin: 0; color: var(--ink); }
+  .connect ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; color: var(--ink); }
+  .host { margin-left: 6px; font-size: 11.5px; font-weight: 400; color: var(--accent); }
+  .host.unver { color: var(--amber); }
   .badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-soft-ink); }
   .audit { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; max-height: 320px; overflow-y: auto; }
   .arow { display: grid; grid-template-columns: 150px 150px 100px 60px minmax(0, 1fr); gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); }

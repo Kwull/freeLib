@@ -43,6 +43,7 @@ Subcommands:
 |---|---|
 | `freelib-server` / `freelib-server serve` | run the server |
 | `freelib-server healthcheck` | `GET /api/v1/session` on `127.0.0.1:$FREELIB_PORT`; exit 0 on 200, else 1 (Docker `HEALTHCHECK`) |
+| `freelib-server forget-secrets` | remove the encrypted secrets (SMTP password) from `app.db`: the way out when the secret key is lost |
 | `freelib-server migrate-qt <freeLib.sqlite>` | import libraries, shelves (tags) and ratings from the Qt app into `app.db` for the first admin (user 0 in open mode); then re-import each library in the UI |
 
 ## Module layout (`src/`)
@@ -62,6 +63,8 @@ Subcommands:
 | `api/*.rs` | `/api/v1` handlers: `session`, `libraries` (+ `/fs`), `browse` (lists, genres, books, search, languages), `books` (detail, cover, file), `shelves` (+ rating), `devices` (+ `/send`, `/fonts`), `jobs` (+ SSE `/events`), `settings` (+ SMTP test, users, prefs), `oidc` (`/auth/oidc/*`, `/me/account`, `/me/password`, `/me/oidc`) |
 | `extrating/` | Open Library ratings: `openlibrary.rs` (HTTP trait, rate limiter with backoff, search + conservative title/surname matcher with transliteration, `ratings.json`), `mod.rs` (`ratings.db` cache, in-memory index + dense per-catalog arrays, priority queue, background worker, on-demand lookup) |
 | `tokens.rs` | personal API tokens: `fl_` secrets, SHA-256 storage, scopes, bearer authentication (60 s cache), per-token rate limit; `api/tokens.rs` = `/me/tokens` |
+| `secrets.rs` | encryption at rest of reversible secrets (XChaCha20-Poly1305, `enc:v1:<key id>:…`), key loading (`FREELIB_SECRET_KEY[_FILE]`, generated `secret.key`), start-up migration / rotation / wrong-key refusal |
+| `oauth/` | OAuth 2.1 authorization server for MCP clients: `mod.rs` (metadata documents, `/oauth/authorize`, `/token`, `/register`, `/revoke`, redirect URI policy, PKCE, resource binding, in-memory consents and codes, rate limits, cleanup), `cimd.rs` (Client ID Metadata Documents with SSRF guards), `store.rs` (`oauth_client` / `oauth_grant` / `oauth_token`); `api/oauth.rs` = consent page API and `/me/oauth/apps` |
 | `mcp/` | MCP server at `/mcp` (rmcp streamable HTTP, stateless): `mod.rs` (gate middleware, `ServerHandler`, prompts, instructions), `tools.rs` (17 tools with scopes and schemas), `suggest.rs` (candidate scoring) |
 | `importer.rs` | import jobs: `freelib_import::import_inpx` in a blocking thread, progress → job/library events, catalog reload and warm-up |
 | `jobs.rs` | in-memory job list, cancel flags, produced files, SSE `Event`s with per-user visibility |

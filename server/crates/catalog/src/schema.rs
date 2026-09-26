@@ -128,6 +128,19 @@ CREATE INDEX book_history_key ON book_history(user_id, library_id, book_key);
     r#"
 CREATE TABLE device_order (user_id INTEGER NOT NULL, device_id INTEGER NOT NULL, pos INTEGER NOT NULL, PRIMARY KEY (user_id, device_id)) WITHOUT ROWID;
 "#,
+    // v6: OAuth for the MCP endpoint: dynamically registered clients, grants (one per
+    // authorization = one "authorized app"), access and refresh tokens (SHA-256 of the secret
+    // only; rotated refresh tokens stay until they expire, for reuse detection), and the grant
+    // an audit entry was made with
+    r#"
+CREATE TABLE oauth_client (client_id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL, client_uri TEXT, created_at INTEGER NOT NULL, last_used_at INTEGER) WITHOUT ROWID;
+CREATE TABLE oauth_grant (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, client_id TEXT NOT NULL, client_name TEXT NOT NULL, client_kind TEXT NOT NULL, redirect_uri TEXT NOT NULL, scopes TEXT NOT NULL, resource TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
+CREATE INDEX oauth_grant_user ON oauth_grant(user_id);
+CREATE INDEX oauth_grant_client ON oauth_grant(client_id);
+CREATE TABLE oauth_token (token_hash TEXT PRIMARY KEY, grant_id INTEGER NOT NULL REFERENCES oauth_grant(id) ON DELETE CASCADE, kind TEXT NOT NULL CHECK (kind IN ('access','refresh')), scopes TEXT NOT NULL, expires_at INTEGER NOT NULL, rotated_at INTEGER) WITHOUT ROWID;
+CREATE INDEX oauth_token_grant ON oauth_token(grant_id);
+ALTER TABLE api_audit ADD COLUMN grant_id INTEGER;
+"#,
 ];
 
 /// Current `app.db` schema version (`PRAGMA user_version` after migrating).
