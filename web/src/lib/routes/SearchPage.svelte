@@ -15,6 +15,7 @@
   import ExtRating from '../components/ExtRating.svelte';
   import KidsBadge from '../components/KidsBadge.svelte';
   import { getPref, setPref } from '../stores/prefs.svelte';
+  import { dismissable } from '../utils/dismiss';
   import {
     emptyRatingFilters, ratingFilterCount, ratingParams, type RatingFilters as RatingFiltersT, type RatingSortKey,
   } from '../utils/ratings';
@@ -33,6 +34,7 @@
   let genresById = $state<Map<number, string>>(new Map());
   let allGenres = $state(false);
   let facetsOpen = $state(false);
+  let facetsBtn = $state<HTMLButtonElement | undefined>();
   let selectedBookId = $state<number | null>(null);
   let expanded = $state<Set<number>>(new Set());
   const groupEditions = $derived(getPref<boolean>('groupEditions', true));
@@ -127,11 +129,11 @@
       <Icon name="search" size={16} />
       <input type="search" bind:value={query} aria-label={t('search.placeholder')} placeholder={t('search.placeholder')} />
     </form>
-    <button type="button" class="facets-toggle" aria-expanded={facetsOpen} onclick={() => (facetsOpen = !facetsOpen)}>
+    <button type="button" class="facets-toggle" bind:this={facetsBtn} aria-expanded={facetsOpen} onclick={() => (facetsOpen = !facetsOpen)}>
       <Icon name="filter" size={14} />{t('search.filters')}{#if filterCount}<span class="badge">{filterCount}</span>{/if}
     </button>
     {#if result && result.total + filterCount > 0}
-      <div class="facet-groups">
+      <div class="facet-groups" use:dismissable={{ enabled: facetsOpen, onClose: () => (facetsOpen = false), trigger: () => facetsBtn }}>
         <div class="facet">
           <h3>{t('ratings.filtersCaps')}</h3>
           <RatingFilters filters={ratingFilters} onChange={(f) => (ratingFilters = f)} />

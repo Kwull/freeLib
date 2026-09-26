@@ -135,6 +135,8 @@ pub struct Query {
     pub title: String,
     /// Surnames (INPX last names) of the book's authors, first author first.
     pub surnames: Vec<String>,
+    /// Valid ISBN-13s from the book's `<publish-info>` (tried before the title search).
+    pub isbns: Vec<String>,
 }
 
 /// Result of a lookup.
@@ -169,6 +171,20 @@ struct Doc {
     ratings_count: Option<u32>,
     #[serde(default)]
     edition_count: Option<u32>,
+}
+
+/// `/isbn/<isbn>.json`: an edition.
+#[derive(Debug, Deserialize)]
+struct EditionResp {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    works: Vec<KeyRef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KeyRef {
+    key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,8 +249,39 @@ impl OpenLibrary {
         }
     }
 
-    /// Searches, matches and fetches the ratings of the best matching work.
+    /// The work of an ISBN whose edition title matches the book (a wrong ISBN in the file
+    /// must not attach another book's rating). `Ok(None)` = no usable answer.
+    async fn by_isbn(&self, isbn: &str, title: &str) -> Result<Option<String>, String> {
+        if !(isbn.len() == 13 && isbn.bytes().all(|b| b.is_ascii_digit())) {
+            return Ok(None);
+        }
+        match self.fetch(format!("{}/isbn/{isbn}.json", self.base)).await {
+            Fetch::Ok(body) => {
+                let Ok(ed) = serde_json::from_str::<EditionResp>(&body) else {
+                    return Ok(None);
+                };
+                Ok(ed
+                    .works
+                    .into_iter()
+                    .map(|w| w.key)
+                    .find(|k| valid_work_key(k))
+                    .filter(|_| titles_match(title, &ed.title)))
+            }
+            Fetch::NotFound => Ok(None),
+            Fetch::Err(e) => Err(e),
+        }
+    }
+
+    /// Looks the book up by ISBN first, then searches by title and author, matches and
+    /// fetches the ratings of the best matching work.
     pub async fn lookup(&self, q: &Query) -> Outcome {
+        for isbn in q.isbns.iter().take(3) {
+            match self.by_isbn(isbn, &q.title).await {
+                Ok(Some(work)) => return self.ratings(&work).await,
+                Ok(None) => {}
+                Err(e) => return Outcome::Error(e),
+            }
+        }
         let title = clean_title(&q.title);
         let surnames: Vec<&String> = q.surnames.iter().filter(|s| !s.trim().is_empty()).collect();
         if title_key(&title).chars().count() < 2 || surnames.is_empty() {
@@ -545,6 +592,7 @@ pub(crate) mod tests {
         Query {
             title: title.into(),
             surnames: vec![surname.into()],
+            isbns: Vec::new(),
         }
     }
 
@@ -574,6 +622,59 @@ pub(crate) mod tests {
         );
         assert!(urls[0].contains("fields=key%2Ctitle") || urls[0].contains("fields=key,title"));
         assert_eq!(urls[1], "https://ol.test/works/OL1914203W/ratings.json");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn isbn_first() {
+        let http = FakeHttp::new(vec![
+            (
+                "/isbn/9785699120147.json",
+                200,
+                r#"{"title": "Пикник на обочине", "works": [{"key": "/works/OL1914203W"}]}"#,
+            ),
+            ("/works/OL1914203W/ratings.json", 200, PIKNIK_R),
+        ]);
+        let mut query = q("Пикник на обочине", "Стругацкий");
+        query.isbns = vec!["9785699120147".into()];
+        let out = client(http.clone()).lookup(&query).await;
+        assert_eq!(
+            out,
+            Outcome::Found {
+                work_key: "/works/OL1914203W".into(),
+                average: Some(4.25),
+                count: 16
+            }
+        );
+        assert_eq!(
+            http.urls(),
+            [
+                "https://ol.test/isbn/9785699120147.json",
+                "https://ol.test/works/OL1914203W/ratings.json"
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn isbn_of_another_book_is_ignored() {
+        // the file's ISBN belongs to another book: fall back to the title search
+        let http = FakeHttp::new(vec![
+            (
+                "/isbn/9785699120147.json",
+                200,
+                r#"{"title": "Совсем другая книга", "works": [{"key": "/works/OL1W"}]}"#,
+            ),
+            ("/search.json", 200, PIKNIK),
+            ("/works/OL1914203W/ratings.json", 200, PIKNIK_R),
+        ]);
+        let mut query = q("Пикник на обочине", "Стругацкий");
+        query.isbns = vec!["9785699120147".into(), "not-an-isbn".into()];
+        let out = client(http.clone()).lookup(&query).await;
+        assert!(
+            matches!(out, Outcome::Found { ref work_key, .. } if work_key == "/works/OL1914203W")
+        );
+        let urls = http.urls();
+        assert_eq!(urls.len(), 3, "{urls:?}");
+        assert!(urls[1].contains("/search.json"));
     }
 
     #[tokio::test(start_paused = true)]

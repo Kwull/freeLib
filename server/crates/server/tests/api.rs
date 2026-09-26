@@ -196,6 +196,37 @@ async fn open_mode_browse_and_download() {
     assert!(d["annotation"].as_str().unwrap().contains("<p>"));
     assert_eq!(d["formats"], json!(["original", "epub", "kepub"]));
     assert!(d["file"].as_str().unwrap().contains(" / "));
+    assert!(d["isbn"].is_array(), "{d}");
+
+    // ISBN, publisher and year from <publish-info> (the generator writes them for 2 in 5 books)
+    let list = app
+        .get(&format!(
+            "/api/v1/libraries/{lib}/books?since=1900-01-01&ext=fb2&limit=30"
+        ))
+        .await
+        .json();
+    let mut with_isbn = 0;
+    for b in list["books"].as_array().unwrap() {
+        let d = app
+            .get(&format!("/api/v1/libraries/{lib}/books/{}", b["id"]))
+            .await
+            .json();
+        let isbns = d["isbn"].as_array().unwrap();
+        if isbns.is_empty() {
+            assert!(d["publisher"].is_null(), "{d}");
+            continue;
+        }
+        with_isbn += 1;
+        assert!(
+            ["9785699120147", "9785170123452"].contains(&isbns[0]["isbn13"].as_str().unwrap()),
+            "{d}"
+        );
+        assert!(isbns[0]["isbn10"].is_string());
+        assert!(d["isbnRaw"].is_null());
+        assert!(["Эксмо", "АСТ"].contains(&d["publisher"].as_str().unwrap()));
+        assert!(d["publishYear"].as_str().unwrap().starts_with("20"));
+    }
+    assert!(with_isbn >= 3, "{with_isbn}");
     assert!(
         app.root()
             .join("cache/info")

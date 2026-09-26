@@ -150,15 +150,74 @@ export function editionNote(b: MockBook): string | null {
   const parts = [m?.[1], b.keywords && /перев|translat/i.test(b.keywords) ? b.keywords : undefined].filter(Boolean);
   return parts.length ? parts.join('; ') : null;
 }
-export function workKey(b: MockBook): string {
-  const t = normalize(b.title.replace(EDITION_NOTE, ''));
-  return `${b.lang}|${t}|${[...b.authorIds].sort((x, y) => x - y).join(',')}`;
+const FORMAT_NOTE = /\s*[([](fb2|fb3|epub|pdf|djvu|txt|rtf|litres|си)[)\]]\s*$/iu;
+const VOLUME_WORDS = new Set(['том', 'т', 'книга', 'кн', 'часть', 'ч', 'выпуск', 'вып', 'volume', 'vol', 'part', 'book']);
+function titleKey(b: MockBook): string {
+  let t = b.title;
+  for (let i = 0; i < 3; i++) t = t.replace(EDITION_NOTE, '').replace(FORMAT_NOTE, '');
+  let k = normalize(t);
+  // a trailing "Книга N" that only repeats the series number
+  const w = k.split(' ');
+  if (b.serno && w.length > 2 && VOLUME_WORDS.has(w[w.length - 2]) && Number(w[w.length - 1]) === b.serno) k = w.slice(0, -2).join(' ');
+  return k;
 }
-/** Best copy first: live, FB2, then EPUB, larger (20 % steps, ≤ 30 MB), newer, lower id. */
+/** The volume a title names (`Том 1`), like freelib_catalog::text::volume_number. */
+export function volumeNumber(title: string): number | null {
+  const w = normalize(title).split(' ');
+  for (let i = w.length - 1; i > 0; i--) if (VOLUME_WORDS.has(w[i - 1]) && /^\d{1,4}$/.test(w[i])) return Number(w[i]);
+  return null;
+}
+function titleWorkKey(b: MockBook): string {
+  return `${b.lang}|${titleKey(b)}|${[...b.authorIds].sort((x, y) => x - y).join(',')}`;
+}
+const workKeys = new WeakMap<MockBook, string>();
+/** Work keys of a library: the title rule, then the series-number rule with its guards
+ *  (a simplified freelib_catalog::works::series_number_merges). */
+export function indexWorks(lib: MockLibrary) {
+  const parent = new Map<string, string>();
+  const find = (k: string): string => { let r = k; while (parent.has(r) && parent.get(r) !== r) r = parent.get(r)!; return r; };
+  const union = (a: string, b: string) => { const [x, y] = [find(a), find(b)]; if (x !== y) parent.set(x < y ? y : x, x < y ? x : y); };
+  const bySeries = new Map<number, MockBook[]>();
+  for (const b of lib.books) {
+    if (b.seriesId && b.serno && b.serno > 0) (bySeries.get(b.seriesId) ?? bySeries.set(b.seriesId, []).get(b.seriesId)!).push(b);
+  }
+  for (const list of bySeries.values()) {
+    const titlesByNo = new Map<number, Set<string>>();
+    const all = new Set<string>();
+    for (const b of list) { const k = titleKey(b); all.add(k); (titlesByNo.get(b.serno!) ?? titlesByNo.set(b.serno!, new Set()).get(b.serno!)!).add(k); }
+    const max = Math.max(...[...titlesByNo.values()].map((s) => s.size));
+    if (max > 5 || (titlesByNo.size === 1 && all.size >= 3) || (all.size >= 6 && max * 2 > all.size)) continue;
+    const buckets = new Map<string, MockBook[]>();
+    for (const b of list) {
+      const k = `${b.lang}|${b.serno}|${b.authorIds[0]}`;
+      (buckets.get(k) ?? buckets.set(k, []).get(k)!).push(b);
+    }
+    for (const bucket of buckets.values()) {
+      const vols = new Set(bucket.map((b) => volumeNumber(b.title)).filter((v) => v !== null));
+      const parts = vols.size >= 2 ? [...vols].map((v) => bucket.filter((b) => volumeNumber(b.title) === v)) : [bucket];
+      for (const part of parts) {
+        const sorted = part.slice().sort((a, b) => b.authorIds.length - a.authorIds.length);
+        const clusters: { set: Set<number>; key: string }[] = [];
+        for (const b of sorted) {
+          const set = new Set(b.authorIds);
+          const c = clusters.find((cl) => [...set].every((a) => cl.set.has(a)) || [...cl.set].every((a) => set.has(a)));
+          if (c) union(c.key, titleWorkKey(b));
+          else clusters.push({ set, key: titleWorkKey(b) });
+        }
+      }
+    }
+  }
+  for (const b of lib.books) workKeys.set(b, find(titleWorkKey(b)));
+}
+export function workKey(b: MockBook): string {
+  return workKeys.get(b) ?? titleWorkKey(b);
+}
+/** Best copy first: live, no volume in the title, FB2, then EPUB, larger (20 % steps, ≤ 30 MB), newer, lower id. */
 export function editionCmp(a: MockBook, b: MockBook): number {
   const fmt = (x: MockBook) => (x.ext === 'fb2' ? 0 : x.ext === 'epub' ? 1 : 2);
   const bucket = (x: MockBook) => Math.floor(Math.log(Math.min(Math.max(x.size, 1), 30 << 20)) / Math.log(1.2));
-  return Number(a.deleted) - Number(b.deleted) || fmt(a) - fmt(b) || bucket(b) - bucket(a)
+  const vol = (x: MockBook) => Number(volumeNumber(x.title) !== null);
+  return Number(a.deleted) - Number(b.deleted) || vol(a) - vol(b) || fmt(a) - fmt(b) || bucket(b) - bucket(a)
     || (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) || a.id - b.id;
 }
 export type Grouped = { best: MockBook; members: MockBook[] };

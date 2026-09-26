@@ -7,6 +7,7 @@
 pub mod catalog;
 pub mod genres;
 pub mod home;
+pub mod isbn;
 pub mod kids;
 pub mod model;
 pub mod normalize;

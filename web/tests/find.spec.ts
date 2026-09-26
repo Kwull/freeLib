@@ -88,7 +88,8 @@ test('search: word forms, transliteration, typo correction and did-you-mean', as
   // little found and no author → the corrected results, with a way back to the query as typed
   await page.goto('/l/1/search?q=азимв');
   await expect(page.getByTestId('search-corrected')).toContainText('Showing results for азимов');
-  await expect(page.locator('.series-card', { hasText: 'Азимов Айзек' }).locator('mark')).toHaveText('Азимов');
+  // (the series «Академия [Азимов]» of the editions fixture is a card too)
+  await expect(page.locator('.series-card', { hasText: 'Азимов Айзек' }).first().locator('mark').first()).toHaveText('Азимов');
   await page.getByTestId('search-exact').click();
   await expect(page).toHaveURL(/exact=1/);
   await expect(page.getByTestId('search-book')).toHaveCount(1);

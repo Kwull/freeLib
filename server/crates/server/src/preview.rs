@@ -13,12 +13,40 @@ use crate::util::short_hash;
 
 pub const THUMB_HEIGHT: u32 = 240;
 
+/// Version of the cached [`InfoCache`] layout; older entries are read again from the book.
+const INFO_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct InfoCache {
+    /// [`INFO_VERSION`] of the entry (0 = before ISBNs were kept).
+    pub v: u32,
     pub annotation: Option<String>,
     /// MIME type of the stored full cover, `None` = no cover.
     pub cover: Option<String>,
+    /// `<publish-info>`: the ISBN field as printed, publisher and year.
+    pub isbn: String,
+    pub publisher: String,
+    pub year: String,
+}
+
+/// The cached entry at `path` if it is current.
+fn read_cached(bytes: &[u8]) -> Option<InfoCache> {
+    serde_json::from_slice::<InfoCache>(bytes)
+        .ok()
+        .filter(|v| v.v == INFO_VERSION)
+}
+
+/// The cached info of a book, without reading the book (`None` when not cached yet).
+pub async fn cached_info(st: &AppState, lib: i64, d: &BookDetail) -> Option<InfoCache> {
+    if !has_metadata(&d.book.ext) {
+        return None;
+    }
+    let (info_path, _) = paths(st, lib, d);
+    tokio::fs::read(info_path)
+        .await
+        .ok()
+        .and_then(|b| read_cached(&b))
 }
 
 fn hash(d: &BookDetail) -> String {
@@ -65,7 +93,7 @@ async fn info_uncached(
 ) -> ApiResult<InfoCache> {
     let (info_path, cover_base) = paths(st, lib, d);
     if let Ok(s) = tokio::fs::read(&info_path).await
-        && let Ok(v) = serde_json::from_slice::<InfoCache>(&s)
+        && let Some(v) = read_cached(&s)
     {
         return Ok(v);
     }
@@ -76,7 +104,7 @@ async fn info_uncached(
         .await
         .map_err(|_| ApiError::internal("preview pool closed"))?;
     if let Ok(s) = tokio::fs::read(&info_path).await
-        && let Ok(v) = serde_json::from_slice::<InfoCache>(&s)
+        && let Some(v) = read_cached(&s)
     {
         return Ok(v);
     }
@@ -91,9 +119,15 @@ async fn info_uncached(
             Err(e) if e.code == "not_found" => return Ok(InfoCache::default()),
             Err(e) => return Err(e),
         };
-        let mut out = InfoCache::default();
+        let mut out = InfoCache {
+            v: INFO_VERSION,
+            ..Default::default()
+        };
         if let Ok(info) = conv.read_info(&bytes) {
             out.annotation = info.annotation.clone();
+            out.isbn = info.isbn.chars().take(500).collect();
+            out.publisher = info.publisher.chars().take(300).collect();
+            out.year = info.year.chars().take(40).collect();
             if let Some(c) = info.cover {
                 let (data, mime) = normalize_cover(c.data, &c.mime);
                 if let Some(data) = data {

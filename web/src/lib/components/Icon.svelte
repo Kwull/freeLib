@@ -45,6 +45,7 @@
     home: 'M3 11 12 4l9 7M5 10v10h5v-6h4v6h5V10',
     bell: 'M6 16v-5a6 6 0 0 1 12 0v5l2 2H4ZM10 21a2 2 0 0 0 4 0',
     layers: 'm12 3 9 5-9 5-9-5ZM3 12l9 5 9-5M3 16l9 5 9-5',
+    copy: 'M9 9h11v11H9ZM5 15H4V4h11v1',
   };
 
   let { name, size = 18, strokeWidth = 1.8, ...rest }: { name: string; size?: number; strokeWidth?: number; class?: string } = $props();

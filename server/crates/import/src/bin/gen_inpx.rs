@@ -18,6 +18,7 @@ fn usage() -> ! {
 
 fn main() {
     let mut opts = GenOptions {
+        showcase: true,
         books: 10_000,
         ..Default::default()
     };

@@ -86,6 +86,26 @@ pub async fn detail(
         o.insert("extRatingInfo".into(), serde_json::json!(ext_info));
         o.insert("annotation".into(), serde_json::json!(info.annotation));
         o.insert("hasCover".into(), serde_json::json!(info.cover.is_some()));
+        let isbns = freelib_catalog::isbn::parse(&info.isbn);
+        // printed but not a valid ISBN: shown as is, marked unverified
+        let raw = info.isbn.trim();
+        o.insert(
+            "isbnRaw".into(),
+            serde_json::json!((isbns.is_empty() && !raw.is_empty()).then_some(raw)),
+        );
+        o.insert("isbn".into(), serde_json::json!(isbns));
+        let nonempty = |s: &str| {
+            let s = s.trim();
+            (!s.is_empty()).then(|| s.to_string())
+        };
+        o.insert(
+            "publisher".into(),
+            serde_json::json!(nonempty(&info.publisher)),
+        );
+        o.insert(
+            "publishYear".into(),
+            serde_json::json!(nonempty(&info.year)),
+        );
         o.insert("file".into(), serde_json::json!(d.display_file()));
         o.insert("keywords".into(), serde_json::json!(d.keywords));
         o.insert("formats".into(), serde_json::json!(formats));

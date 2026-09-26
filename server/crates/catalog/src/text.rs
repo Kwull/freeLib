@@ -315,7 +315,10 @@ const EDITION_MARKERS: &[&str] = &[
 ];
 
 /// Whole normalized notes that mark an edition.
-const EDITION_NOTES: &[&str] = &["си", "пер", "ред", "изд"];
+const EDITION_NOTES: &[&str] = &[
+    "си", "пер", "ред", "изд", "fb2", "fb3", "epub", "pdf", "djvu", "txt", "rtf", "doc", "docx",
+    "html",
+];
 
 fn is_edition_note(note: &str) -> bool {
     let n = normalize(note);
@@ -392,21 +395,139 @@ const GENERIC_TITLES: &[&str] = &[
 ];
 
 /// Work key of a title: normalized, with trailing edition notes (`(другой перевод)`,
-/// `[иллюстрации]`, `(СИ)`) removed; other bracketed text (`(сборник)`, `(Часть 2)`) is kept
-/// because it can tell works apart. `None` for titles too short or too generic to group.
+/// `[иллюстрации]`, `(СИ)`, `(fb2)`, `[litres]`) removed; other bracketed text (`(сборник)`,
+/// `(Часть 2)`) is kept because it can tell works apart. `None` for titles too short or too
+/// generic to group. See [`work_title_key_in_series`] for books with a series number.
 pub fn work_title_key(title: &str) -> Option<String> {
+    work_title_key_in_series(title, None)
+}
+
+/// [`work_title_key`] of a book numbered `serno` in its series: a trailing volume marker that
+/// only repeats that number (`Основание. Книга 3` as #3) is dropped, any other volume marker
+/// (`Том 1` of #37) is kept. Words mixing Cyrillic and Latin look-alike letters (`Oснование`
+/// typed with a Latin `O`) are read as Cyrillic.
+pub fn work_title_key_in_series(title: &str, serno: Option<i64>) -> Option<String> {
     let (mut t, notes) = trailing_groups(title);
     for n in notes.iter().filter(|n| !is_edition_note(n)) {
         t.push_str(" (");
         t.push_str(n);
         t.push(')');
     }
-    let k = normalize(&t);
+    let mut k = fold_lookalikes(&normalize(&t));
+    if let Some(n) = serno.filter(|&n| n > 0) {
+        if let Some((head, v)) = split_trailing_volume(&k) {
+            if v == n as u64 && head.chars().filter(|c| c.is_alphanumeric()).count() >= 2 {
+                k = head.to_string();
+            }
+        }
+    }
     if k.chars().filter(|c| c.is_alphanumeric()).count() < 2 || GENERIC_TITLES.contains(&k.as_str())
     {
         return None;
     }
     Some(k)
+}
+
+/// Words that introduce a volume / part number in a title (normalized).
+const VOLUME_WORDS: &[&str] = &[
+    "том",
+    "т",
+    "книга",
+    "кн",
+    "часть",
+    "ч",
+    "выпуск",
+    "вып",
+    "частина",
+    "книжка",
+    "volume",
+    "vol",
+    "part",
+    "book",
+    "tome",
+    "band",
+    "bd",
+];
+
+fn roman(s: &str) -> Option<u64> {
+    const R: &[(&str, u64)] = &[
+        ("i", 1),
+        ("ii", 2),
+        ("iii", 3),
+        ("iv", 4),
+        ("v", 5),
+        ("vi", 6),
+        ("vii", 7),
+        ("viii", 8),
+        ("ix", 9),
+        ("x", 10),
+        ("xi", 11),
+        ("xii", 12),
+    ];
+    R.iter().find(|(r, _)| *r == s).map(|(_, v)| *v)
+}
+
+fn volume_value(w: &str) -> Option<u64> {
+    if !w.is_empty() && w.len() <= 4 && w.bytes().all(|b| b.is_ascii_digit()) {
+        return w.parse().ok();
+    }
+    roman(w)
+}
+
+/// `("люди за спиной", 1)` for the normalized title `люди за спиной том 1`.
+fn split_trailing_volume(k: &str) -> Option<(&str, u64)> {
+    let (rest, num) = k.rsplit_once(' ')?;
+    let v = volume_value(num)?;
+    let (head, word) = rest.rsplit_once(' ').unwrap_or(("", rest));
+    VOLUME_WORDS.contains(&word).then_some((head.trim_end(), v))
+}
+
+/// The volume / part number a title names (`Люди за спиной. Том 1` → 1, `Миры Айзека Азимова.
+/// Книга 9` → 9), from the last `<volume word> <number>` pair; `None` when there is none.
+/// Two books of one series number naming different volumes are never one work.
+pub fn volume_number(title: &str) -> Option<u64> {
+    let k = fold_lookalikes(&normalize(title));
+    let w: Vec<&str> = k.split(' ').collect();
+    (1..w.len()).rev().find_map(|i| {
+        VOLUME_WORDS
+            .contains(&w[i - 1])
+            .then(|| volume_value(w[i]))
+            .flatten()
+    })
+}
+
+/// Latin letters that look like Cyrillic ones, read as Cyrillic inside a word that has
+/// Cyrillic letters (`oснование` → `основание`).
+fn fold_lookalikes(k: &str) -> String {
+    if !k.chars().any(|c| c.is_ascii_alphabetic()) || !has_cyrillic(k) {
+        return k.to_string();
+    }
+    k.split(' ')
+        .map(|w| {
+            if w.chars().any(|c| c.is_ascii_alphabetic()) && has_cyrillic(w) {
+                w.chars()
+                    .map(|c| match c {
+                        'a' => 'а',
+                        'c' => 'с',
+                        'e' => 'е',
+                        'o' => 'о',
+                        'p' => 'р',
+                        'x' => 'х',
+                        'y' => 'у',
+                        'k' => 'к',
+                        'm' => 'м',
+                        't' => 'т',
+                        'h' => 'н',
+                        'b' => 'в',
+                        other => other,
+                    })
+                    .collect()
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -497,5 +618,49 @@ mod tests {
         );
         assert_eq!(edition_note("Дозор (Часть 2)"), None);
         assert_eq!(edition_note("(Не)везучий"), None);
+    }
+
+    #[test]
+    fn work_keys_normalise_titles() {
+        let k = |t: &str| work_title_key(t);
+        // punctuation, quotes, case, ё/е, whitespace
+        assert_eq!(k("«Люди за спиной». Том 1"), k("Люди за спиной, том  1"));
+        assert_eq!(k("ЛЮДИ ЗА СПИНОЙ — ТОМ 1"), k("Люди за спиной. Том 1"));
+        assert_eq!(k("Ёжик в тумане"), k("Ежик в тумане"));
+        // format and shop notes
+        assert_eq!(k("Основание (fb2)"), k("Основание"));
+        assert_eq!(k("Основание [litres]"), k("Основание"));
+        assert_eq!(k("Основание [Litres] (другой перевод)"), k("Основание"));
+        // Latin look-alikes in a Cyrillic word (Latin O, a, e)
+        assert_eq!(k("Oснованиe"), k("Основание"));
+        assert_eq!(k("Кaмeнская"), k("Каменская"));
+        assert_eq!(k("Foundation"), Some("foundation".into()));
+        // volumes stay apart
+        assert_ne!(k("Люди за спиной. Том 1"), k("Люди за спиной. Том 2"));
+        assert_ne!(k("Люди за спиной. Том 1"), k("Люди за спиной"));
+        // a trailing volume marker that repeats the series number is dropped
+        let s = |t: &str, n: i64| work_title_key_in_series(t, Some(n));
+        assert_eq!(s("Основание. Книга 3", 3), s("Основание", 3));
+        assert_eq!(s("Основание (Книга 3)", 3), s("Основание", 3));
+        assert_ne!(s("Основание. Книга 2", 3), s("Основание", 3));
+        assert_eq!(s("Люди за спиной. Том 1", 37), k("Люди за спиной. Том 1"));
+        assert_eq!(s("Книга 3", 3), Some("книга 3".into()));
+        // omnibus volumes keep their number
+        assert_eq!(
+            s("Миры Айзека Азимова. Книга 5", 1),
+            Some("миры айзека азимова книга 5".into())
+        );
+    }
+
+    #[test]
+    fn volume_numbers() {
+        assert_eq!(volume_number("Люди за спиной. Том 1"), Some(1));
+        assert_eq!(volume_number("Люди за спиной, т. 2"), Some(2));
+        assert_eq!(volume_number("Миры Айзека Азимова. Книга 9"), Some(9));
+        assert_eq!(volume_number("Война и мир. Том III"), Some(3));
+        assert_eq!(volume_number("The Lord of the Rings, Part 2"), Some(2));
+        assert_eq!(volume_number("Академия. Книги 1-7"), None);
+        assert_eq!(volume_number("Академия на краю гибели"), None);
+        assert_eq!(volume_number("1984"), None);
     }
 }

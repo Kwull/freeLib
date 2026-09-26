@@ -9,7 +9,7 @@ import { placeholderCover } from './covers';
 import { scenarioOf, handleScenario, handleMockControl, sendSlowly } from './scenario';
 import { normalize } from './normalize';
 import { genreName } from './names';
-import type { Book, BookDetail, AuthorRef, SeriesRef } from '../src/lib/api/types';
+import type { Book, BookDetail, AuthorRef, SeriesRef, Isbn } from '../src/lib/api/types';
 import { ANTHOLOGY_MIN_AUTHORS, type MockBook, type MockLibrary } from './gen';
 import {
   correct, dismissed, editionNote, editionsOf, followsOf, groupBooks, highlightWords, homeOf, matchTier,
@@ -138,7 +138,24 @@ function toRow(lib: MockLibrary, g: Grouped): Book {
   return b;
 }
 
+/** A valid ISBN (978-5-…) derived from the book id, like one read from <publish-info>. */
+function mockIsbn(b: MockBook): Isbn | null {
+  if (b.ext !== 'fb2' || hash(b.id + 7) % 4 === 0) return null;
+  const body = String(10_000_000 + (b.id * 7919) % 90_000_000).padStart(8, '0');
+  const d12 = `9785${body}`;
+  const s13 = [...d12].reduce((n, c, i) => n + Number(c) * (i % 2 ? 3 : 1), 0);
+  const c13 = (10 - (s13 % 10)) % 10;
+  const d9 = `5${body}`;
+  const s10 = [...d9].reduce((n, c, i) => n + Number(c) * (10 - i), 0);
+  const c10 = (11 - (s10 % 11)) % 11;
+  return {
+    isbn13: `${d12}${c13}`, isbn10: `${d9}${c10 === 10 ? 'X' : c10}`,
+    display: `978-5-${body.slice(0, 3)}-${body.slice(3)}-${c13}`,
+  };
+}
+
 function toDetail(lib: MockLibrary, b: MockBook): BookDetail {
+  const isbn = mockIsbn(b);
   const e = extRating(b);
   const h = hash(b.id + 31);
   return {
@@ -151,6 +168,10 @@ function toDetail(lib: MockLibrary, b: MockBook): BookDetail {
     file: `${b.key.split(':')[0]}-archive.zip / ${b.id}.${b.ext}`,
     keywords: b.keywords ?? '',
     formats: ['original', 'epub', b.ext !== 'epub' ? 'epub' : 'fb2', 'kepub', 'azw3'].filter((v, i, a) => a.indexOf(v) === i),
+    isbn: isbn ? [isbn] : [],
+    isbnRaw: null,
+    publisher: isbn ? ['Эксмо', 'АСТ', 'Азбука', 'Penguin'][b.id % 4] : null,
+    publishYear: isbn ? b.date.slice(0, 4) : null,
   };
 }
 

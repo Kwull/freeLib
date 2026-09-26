@@ -11,6 +11,8 @@ export function navigate(to: string, opts?: { replace?: boolean }) {
   else history.pushState({}, '', url);
   routerState.path = url.pathname;
   routerState.search = url.search;
+  // open menus and popovers close (utils/dismiss.ts)
+  window.dispatchEvent(new Event('freelib:navigate'));
 }
 
 window.addEventListener('popstate', () => {

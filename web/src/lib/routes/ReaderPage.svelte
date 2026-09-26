@@ -4,6 +4,7 @@
   // lazily imported (see App.svelte), and foliate-js itself is only pulled in
   // once this component mounts, so the reader's weight never touches the main
   // bundle.
+  import { dismissable } from '../utils/dismiss';
   import { api } from '../api/client';
   import type { BookDetail } from '../api/types';
   import Icon from '../components/Icon.svelte';
@@ -36,6 +37,7 @@
   let view: FoliateView | null = null;
   let ready = $state(false);
   let tocOpen = $state(false);
+  let tocBtn = $state<HTMLButtonElement | undefined>();
   let toc = $state<TocItem[]>([]);
   let fraction = $state(0);
   let currentHref = $state<string | null>(null);
@@ -167,7 +169,7 @@
     <button type="button" aria-label={t('common.back')} onclick={() => navigate(`/l/${lib}/book/${id}`)}>
       <Icon name="chevronLeft" size={18} />
     </button>
-    <button type="button" class="toc-btn" aria-label={t('reader.toc')} onclick={() => (tocOpen = !tocOpen)}>
+    <button type="button" class="toc-btn" bind:this={tocBtn} aria-label={t('reader.toc')} aria-expanded={tocOpen} onclick={() => (tocOpen = !tocOpen)}>
       <Icon name="genres" size={18} />
     </button>
     <span class="title">{detail?.title ?? t('common.loading')}</span>
@@ -187,7 +189,7 @@
 
   <div class="body">
     {#if tocOpen}
-      <aside class="toc-drawer" aria-label={t('reader.toc')}>
+      <aside class="toc-drawer" aria-label={t('reader.toc')} use:dismissable={{ onClose: () => (tocOpen = false), trigger: () => tocBtn }}>
         <nav>
           {#each flatToc as { item, depth } (item.href + item.label)}
             <button

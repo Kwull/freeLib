@@ -84,6 +84,7 @@ fn main() {
         generate(
             &inpx,
             &GenOptions {
+                showcase: false,
                 books,
                 ..Default::default()
             },

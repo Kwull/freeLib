@@ -19,6 +19,7 @@
   } from '../utils/ratings';
   import { formatSize, formatDate } from '../utils/format';
   import { normalize } from '../utils/normalize';
+  import { dismissable } from '../utils/dismiss';
   import { t, tn, i18nState } from '../i18n';
   import { getPref, setPref } from '../stores/prefs.svelte';
   import { myRatings } from '../stores/myRatings.svelte';
@@ -150,11 +151,14 @@
   });
   let columnMenuOpen = $state(false);
   let filterMenuOpen = $state(false);
+  let filterBtn = $state<HTMLButtonElement | undefined>();
+  let columnBtn = $state<HTMLButtonElement | undefined>();
+  let coauthorsBtn = $state<HTMLButtonElement | undefined>();
   let coauthorsOpen = $state(false);
   let collapsed = $state<Set<string>>(new Set());
   let collapseInitFor = '';
   let lastClickedIndex = -1;
-  let listRef = $state<{ reveal: (i: number) => void; resetX: () => void } | undefined>();
+  let listRef = $state<{ reveal: (i: number) => void; resetX: () => void; scrollLeft: () => number } | undefined>();
   // horizontal scroll of a wide table: the header follows the rows
   let headWrap = $state<HTMLDivElement | undefined>();
   let scrolledX = $state(false);
@@ -354,7 +358,7 @@
   });
 
   type FlatRow = { kind: 'group'; group: Group } | { kind: 'row'; row: Row; groupKey: string }
-    | { kind: 'edition'; ed: Edition; of: number };
+    | { kind: 'edition'; ed: Edition; of: number; ofTitle: string };
   const flatRows = $derived.by<FlatRow[]>(() => {
     const out: FlatRow[] = [];
     for (const g of groups) {
@@ -363,7 +367,7 @@
       for (const r of g.rows) {
         out.push({ kind: 'row', row: r, groupKey: g.key });
         if (openEditions.has(r.book.id)) {
-          for (const ed of editionsOf.get(r.book.id) ?? []) if (ed.id !== r.book.id) out.push({ kind: 'edition', ed, of: r.book.id });
+          for (const ed of editionsOf.get(r.book.id) ?? []) if (ed.id !== r.book.id) out.push({ kind: 'edition', ed, of: r.book.id, ofTitle: r.book.title });
         }
       }
     }
@@ -372,6 +376,12 @@
   function editionLine(e: Edition): string {
     return [e.ext.toUpperCase(), formatSize(e.size), formatDate(e.date, i18nState.lang), e.lang, e.libRating ? `★${e.libRating}` : '', e.note ?? '']
       .filter(Boolean).join(' · ');
+  }
+  /** An edition's own title is shown when it is not just the group title (another translation
+   *  under another title, an omnibus); edition notes are ignored in the comparison. */
+  function differentTitle(e: Edition, groupTitle: string): boolean {
+    const bare = (t: string) => normalize(t.replace(/\s*[([][^)\]]*[)\]]\s*$/u, ''));
+    return bare(e.title) !== bare(groupTitle);
   }
 
   $effect(() => {
@@ -478,6 +488,13 @@
     setPref(colsPrefKey, [...s]);
   }
 
+  // resized / toggled columns change the table width: the rows' scroll position may be
+  // clamped, and the header must follow it
+  $effect(() => {
+    gridColumns; tableMinWidth;
+    tick().then(() => { if (headWrap && listRef) headWrap.scrollLeft = listRef.scrollLeft(); });
+  });
+
   // a new sort, filter or scope starts at the left edge of a wide table
   $effect(() => {
     sort; ratingFilters; q; langFilter; extFilter; showDeleted; scopeKey;
@@ -540,7 +557,8 @@
 </script>
 
 {#snippet filterMenu(phone: boolean)}
-  <div class="col-menu" class:phone-menu={phone} role="menu">
+  <div class="col-menu" class:phone-menu={phone} role="menu" aria-label={t('books.filter')} data-testid="filter-menu"
+    use:dismissable={{ onClose: () => (filterMenuOpen = false), trigger: () => filterBtn }}>
     <label class="menu-check"><input type="checkbox" bind:checked={showDeleted} />{t('books.showDeleted')}</label>
     <label class="menu-check" title={t('editions.groupHint')}><input type="checkbox" data-testid="group-editions" checked={groupEditions} onchange={() => setPref('groupEditions', !groupEditions)} />{t('editions.group')}</label>
     {#if availableLangs.length > 1 || langFilter}
@@ -562,6 +580,48 @@
   </div>
 {/snippet}
 
+{#snippet cell(c: Col, b: Book, num: number | string)}
+  {#if c === 'num'}<span class="muted num sticky-num">{num}</span>
+  {:else if c === 'author'}<span class="muted ellipsis" title={b.authors.map((a) => a.name).join(', ')}>{authorsShort(b)}</span>
+  {:else if c === 'series'}<span class="muted ellipsis" title={b.series?.name ?? ''}>{b.series ? `${b.series.name}${b.serno ? ` #${b.serno}` : ''}` : ''}</span>
+  {:else if c === 'genre'}<span class="muted ellipsis">{genreNames.get(b.genres[0]) ?? ''}</span>
+  {:else if c === 'language'}<span class="muted">{b.lang}</span>
+  {:else if c === 'format'}<span class="muted">{b.ext}</span>
+  {:else if c === 'size'}<span class="muted right">{formatSize(b.size)}</span>
+  {:else if c === 'added'}<span class="muted right">{formatDate(b.date, i18nState.lang)}</span>
+  {:else if c === 'rating'}<span class="right rating-cell" title={t('ratings.myTooltip')}>{#if b.rating}<Rating value={b.rating} size={11} />{/if}</span>
+  {:else if c === 'libRating'}<span class="right rating-cell lib" title={b.libRating ? t('ratings.libTooltip', { n: b.libRating }) : t('ratings.libNone')}>{#if b.libRating}<span class="lib-num"><Icon name="star" size={12} strokeWidth={1.6} />{b.libRating}</span>{/if}</span>
+  {:else if c === 'extRating'}<span class="right rating-cell">{#if b.extRating}<ExtRating value={b.extRating} />{/if}</span>
+  {/if}
+{/snippet}
+
+{#snippet card(b: Book)}
+  <button type="button" class="cover-card" class:selected={b.id === selectedBookId} onclick={() => onPick(b.id)} title={b.title}>
+    <div class="cover-wrap">
+      <CoverThumb {lib} bookId={b.id} title={b.title} width={140} height={200} />
+      {#if isSelected(lib, b.id)}
+        <span class="check-badge"><Icon name="check" size={14} /></span>
+      {/if}
+      <input
+        type="checkbox"
+        class="grid-check"
+        aria-label={t('books.select', { title: b.title })}
+        checked={isSelected(lib, b.id)}
+        onclick={(e) => e.stopPropagation()}
+        onchange={() => toggle(lib, b.id)}
+      />
+    </div>
+    <span class="cover-title">{#if grouped && b.serno}<span class="cover-no">#{b.serno}</span> {/if}{b.title}</span>
+    {#if b.kidsAge !== null && b.kidsAge !== undefined || b.extRating || b.editions}
+      <span class="cover-rate">
+        {#if b.editions}<span class="tag ed-count" title={t('editions.toggleHint')}>{tn('editions.count', b.editions.count)}</span>{/if}
+        <KidsBadge age={b.kidsAge} />{#if b.extRating}<ExtRating value={b.extRating} />{/if}
+      </span>
+    {/if}
+    {#if scope.kind !== 'author'}<span class="cover-sub">{authorsShort(b)}</span>{/if}
+  </button>
+{/snippet}
+
 {#snippet colHead(c: Col, i: number)}
   <span class="hcell" class:sticky-num={c === 'num'} class:sticky-title={c === 'title'} class:right={c === 'size' || c === 'added' || c === 'rating' || c === 'libRating' || c === 'extRating'}>
     <span class="hlabel" title={c === 'libRating' ? t('books.col.libRating') : undefined}>{colLabel[c]}</span>
@@ -570,6 +630,7 @@
       {#if i < titleIndex}
         <Splitter
           class="col-split at-right"
+          target="none"
           value={w(k)} min={COL_LIMITS[k].min} max={COL_LIMITS[k].max}
           label={t('layout.resizeColumn', { name: colLabel[c] })}
           side="before"
@@ -580,6 +641,7 @@
       {:else}
         <Splitter
           class="col-split at-left"
+          target="none"
           value={w(k)} min={COL_LIMITS[k].min} max={COL_LIMITS[k].max}
           label={t('layout.resizeColumn', { name: colLabel[c] })}
           side="after"
@@ -616,11 +678,11 @@
           </span>
           {#if moreCoauthors}
             <div class="more-wrap">
-              <button type="button" class="more-btn" aria-haspopup="dialog" aria-expanded={coauthorsOpen} onclick={() => (coauthorsOpen = !coauthorsOpen)}>
+              <button type="button" class="more-btn" bind:this={coauthorsBtn} aria-haspopup="dialog" aria-expanded={coauthorsOpen} onclick={() => (coauthorsOpen = !coauthorsOpen)}>
                 {shownCoauthors.length ? t('authors.andMore', { count: moreCoauthors }) : tn('authors.coauthorsCount', moreCoauthors)}
               </button>
               {#if coauthorsOpen && scope.kind === 'author'}
-                <CoauthorsPopover {lib} authorId={scope.id} onClose={() => (coauthorsOpen = false)} />
+                <CoauthorsPopover {lib} authorId={scope.id} trigger={coauthorsBtn} onClose={() => (coauthorsOpen = false)} />
               {/if}
             </div>
           {/if}
@@ -673,7 +735,7 @@
       </button>
     {/if}
     <div class="filter-chooser">
-      <button type="button" class="tbtn" class:on={activeFilterCount > 0} aria-haspopup="true" aria-expanded={filterMenuOpen} onclick={() => (filterMenuOpen = !filterMenuOpen)}>
+      <button type="button" class="tbtn" bind:this={filterBtn} class:on={activeFilterCount > 0} aria-haspopup="true" aria-expanded={filterMenuOpen} onclick={() => (filterMenuOpen = !filterMenuOpen)}>
         <Icon name="filter" size={14} /><span class="lbl-f">{t('books.filter')}</span>{#if activeFilterCount}<span class="badge">{activeFilterCount}</span>{/if}
       </button>
       {#if filterMenuOpen}{@render filterMenu(isMobile)}{/if}
@@ -682,11 +744,12 @@
     <div class="spacer"></div>
     {#if !isMobile}
       <div class="col-chooser">
-        <button type="button" class="tbtn" onclick={() => (columnMenuOpen = !columnMenuOpen)} aria-haspopup="true" aria-expanded={columnMenuOpen}>
+        <button type="button" class="tbtn" bind:this={columnBtn} onclick={() => (columnMenuOpen = !columnMenuOpen)} aria-haspopup="true" aria-expanded={columnMenuOpen}>
           {t('books.columns')}<Icon name="chevronDown" size={14} />
         </button>
         {#if columnMenuOpen}
-          <div class="col-menu" role="menu">
+          <div class="col-menu" role="menu" aria-label={t('books.columns')} data-testid="columns-menu"
+            use:dismissable={{ onClose: () => (columnMenuOpen = false), trigger: () => columnBtn }}>
             {#each OPT_COLUMNS as c (c)}
               <label>
                 <input type="checkbox" checked={colShown(c)} onchange={() => toggleColumn(c)} />
@@ -739,7 +802,10 @@
             <div class="m-row m-edition" role="row" tabindex="0" data-testid="edition-row" class:checked={isSelected(lib, e.id)}
               onclick={() => onPick(e.id)} onkeydown={(ev) => { if (ev.key === 'Enter') onPick(e.id); }}>
               <span class="ed-mark"><Icon name="layers" size={14} /></span>
-              <div class="m-info"><span class="m-meta">{editionLine(e)}</span></div>
+              <div class="m-info">
+                {#if differentTitle(e, fr.ofTitle)}<span class="m-ed-title" data-testid="edition-title">{e.title}</span>{/if}
+                <span class="m-meta">{editionLine(e)}</span>
+              </div>
               <input type="checkbox" aria-label={t('books.select', { title: e.title })} checked={isSelected(lib, e.id)}
                 onclick={(ev) => ev.stopPropagation()} onchange={() => toggle(lib, e.id)} />
             </div>
@@ -806,10 +872,20 @@
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <div class="brow edition-row" role="row" tabindex="-1" data-testid="edition-row"
                 class:selected={e.id === selectedBookId} class:checked={isSelected(lib, e.id)} class:deleted={e.deleted}
-                style="min-width: {tableMinWidth}px" onclick={() => onPick(e.id)}>
+                style="grid-template-columns: {gridColumns}; min-width: {tableMinWidth}px" onclick={() => onPick(e.id)}>
                 <span class="cell-check"><input type="checkbox" aria-label={t('books.select', { title: e.title })} checked={isSelected(lib, e.id)}
                   onclick={(ev) => ev.stopPropagation()} onchange={() => toggle(lib, e.id)} /></span>
-                <span class="ed-line"><Icon name="layers" size={13} /><span class="ellipsis">{editionLine(e)}</span></span>
+                {#each columns as c (c)}
+                  {#if c === 'title'}
+                    <span class="title-cell sticky-title ed-cell" title={`${e.title} — ${editionLine(e)}`}>
+                      <span class="ed-icon"><Icon name="layers" size={13} /></span>
+                      {#if differentTitle(e, fr.ofTitle)}<span class="ed-title" data-testid="edition-title">{e.title}</span>{/if}
+                      <span class="ed-meta">{editionLine(e)}</span>
+                    </span>
+                  {:else}
+                    {@render cell(c, e, '')}
+                  {/if}
+                {/each}
               </div>
             {:else}
               {@const r = fr.row}
@@ -844,16 +920,7 @@
                       <KidsBadge age={b.kidsAge} />
                       {#if b.deleted}<span class="tag danger">{t('books.deleted')}</span>{/if}
                     </span>
-                  {:else if c === 'author'}<span class="muted ellipsis" title={b.authors.map((a) => a.name).join(', ')}>{authorsShort(b)}</span>
-                  {:else if c === 'series'}<span class="muted ellipsis" title={b.series?.name ?? ''}>{b.series ? `${b.series.name}${b.serno ? ` #${b.serno}` : ''}` : ''}</span>
-                  {:else if c === 'genre'}<span class="muted ellipsis">{genreNames.get(b.genres[0]) ?? ''}</span>
-                  {:else if c === 'language'}<span class="muted">{b.lang}</span>
-                  {:else if c === 'format'}<span class="muted">{b.ext}</span>
-                  {:else if c === 'size'}<span class="muted right">{formatSize(b.size)}</span>
-                  {:else if c === 'added'}<span class="muted right">{formatDate(b.date, i18nState.lang)}</span>
-                  {:else if c === 'rating'}<span class="right rating-cell" title={t('ratings.myTooltip')}>{#if b.rating}<Rating value={b.rating} size={11} />{/if}</span>
-                  {:else if c === 'libRating'}<span class="right rating-cell lib" title={b.libRating ? t('ratings.libTooltip', { n: b.libRating }) : t('ratings.libNone')}>{#if b.libRating}<span class="lib-num"><Icon name="star" size={12} strokeWidth={1.6} />{b.libRating}</span>{/if}</span>
-                  {:else if c === 'extRating'}<span class="right rating-cell">{#if b.extRating}<ExtRating value={b.extRating} />{/if}</span>
+                  {:else}{@render cell(c, b, r.num)}
                   {/if}
                 {/each}
               </div>
@@ -865,29 +932,24 @@
     </div>
   {:else}
     <div class="grid-view">
-      {#each visibleBooks as b (b.id)}
-        <button type="button" class="cover-card" class:selected={b.id === selectedBookId} onclick={() => onPick(b.id)} title={b.title}>
-          <div class="cover-wrap">
-            <CoverThumb {lib} bookId={b.id} title={b.title} width={140} height={200} />
-            {#if isSelected(lib, b.id)}
-              <span class="check-badge"><Icon name="check" size={14} /></span>
-            {/if}
-            <input
-              type="checkbox"
-              class="grid-check"
-              aria-label={t('books.select', { title: b.title })}
-              checked={isSelected(lib, b.id)}
-              onclick={(e) => e.stopPropagation()}
-              onchange={() => toggle(lib, b.id)}
-            />
+      {#if showGroupHeads}
+        <!-- grouped by series: the same groups (and collapsed state) as the table -->
+        {#each groups as g (g.key)}
+          {@const open = !effectiveCollapsed.has(g.key)}
+          <div class="grid-group" role="heading" aria-level="3">
+            <button type="button" class="gtoggle" aria-expanded={open} onclick={() => toggleCollapse(g.key)}>
+              <span class="chev" class:open><Icon name="chevronRight" size={14} /></span>
+              <span class="gname">{g.name}</span>
+              <span class="gcount">{g.count}</span>
+            </button>
           </div>
-          <span class="cover-title">{b.title}</span>
-          {#if b.kidsAge !== null && b.kidsAge !== undefined || b.extRating}
-            <span class="cover-rate"><KidsBadge age={b.kidsAge} />{#if b.extRating}<ExtRating value={b.extRating} />{/if}</span>
+          {#if open}
+            {#each g.rows as r (r.book.id)}{@render card(r.book)}{/each}
           {/if}
-          {#if scope.kind !== 'author'}<span class="cover-sub">{authorsShort(b)}</span>{/if}
-        </button>
-      {/each}
+        {/each}
+      {:else}
+        {#each visibleBooks as b (b.id)}{@render card(b)}{/each}
+      {/if}
       {#if nextCursor}<div class="grid-sentinel" use:sentinel>{fetchingMore ? t('common.loading') : ''}</div>{/if}
     </div>
   {/if}
@@ -921,9 +983,18 @@
   .ed-tag { border: none; cursor: pointer; font: inherit; font-size: 11px; color: var(--accent-soft-ink); background: var(--accent-soft); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
   .ed-tag:hover { text-decoration: underline; }
   .ed-tag[aria-expanded='true'] { background: var(--accent); color: #fff; }
-  .edition-row { display: flex; --row-bg: var(--surface-alt); }
-  .ed-line { display: flex; align-items: center; gap: 8px; padding-left: 48px; font-size: 13px; color: var(--muted-2); min-width: 0; }
+  /* an edition under its work: the same grid as a book row (the columns line up), a muted
+     title cell with the edition's own title (when it differs) and its file facts */
+  .brow.edition-row { --row-bg: var(--surface-alt); font-size: 13px; }
+  .brow.edition-row:hover { --row-bg: var(--row-hover); }
+  .brow.edition-row.checked { --row-bg: var(--row-checked); }
+  .brow.edition-row.selected { --row-bg: var(--accent-soft); }
+  .ed-cell { gap: 8px; padding-left: 14px; color: var(--muted-2); overflow: hidden; }
+  .ed-icon { display: inline-flex; color: var(--muted); flex-shrink: 0; }
+  .ed-title { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+  .ed-meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 10 auto; min-width: 0; }
   .m-edition { background: var(--surface-alt); }
+  .m-ed-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ed-mark { width: 36px; display: flex; justify-content: center; color: var(--muted); flex-shrink: 0; }
   .counts { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; }
   .coauthors { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); min-width: 0; }
@@ -1008,9 +1079,11 @@
   .table-wrap { flex-grow: 1; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
   .scroll { flex-grow: 1; min-height: 0; position: relative; display: flex; flex-direction: column; outline: none; }
   .scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
-  .scroll :global(.vlist) { flex-grow: 1; min-height: 0; }
+  /* the header and the rows reserve the same scrollbar gutter, so that the 1fr title column
+     (and every column after it) has the same width in both with classic scrollbars */
+  .scroll :global(.vlist) { flex-grow: 1; min-height: 0; scrollbar-gutter: stable; }
   .brow { --row-bg: var(--surface); background: var(--row-bg); display: grid; align-items: center; height: 40px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line-soft); font-size: 14px; cursor: default; gap: 8px; }
-  .head-wrap { overflow: hidden; flex-shrink: 0; }
+  .head-wrap { overflow: hidden; flex-shrink: 0; scrollbar-gutter: stable; }
   /* wide tables scroll sideways; checkbox, # and Title stay put (the cells cover the gaps) */
   .cell-check, .sticky-num, .sticky-title { position: sticky; z-index: 1; background: var(--row-bg); align-self: stretch; display: flex; align-items: center; }
   .cell-check { left: 16px; box-shadow: -16px 0 0 var(--row-bg), 8px 0 0 var(--row-bg); }
@@ -1053,6 +1126,10 @@
   .tag { flex-shrink: 0; font-size: 11px; color: var(--muted-2); background: var(--surface-hover); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
   .tag.danger { color: var(--danger); }
   .grid-view { flex-grow: 1; overflow-y: auto; padding: 20px 24px 80px; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 20px 16px; align-content: start; }
+  .grid-group { grid-column: 1 / -1; display: flex; align-items: center; border-bottom: 1px solid var(--line-soft); padding: 2px 0 6px; margin-top: 4px; font-size: 13px; }
+  .grid-group:first-child { margin-top: 0; }
+  .cover-no { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: .3em; }
+  .ed-count { color: var(--accent-soft-ink); background: var(--accent-soft); }
   .grid-sentinel { grid-column: 1 / -1; height: 24px; text-align: center; font-size: 12px; color: var(--muted); }
   .cover-card { all: unset; display: flex; flex-direction: column; gap: 4px; cursor: pointer; min-width: 0; }
   .cover-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }

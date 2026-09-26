@@ -139,7 +139,8 @@ CREATE INDEX book_bg_rev ON book_genre(book_id);
 CREATE INDEX book_work ON book(work_id);
 ```
 
-Catalog schema version 3 (stems, Latin keys, `vocab`, `work_id`); older catalogs are rebuilt at start.
+Catalog schema version 4 (3: stems, Latin keys, `vocab`, `work_id`; 4: the series-number edition rule and better
+title keys, see "Editions" below); older catalogs are rebuilt at start (an automatic re-import).
 
 Additions to the original design and why:
 
@@ -195,14 +196,50 @@ top-level "Прочее" (id 11). A book's genre ids are deduplicated; books wit
   catalog (loaded in the warm-up: arenas + 40 bytes/word).
 * **Highlighting**: the server returns the normalized words of the shown names that matched (prefix, stem or key);
   the SPA marks whole words whose normalized form is in that set (`web/src/lib/utils/highlight.ts`).
-* **Editions** (`works.rs`): `work_id` = the first book with the same language, `work_title_key(title)` (normalized,
-  trailing edition notes such as `(другой перевод)`, `[иллюстрации]`, `(пер. …)`, `(СИ)` dropped; other brackets kept)
-  and author-id set; unknown authors and generic titles ("Избранное", "Рассказы", …) keep their own id. Lists group
-  in memory (`BookAttrs` now also holds size and work id, +8 bytes/book), each work at the position of its first edition;
-  the best copy: not deleted > known cover > FB2 > EPUB > other > larger (20 % buckets, ≤ 30 MB) > newer > library
-  rating > lower id. Covers are known per library and `book_key` from preview extraction since the server started
+* **Editions** (`works.rs`, see "Editions: how works are detected" below): `work_id` = the smallest book id of the
+  work. Lists group in memory (`BookAttrs` now also holds size and work id, +8 bytes/book, and a "title names a
+  volume" flag), each work at the position of its first edition; the best copy: not deleted > title names no volume
+  (an omnibus «Миры Айзека Азимова. Книга 9» joined by series number never represents the novel) > known cover >
+  FB2 > EPUB > other > larger (20 % buckets, ≤ 30 MB) > newer > library rating > lower id. Covers are known per library and `book_key` from preview extraction since the server started
   (`find::CoverHints`, not persisted) and passed as `RatingSource::has_cover`. Grouped pages are cut by offset from
   the grouped selection. Search groups after ranking; MCP `search_books` always groups.
+
+### Editions: how works are detected
+
+Different uploads of one work (another translation, a corrected file, another format) are one **work**; the lists show
+it once, as its best copy, with "N editions" to open the others. The importer (`import/src/builder.rs`) assigns
+`book.work_id` by two rules, never across languages (`lang`, lower-cased) and never for books by "Автор неизвестен":
+
+1. **Title rule** (while inserting): same language, same **title key** and same author-id set (in any order, so the
+   co-author order of the INPX does not matter; name variants that normalise to one author id are one author). The
+   title key (`catalog::text::work_title_key_in_series`) is the normalised title (case, `ё`→`е`, quotes dropped,
+   punctuation and dashes as spaces, whitespace collapsed, accents folded) with
+   * trailing edition notes dropped: `(другой перевод)`, `(пер. …)`, `(ред. …)`, `[иллюстрации]`, `(СИ)`, `[litres]`,
+     `(fb2)`, `(epub)`, `(pdf)`, … (other bracketed text such as `(Часть 2)` or `(сборник)` is kept: it can name
+     another work);
+   * Latin look-alike letters inside a Cyrillic word read as Cyrillic (`Oснование` with a Latin `O` = `Основание`);
+   * a trailing `Книга N` / `Том N` / `Часть N` / `Vol. N` / `Part N` dropped **only** when N is the book's own series
+     number (`Основание. Книга 3` as #3 = `Основание`); any other volume number stays part of the key, so `Том 1` and
+     `Том 2` are never one work.
+   Generic titles ("Избранное", "Рассказы", "Стихотворения", …) are never grouped by title.
+2. **Series-number rule** (after the bulk load, `catalog::works::series_number_merges`): books of the same series
+   (normalised series name), the same series number (> 0), the same language and the same first author, whose author
+   sets are compatible (one contains the other: `{Азимов}` and `{Азимов, Сильверберг}` join, `{Азимов, X}` and
+   `{Азимов, Y}` do not), are one work — different Russian titles of one novel: «Академия на краю гибели», «Край
+   Основания», «Сообщество на краю» and «Миры Айзека Азимова. Книга 9», all #6 of «Академия [Азимов]». Guards:
+   * books without a number (or #0) are never joined by this rule («Академия. Первая трилогия», «Путь к Академии»);
+   * titles naming **different volumes** under one number (`Том 1` / `Том 2`, `Книга 9` / `Книга 10`) are not
+     joined; only copies of the same volume are;
+   * series whose numbering looks unreliable are skipped entirely: a number with more than 5 distinct titles, all
+     titles under one number (3 or more), or one number holding most of the titles of a series with 6 or more.
+   Works joined here also merge their title-rule editions (a union-find over work ids; the smallest id wins), and the
+   count is reported as `seriesWorksJoined` in the import stats.
+
+An omnibus filed under a number (a "Книга 5" collection as #1) joins that number's work: the catalog cannot tell
+it apart from a translation, but the best-copy rule never shows it as the row. The edition list shows each edition's
+own title when it differs from the row's title. Changing these rules bumps `CATALOG_SCHEMA_VERSION`, which re-imports
+every library once at start. Unit tests with the real titles: `catalog/src/works.rs`, `catalog/src/text.rs`; an import
+test over the gen-inpx "showcase" books (`import/tests/catalog.rs`).
 
 ### Start page
 
@@ -318,6 +355,12 @@ Three sources per book, all exposed on `Book`:
   author names. Among several matches the one with most ratings wins. Cyrillic books are tried as is, then with a
   transliterated surname, then with transliterated title and surname (≤ 3 searches, stopping at the first match).
   Titles with fewer than 2 key characters or books without an author are not looked up.
+  **ISBN first**: when the details pane has already read the book's FB2 (the cached preview holds its
+  `<publish-info>`), up to 3 valid ISBN-13s are tried first with `GET /isbn/<isbn>.json`; the edition's work is used
+  only if the edition title matches the book title (the same conservative title match — a wrong ISBN copied into a
+  file must not attach another book's rating), otherwise the title/author search follows. The background sweep never
+  opens book files for this. ISBNs are parsed by `catalog::isbn` (several per field, `ISBN`/`ISBN-13:` prefixes,
+  dashes/spaces/en dashes, lower-case `x`; ISBN-10 and ISBN-13 checksums verified; ISBN-10 ↔ `978` ISBN-13).
 * **Cache**: `ratings.db` (WAL) in the data directory, separate from `app.db` because it is written about once a second
   and can be deleted at any time: `ext_rating(library_id, book_key, source, status found|not_found|error, average,
   count, work_key, fetched_at, attempts, message)` keyed by (library, `book_key`, source) — `book_key` alone is only
@@ -543,6 +586,29 @@ paths are copied verbatim, the server should validate them against `FREELIB_BOOK
   (128 MiB) limits, whole-book previews and conversions run under semaphores, Argon2 verifications are limited
   to two at a time.
   KEPUB = `fb2conv` EPUB with Kobo spans (`fb2conv::to_kepub`).
+
+## Web UI: menus, resizing, the book table
+
+* **Menus and popovers** (`web/src/lib/utils/dismiss.ts`): every dropdown, menu and popover (Columns, Filter, the
+  library picker, the account menu, Download, the Send split button's device menu, the phone selection "more" menu,
+  the Activity panel, the co-authors popover, the reader's contents, the phone search filters) is one
+  `use:dismissable={{ onClose, trigger }}` on the open element. It closes on a pointer press outside it and its
+  trigger, on Escape (the most recent one only; focus returns to the trigger), when another popup opens (unless nested
+  in it) and on navigation (`navigate()` fires `freelib:navigate`; back/forward is `popstate`). Choosing an item closes
+  a menu where that makes sense; multi-toggle menus (Columns, Filter) stay open while toggling inside.
+* **Splitters** (`Splitter.svelte`, `role="separator"`): pointer events with `setPointerCapture`, so a drag keeps
+  working over other panes and iframes and ends when released outside the window (`lostpointercapture` also ends it);
+  mouse, touch and pen; arrow keys (Shift = 64 px), Home/End, Enter or double click = default width, Escape cancels a
+  drag. Pane splitters measure the pane: a drag starts from its width on screen and commits what the layout gave, so
+  a pane squeezed by a narrow window has no dead zone. Stored widths are clamped to the limits on load (non-numbers
+  ignored).
+* **Book table**: one CSS grid template for the header, book rows and edition rows (an edition row is a full 40 px row
+  on the same columns, its title cell showing the edition's own title when it differs, and its format / size / date /
+  language / rating); the header and the virtualised rows reserve the same scrollbar gutter
+  (`scrollbar-gutter: stable`) so the flexible title column has one width with classic scrollbars; the header follows
+  the rows' horizontal scroll, also after resizing or toggling columns. The virtual list re-reads the scroll position
+  when the list gets shorter (a group collapsed, "Collapse all"). The cover grid shows the same series groups (and
+  collapsed state) as the table, with the editions count on a cover.
 
 ## Performance targets (full Flibusta-size INPX, ~600k books, 4 cores)
 

@@ -30,26 +30,33 @@ export function clampWidth(v: number, lim: { min: number; max: number }): number
   return Math.round(Math.min(lim.max, Math.max(lim.min, v)));
 }
 
+/** A stored width: a finite number (a string from an old or hand-edited prefs blob is
+ *  parsed), clamped to the current limits; `null` when unusable. */
+function storedWidth(v: unknown, lim: { min: number; max: number }): number | null {
+  const n = typeof v === 'string' ? Number(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) ? clampWidth(n, lim) : null;
+}
+
 export function paneWidth(k: PaneKey): number {
-  const w = getPref<Record<string, number>>('panes', {})[k];
-  return typeof w === 'number' ? clampWidth(w, PANE_LIMITS[k]) : PANE_LIMITS[k].def;
+  const all = getPref<Record<string, unknown> | null>('panes', {});
+  return storedWidth(all && typeof all === 'object' ? all[k] : null, PANE_LIMITS[k]) ?? PANE_LIMITS[k].def;
 }
 
 export function setPaneWidth(k: PaneKey, w: number | null) {
-  const cur = { ...getPref<Record<string, number>>('panes', {}) };
-  if (w === null) delete cur[k];
+  const cur = { ...(getPref<Record<string, number> | null>('panes', {}) ?? {}) };
+  if (w === null || !Number.isFinite(w)) delete cur[k];
   else cur[k] = clampWidth(w, PANE_LIMITS[k]);
   setPref('panes', cur);
 }
 
 export function colWidth(k: ColKey): number {
-  const w = getPref<Record<string, number>>('columns', {})[k];
-  return typeof w === 'number' ? clampWidth(w, COL_LIMITS[k]) : COL_LIMITS[k].def;
+  const all = getPref<Record<string, unknown> | null>('columns', {});
+  return storedWidth(all && typeof all === 'object' ? all[k] : null, COL_LIMITS[k]) ?? COL_LIMITS[k].def;
 }
 
 export function setColWidth(k: ColKey, w: number | null) {
-  const cur = { ...getPref<Record<string, number>>('columns', {}) };
-  if (w === null) delete cur[k];
+  const cur = { ...(getPref<Record<string, number> | null>('columns', {}) ?? {}) };
+  if (w === null || !Number.isFinite(w)) delete cur[k];
   else cur[k] = clampWidth(w, COL_LIMITS[k]);
   setPref('columns', cur);
 }

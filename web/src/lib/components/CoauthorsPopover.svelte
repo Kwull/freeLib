@@ -8,12 +8,13 @@
   import { navigate } from '../router.svelte';
   import { t, tn } from '../i18n';
 
-  let { lib, authorId, onClose }: { lib: number; authorId: number; onClose: () => void } = $props();
+  import { dismissable } from '../utils/dismiss';
+
+  let { lib, authorId, onClose, trigger }: { lib: number; authorId: number; onClose: () => void; trigger?: HTMLElement } = $props();
 
   let rows = $state<[number, string, number, number][] | null>(null);
   let error = $state<string | null>(null);
   let query = $state('');
-  let root: HTMLDivElement | undefined = $state();
   let input: HTMLInputElement | undefined = $state();
 
   $effect(() => {
@@ -33,22 +34,14 @@
     return rows.filter((_, i) => norm[i].includes(q));
   });
 
-  function outside(e: MouseEvent) {
-    if (root && !root.contains(e.target as Node) && !(e.target as HTMLElement).closest('.more-btn')) onClose();
-  }
-  $effect(() => {
-    document.addEventListener('mousedown', outside);
-    return () => document.removeEventListener('mousedown', outside);
-  });
-
   function go(id: number) {
     onClose();
     navigate(`/l/${lib}/authors/${id}`);
   }
 </script>
 
-<div class="pop" role="dialog" tabindex="-1" aria-label={t('authors.coauthorsTitle')} bind:this={root}
-  onkeydown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}>
+<div class="pop" role="dialog" tabindex="-1" aria-label={t('authors.coauthorsTitle')}
+  use:dismissable={{ onClose, trigger: () => trigger }}>
   <div class="top">
     <label class="box">
       <Icon name="search" size={14} />

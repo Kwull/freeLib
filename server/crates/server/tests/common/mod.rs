@@ -47,6 +47,7 @@ pub fn make_library(root: &Path, books: usize) -> PathBuf {
     let lib = root.join("books/lib");
     std::fs::create_dir_all(&lib).unwrap();
     let opts = freelib_import::synth::GenOptions {
+        showcase: false,
         books,
         per_archive: 100,
         seed: 7,

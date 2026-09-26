@@ -110,6 +110,9 @@ export type OAuthRequest = {
   scopes: TokenScope[]; resource: string; csrf: string;
 };
 
+/** A valid ISBN from the book's FB2 `<publish-info>`, in both forms. */
+export type Isbn = { isbn13: string; isbn10: string | null; display: string };
+
 export type BookDetail = Book & {
   extRatingInfo?: ExtRatingInfo | null;
   annotation: string | null;
@@ -117,6 +120,12 @@ export type BookDetail = Book & {
   file: string;
   keywords: string;
   formats: string[];
+  /** valid ISBNs (checksum verified), in the order printed */
+  isbn?: Isbn[];
+  /** the ISBN field as printed when it holds no valid ISBN */
+  isbnRaw?: string | null;
+  publisher?: string | null;
+  publishYear?: string | null;
 };
 
 export type Genre = { id: number; name: string; parent: number; count: number };

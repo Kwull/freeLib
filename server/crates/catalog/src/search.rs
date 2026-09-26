@@ -55,6 +55,9 @@ pub struct SearchQuery {
 
 pub(crate) const FLAG_EXISTS: u8 = 1;
 pub(crate) const FLAG_DELETED: u8 = 2;
+/// The title names a volume (`Книга 9`, `Том 1`): an omnibus or a part, not the best copy of
+/// a work that also has plain copies.
+pub(crate) const FLAG_VOLUME: u8 = 4;
 
 /// Compact per-book attributes, indexed by book id.
 pub struct BookAttrs {
@@ -110,7 +113,7 @@ impl BookAttrs {
         // keywords only feed the age estimate; most books have none
         let mut keywords: Vec<(u32, String)> = Vec::new();
         let mut st = conn.prepare(
-            "SELECT id, lang, ext, date, deleted, stars, keywords, size, work_id FROM book",
+            "SELECT id, lang, ext, date, deleted, stars, keywords, size, work_id, title FROM book",
         )?;
         let mut q = st.query([])?;
         while let Some(r) = q.next()? {
@@ -145,12 +148,16 @@ impl BookAttrs {
             if !kw.is_empty() {
                 keywords.push((id as u32, kw.to_string()));
             }
+            let title = r.get_ref(9)?.as_str().unwrap_or("");
+            let volume = title.bytes().any(|b| b.is_ascii_digit())
+                && crate::text::volume_number(title).is_some();
             a.flags[id] = FLAG_EXISTS
                 | if r.get::<_, i64>(4)? != 0 {
                     FLAG_DELETED
                 } else {
                     0
-                };
+                }
+                | if volume { FLAG_VOLUME } else { 0 };
         }
         // Genres in CSR form; the reverse index yields rows ordered by book_id.
         let mut st = conn.prepare(
@@ -247,6 +254,13 @@ impl BookAttrs {
             0 => id,
             w => w as i64,
         }
+    }
+
+    /// Whether the title of book `id` names a volume ([`crate::text::volume_number`]).
+    pub fn names_volume(&self, id: i64) -> bool {
+        self.flags
+            .get(id as usize)
+            .is_some_and(|f| f & FLAG_VOLUME != 0)
     }
 
     /// Whether book `id` exists and is live (not deleted).

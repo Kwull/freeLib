@@ -800,6 +800,19 @@ async fn get_book(st: &AppState, auth: &TokenAuth, a: BookArg) -> ToolResult {
         "annotation".into(),
         json!(info.annotation.as_deref().map(html_to_text)),
     );
+    let isbns: Vec<String> = freelib_catalog::isbn::parse(&info.isbn)
+        .into_iter()
+        .map(|i| i.isbn13)
+        .collect();
+    if !isbns.is_empty() {
+        o.insert("isbn".into(), json!(isbns));
+    }
+    if !info.publisher.trim().is_empty() {
+        o.insert("publisher".into(), json!(info.publisher.trim()));
+    }
+    if !info.year.trim().is_empty() {
+        o.insert("publishYear".into(), json!(info.year.trim()));
+    }
     o.insert(
         "formats".into(),
         json!(crate::output::formats_for(

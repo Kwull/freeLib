@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { t } from '../i18n';
+  import { dismissable } from '../utils/dismiss';
   import { defaultDevice, deviceVerb, deviceCaption } from '../stores/devices.svelte';
 
   let {
@@ -12,6 +13,7 @@
   } = $props();
 
   let menuOpen = $state(false);
+  let moreBtn = $state<HTMLButtonElement | undefined>();
   const device = $derived(defaultDevice());
   // the plain verb of the default device (first in the user's order); the dialog lets the
   // user pick another device
@@ -39,9 +41,9 @@
       {verb}…
     </button>
     <div class="more phone-only">
-      <button type="button" class="icon" aria-label="More" aria-haspopup="true" aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}>⋯</button>
+      <button type="button" class="icon" bind:this={moreBtn} aria-label="More" aria-haspopup="true" aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}>⋯</button>
       {#if menuOpen}
-        <div class="menu" role="menu">
+        <div class="menu" role="menu" aria-label="More" use:dismissable={{ onClose: () => (menuOpen = false), trigger: () => moreBtn }}>
           {#if onSendSeries}
             <button type="button" role="menuitem" onclick={() => act(onSendSeries)}><Icon name="series" size={16} />{t('series.sendWhole')}</button>
           {/if}
