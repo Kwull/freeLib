@@ -6,7 +6,9 @@ use rusqlite::Connection;
 /// (the server then triggers a re-import).
 ///
 /// 2: sort keys fold accented Latin letters (`Čapek` sorts and indexes under `C`).
-pub const CATALOG_SCHEMA_VERSION: i64 = 2;
+/// 3: stems and Latin keys in the FTS tables, `vocab` (typo tolerance), `book.work_id`
+///    (editions of one work).
+pub const CATALOG_SCHEMA_VERSION: i64 = 3;
 
 /// Catalog tables. Created on an empty database by the importer *before* the bulk load;
 /// indexes ([`CATALOG_INDEXES`]) are created afterwards.
@@ -44,16 +46,18 @@ CREATE TABLE book (
   stars INTEGER NOT NULL DEFAULT 0,
   keywords TEXT NOT NULL DEFAULT '',
   arch_offset INTEGER,
-  arch_csize INTEGER, arch_method INTEGER
+  arch_csize INTEGER, arch_method INTEGER,
+  work_id INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE book_author (book_id INTEGER NOT NULL, author_id INTEGER NOT NULL, pos INTEGER NOT NULL, PRIMARY KEY (author_id, book_id)) WITHOUT ROWID;
 CREATE TABLE book_genre  (book_id INTEGER NOT NULL, genre_id INTEGER NOT NULL, PRIMARY KEY (genre_id, book_id)) WITHOUT ROWID;
 CREATE TABLE genre_count (genre_id INTEGER PRIMARY KEY, count INTEGER NOT NULL);
 CREATE TABLE lang_count (lang TEXT PRIMARY KEY, count INTEGER NOT NULL) WITHOUT ROWID;
 CREATE TABLE letter_index (kind TEXT NOT NULL, letter TEXT NOT NULL, count INTEGER NOT NULL, first_pos INTEGER NOT NULL, PRIMARY KEY (kind, letter)) WITHOUT ROWID;
-CREATE VIRTUAL TABLE book_fts USING fts5(title, authors, series, keywords, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2', prefix='2 3');
-CREATE VIRTUAL TABLE author_fts USING fts5(name, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
-CREATE VIRTUAL TABLE series_fts USING fts5(name, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE book_fts USING fts5(title, authors, series, keywords, stems, latin, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2', prefix='2 3');
+CREATE VIRTUAL TABLE author_fts USING fts5(name, stems, latin, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE series_fts USING fts5(name, stems, latin, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+CREATE TABLE vocab (word TEXT PRIMARY KEY, freq INTEGER NOT NULL) WITHOUT ROWID;
 "#;
 
 /// Indexes built after the bulk load.
@@ -66,6 +70,7 @@ CREATE INDEX book_date ON book(date);
 CREATE INDEX book_lang ON book(lang);
 CREATE INDEX book_ba_rev ON book_author(book_id, pos);
 CREATE INDEX book_bg_rev ON book_genre(book_id);
+CREATE INDEX book_work ON book(work_id);
 "#;
 
 /// Create all catalog tables on an empty connection.
@@ -127,6 +132,38 @@ CREATE INDEX book_history_key ON book_history(user_id, library_id, book_key);
     // default device
     r#"
 CREATE TABLE device_order (user_id INTEGER NOT NULL, device_id INTEGER NOT NULL, pos INTEGER NOT NULL, PRIMARY KEY (user_id, device_id)) WITHOUT ROWID;
+"#,
+    // v6: OAuth for the MCP endpoint: dynamically registered clients, grants (one per
+    // authorization = one "authorized app"), access and refresh tokens (SHA-256 of the secret
+    // only; rotated refresh tokens stay until they expire, for reuse detection), and the grant
+    // an audit entry was made with
+    r#"
+CREATE TABLE oauth_client (client_id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL, client_uri TEXT, created_at INTEGER NOT NULL, last_used_at INTEGER) WITHOUT ROWID;
+CREATE TABLE oauth_grant (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, client_id TEXT NOT NULL, client_name TEXT NOT NULL, client_kind TEXT NOT NULL, redirect_uri TEXT NOT NULL, scopes TEXT NOT NULL, resource TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
+CREATE INDEX oauth_grant_user ON oauth_grant(user_id);
+CREATE INDEX oauth_grant_client ON oauth_grant(client_id);
+CREATE TABLE oauth_token (token_hash TEXT PRIMARY KEY, grant_id INTEGER NOT NULL REFERENCES oauth_grant(id) ON DELETE CASCADE, kind TEXT NOT NULL CHECK (kind IN ('access','refresh')), scopes TEXT NOT NULL, expires_at INTEGER NOT NULL, rotated_at INTEGER) WITHOUT ROWID;
+CREATE INDEX oauth_token_grant ON oauth_token(grant_id);
+ALTER TABLE api_audit ADD COLUMN grant_id INTEGER;
+"#,
+    // v7: followed authors / series and series dismissed from "Continue series" (start page),
+    // keyed by the normalized name (author and series ids change between imports)
+    r#"
+CREATE TABLE follow (user_id INTEGER NOT NULL, library_id INTEGER NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('author','series')), key TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (user_id, library_id, kind, key)) WITHOUT ROWID;
+CREATE TABLE series_dismiss (user_id INTEGER NOT NULL, library_id INTEGER NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (user_id, library_id, key)) WITHOUT ROWID;
+"#,
+    // v8: delivery. Seeded devices remember their preset (tuned defaults are upgraded while
+    // nobody edited the device's options); send/export/download jobs and their per-book
+    // results survive restarts; short-lived hand-off links ("Send to my phone")
+    r#"
+ALTER TABLE device ADD COLUMN preset TEXT;
+ALTER TABLE device ADD COLUMN preset_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE device ADD COLUMN customized INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE job (id TEXT PRIMARY KEY, owner INTEGER NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL, progress REAL NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT '', log TEXT NOT NULL DEFAULT '[]', request TEXT, hint TEXT, file_path TEXT, file_name TEXT, file_mime TEXT, dir TEXT, created_at TEXT NOT NULL, finished_at TEXT, finished_unix INTEGER);
+CREATE INDEX job_owner ON job(owner);
+CREATE TABLE job_item (job_id TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE, pos INTEGER NOT NULL, book_id INTEGER NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, size INTEGER, mail INTEGER, updated_at TEXT NOT NULL, PRIMARY KEY (job_id, pos)) WITHOUT ROWID;
+CREATE TABLE handoff (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, library_id INTEGER NOT NULL, book_id INTEGER NOT NULL, book_key TEXT NOT NULL, device_id INTEGER, format TEXT NOT NULL, options TEXT NOT NULL, file_name TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, uses INTEGER NOT NULL DEFAULT 0, max_uses INTEGER NOT NULL) WITHOUT ROWID;
+CREATE INDEX handoff_user ON handoff(user_id, created_at);
 "#,
 ];
 

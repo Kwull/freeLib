@@ -9,8 +9,10 @@ use crate::state::AppState;
 pub mod books;
 pub mod browse;
 pub mod devices;
+pub mod find;
 pub mod jobs;
 pub mod libraries;
+pub mod oauth;
 pub mod oidc;
 pub mod session;
 pub mod settings;
@@ -53,6 +55,13 @@ pub fn router() -> Router<AppState> {
         .route("/libraries/{lib}/search", get(browse::search))
         .route("/languages", get(browse::languages))
         .route("/libraries/{lib}/books/{id}", get(books::detail))
+        .route("/libraries/{lib}/books/{id}/editions", get(find::editions))
+        .route("/libraries/{lib}/home", get(find::home))
+        .route("/libraries/{lib}/home/dismiss", post(find::dismiss))
+        .route(
+            "/libraries/{lib}/follows",
+            get(find::follows).put(find::set_follow),
+        )
         .route("/libraries/{lib}/books/{id}/cover", get(books::cover))
         .route("/libraries/{lib}/books/{id}/file", get(books::file))
         .route("/libraries/{lib}/books/{id}/rating", put(shelves::rating))
@@ -72,6 +81,8 @@ pub fn router() -> Router<AppState> {
         .route("/fonts", get(devices::fonts))
         .route("/jobs", get(jobs::list).delete(jobs::clear))
         .route("/jobs/{id}/cancel", post(jobs::cancel))
+        .route("/jobs/{id}/retry", post(jobs::retry))
+        .route("/handoff", post(crate::handoff::create))
         .route("/jobs/{id}/download", get(jobs::download))
         .route("/events", get(jobs::events))
         .route("/settings", get(settings::get).put(settings::put))
@@ -84,6 +95,15 @@ pub fn router() -> Router<AppState> {
         .route("/me/tokens", get(tokens::list).post(tokens::create))
         .route("/me/tokens/audit", get(tokens::audit))
         .route("/me/tokens/{id}", axum::routing::delete(tokens::revoke))
+        .route("/me/oauth/apps", get(oauth::apps))
+        .route(
+            "/me/oauth/apps/{id}",
+            axum::routing::delete(oauth::revoke_app),
+        )
+        .route(
+            "/oauth/requests/{id}",
+            get(oauth::request).post(oauth::decide),
+        )
         .route(
             "/me/prefs",
             get(settings::get_prefs).put(settings::put_prefs),

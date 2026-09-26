@@ -4,6 +4,8 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::secrets::Redacted;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind: IpAddr,
@@ -13,7 +15,7 @@ pub struct Config {
     pub cache_dir: PathBuf,
     pub export_dir: PathBuf,
     pub admin_user: String,
-    pub admin_password: Option<String>,
+    pub admin_password: Option<Redacted>,
     pub autoimport: Vec<PathBuf>,
     /// Calibre `ebook-convert`, when available.
     pub calibre: Option<PathBuf>,
@@ -50,6 +52,20 @@ pub struct Config {
     pub ext_worker: bool,
     /// MCP requests per token and minute (`FREELIB_MCP_RATE`, default 120).
     pub mcp_rate_per_min: u32,
+    /// Key for secrets stored in app.db (`FREELIB_SECRET_KEY`: 64 hex digits or base64 of 32
+    /// bytes). See [`crate::secrets`].
+    pub secret_key: Option<Redacted>,
+    /// File holding that key (`FREELIB_SECRET_KEY_FILE`, e.g. a Docker secret).
+    pub secret_key_file: Option<PathBuf>,
+    /// The previous key during a rotation (`FREELIB_SECRET_KEY_OLD`).
+    pub secret_key_old: Option<Redacted>,
+    /// Hosts trusted for OAuth clients of the MCP endpoint (`FREELIB_OAUTH_CLIENT_HOSTS`,
+    /// default `claude.ai, claude.com`): their `https://` redirect URIs and Client ID Metadata
+    /// Documents are accepted. `*` trusts every public host. Loopback redirect URIs of native
+    /// apps are always accepted.
+    pub oauth_client_hosts: Vec<String>,
+    /// Client ID Metadata Documents known without fetching them (URL → JSON); tests only.
+    pub oauth_client_docs: Vec<(String, String)>,
 }
 
 /// `FREELIB_OIDC_*` (see docs/web/DOCKER.md "Single sign-on").
@@ -58,7 +74,7 @@ pub struct OidcConfig {
     pub issuer: String,
     pub client_id: String,
     /// Empty for public clients (PKCE only).
-    pub client_secret: Option<String>,
+    pub client_secret: Option<Redacted>,
     pub scopes: Vec<String>,
     /// Text of the sign-in button.
     pub button: String,
@@ -112,7 +128,7 @@ fn oidc_from_env() -> Result<Option<OidcConfig>, String> {
         }
     };
     let mut o = OidcConfig::new(&issuer, &client);
-    o.client_secret = env("FREELIB_OIDC_CLIENT_SECRET");
+    o.client_secret = env("FREELIB_OIDC_CLIENT_SECRET").map(Redacted);
     if let Some(s) = env("FREELIB_OIDC_SCOPES") {
         o.scopes = s
             .split([' ', ','])
@@ -215,7 +231,8 @@ impl Config {
             admin_user: env("FREELIB_ADMIN_USER").unwrap_or_else(|| "admin".into()),
             admin_password: std::env::var("FREELIB_ADMIN_PASSWORD")
                 .ok()
-                .filter(|s| !s.is_empty()),
+                .filter(|s| !s.is_empty())
+                .map(Redacted),
             autoimport: env("FREELIB_AUTOIMPORT")
                 .map(|s| {
                     s.split(',')
@@ -266,6 +283,13 @@ impl Config {
                 .and_then(|s| s.parse().ok())
                 .filter(|&n: &u32| n > 0)
                 .unwrap_or(120),
+            secret_key: env("FREELIB_SECRET_KEY").map(Redacted),
+            secret_key_file: env("FREELIB_SECRET_KEY_FILE").map(PathBuf::from),
+            secret_key_old: env("FREELIB_SECRET_KEY_OLD").map(Redacted),
+            oauth_client_hosts: env("FREELIB_OAUTH_CLIENT_HOSTS")
+                .map(|s| parse_hosts(&s))
+                .unwrap_or_else(default_client_hosts),
+            oauth_client_docs: Vec::new(),
         })
     }
 
@@ -300,6 +324,17 @@ impl Config {
             ext_interval: Duration::from_millis(1),
             ext_worker: false,
             mcp_rate_per_min: 120,
+            secret_key: None,
+            secret_key_file: None,
+            secret_key_old: None,
+            oauth_client_hosts: default_client_hosts(),
+            oauth_client_docs: Vec::new(),
         }
     }
+}
+
+/// Claude (claude.ai on the web, Claude Desktop and mobile, whose OAuth callback is
+/// `https://claude.ai/api/mcp/auth_callback`).
+pub fn default_client_hosts() -> Vec<String> {
+    vec!["claude.ai".into(), "claude.com".into()]
 }

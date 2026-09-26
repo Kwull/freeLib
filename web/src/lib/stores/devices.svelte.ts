@@ -32,6 +32,28 @@ export function deviceVerb(d: Device): 'send' | 'download' | 'export' {
   return d.kind === 'email' ? 'send' : d.kind === 'folder' ? 'export' : 'download';
 }
 
+/** The Apple Books device (seeded preset, else a download device named like it). */
+export function appleBooksDevice(): Device | null {
+  return devicesState.items.find((d) => d.preset === 'apple-books')
+    ?? devicesState.items.find((d) => d.kind === 'download' && d.format === 'epub' && /apple|books|ibooks/i.test(d.name))
+    ?? null;
+}
+
+/** Whether a device is a Kindle e-mail address (Send to Kindle). */
+export function isKindleEmail(d: Device | null | undefined): boolean {
+  return !!d && d.kind === 'email' && (d.preset === 'kindle-email' || /@(free\.)?kindle\.com$/i.test(d.target ?? ''));
+}
+
+/**
+ * iPhone/iPad: downloads the book through a short-lived link, so Safari (also outside the
+ * signed-in session, e.g. from a home-screen app) gets `application/epub+zip` as an
+ * attachment and offers "Open in Books".
+ */
+export async function openInBooks(lib: number, bookId: number, device?: Device | null) {
+  const link = await api.handoff({ library: lib, book: bookId, device: device?.id });
+  location.assign(`${link.url}/file`);
+}
+
 /** "Kindle (USB) · AZW3" */
 export function deviceCaption(d: Device): string {
   return `${d.name} · ${d.format === 'original' ? 'original' : d.format.toUpperCase()}`;

@@ -50,6 +50,19 @@ pub async fn info(st: &AppState, lib: i64, lib_dir: &Path, d: &BookDetail) -> Ap
     if !has_metadata(&d.book.ext) {
         return Ok(InfoCache::default());
     }
+    let r = info_uncached(st, lib, lib_dir, d).await;
+    if let Ok(v) = &r {
+        st.covers.record(lib, &d.book.key, v.cover.is_some());
+    }
+    r
+}
+
+async fn info_uncached(
+    st: &AppState,
+    lib: i64,
+    lib_dir: &Path,
+    d: &BookDetail,
+) -> ApiResult<InfoCache> {
     let (info_path, cover_base) = paths(st, lib, d);
     if let Ok(s) = tokio::fs::read(&info_path).await
         && let Ok(v) = serde_json::from_slice::<InfoCache>(&s)

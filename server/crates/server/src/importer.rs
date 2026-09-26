@@ -236,6 +236,9 @@ pub fn warm(st: &AppState, rt: &Arc<LibRuntime>, cat: Arc<freelib_catalog::Catal
         if let Err(e) = cat.attrs() {
             tracing::warn!(lib = rt.id, "attribute load failed: {e}");
         }
+        if let Err(e) = cat.vocab() {
+            tracing::warn!(lib = rt.id, "vocabulary load failed: {e}");
+        }
         for kind in ["authors", "series"] {
             if let Ok(body) = crate::api::browse::build_list(&rt, &cat, kind) {
                 body.encoded("gzip");

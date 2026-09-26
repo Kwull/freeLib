@@ -11,12 +11,21 @@
   import { showToast } from '../stores/toast.svelte';
   import { clear as clearSelection } from '../stores/selection.svelte';
   import { navigate } from '../router.svelte';
+  import HandoffPanel from './HandoffPanel.svelte';
+  import { openInBooks } from '../stores/devices.svelte';
+  import { isIOS } from '../utils/platform';
 
-  let { lib, bookIds, open, onClose, device: initialDevice }: {
+  let { lib, bookIds, open, onClose, device: initialDevice, seriesIds = [] }: {
     lib: number; bookIds: number[]; open: boolean; onClose: () => void;
     /** preselected device (e.g. the details pane's "Send to Kindle") */
     device?: number;
+    /** "Send whole series": these series' books in reading order (the server resolves them) */
+    seriesIds?: number[];
   } = $props();
+
+  const ios = isIOS();
+  let phone = $state(false);
+  let seriesNames = $state<string[]>([]);
 
   let books = $state<Book[]>([]);
   let deviceId = $state<number | null>(null);
@@ -27,9 +36,19 @@
   let sending = $state(false);
 
   $effect(() => {
-    if (!open || bookIds.length === 0) return;
+    if (!open || (bookIds.length === 0 && seriesIds.length === 0)) return;
     books = [];
-    Promise.all(bookIds.slice(0, 30).map((id) => api.book(lib, id))).then((list) => { books = list; }).catch(() => {});
+    if (seriesIds.length) {
+      // the series' first books: for the file name preview and the names in the subtitle
+      Promise.all(seriesIds.slice(0, 5).map((s) => api.books(lib, { series: s, limit: 30 })))
+        .then((res) => {
+          books = res.flatMap((r) => r.books);
+          seriesNames = [...new Set(books.map((b) => b.series?.name).filter((n): n is string => !!n))];
+        })
+        .catch(() => {});
+    } else {
+      Promise.all(bookIds.slice(0, 30).map((id) => api.book(lib, id))).then((list) => { books = list; }).catch(() => {});
+    }
     if (devicesState.items.length && deviceId === null) deviceId = initialDevice ?? defaultDevice()?.id ?? devicesState.items[0].id;
   });
 
@@ -46,9 +65,15 @@
 
   const device = $derived(devicesState.items.find((d) => d.id === deviceId) ?? null);
   const needsAddress = $derived(device?.kind === 'email' && !target.trim());
+  const isSeries = $derived(seriesIds.length > 0);
   const titleLine = $derived(
-    books.slice(0, 3).map((b) => `«${b.title}»`).join(', ') + (bookIds.length > 3 ? ` ${t('send.andMore', { count: bookIds.length - 3 })}` : ''),
+    isSeries
+      ? t('send.seriesSubtitle', { names: seriesNames.map((n) => `«${n}»`).join(', ') })
+      : books.slice(0, 3).map((b) => `«${b.title}»`).join(', ') + (bookIds.length > 3 ? ` ${t('send.andMore', { count: bookIds.length - 3 })}` : ''),
   );
+  const single = $derived(!isSeries && bookIds.length === 1);
+  // on iPhone/iPad, the Apple Books device opens the book right here
+  const iosBooks = $derived(ios && single && device?.kind === 'download' && device?.preset === 'apple-books');
   const preview = $derived.by(() => {
     if (!books[0] || !device) return '';
     const name = fillFileNameTemplate(fileName, books[0], { transliterate: device.options.transliterate });
@@ -63,6 +88,8 @@
   }
   function actionLabel(d: Device | null): string {
     if (!d) return '';
+    if (iosBooks) return t('books.openInBooks');
+    if (isSeries) return t('send.actionSeries');
     const kind = d.kind === 'email' ? 'send' : d.kind === 'folder' ? 'export' : 'download';
     return tn(`send.action.${kind}`, bookIds.length);
   }
@@ -70,10 +97,22 @@
   async function submit() {
     if (!device) return;
     sending = true;
+    if (iosBooks) {
+      try {
+        await openInBooks(lib, bookIds[0], device);
+        onClose();
+      } catch (err) {
+        showToast(errorText(err), 'error');
+      } finally {
+        sending = false;
+      }
+      return;
+    }
     try {
       const job = await api.send({
         library: lib,
-        books: bookIds,
+        books: isSeries ? [] : bookIds,
+        series: isSeries ? seriesIds : undefined,
         device: device.id,
         target: target || undefined,
         fileName,
@@ -97,7 +136,7 @@
   }
 </script>
 
-<Dialog {open} titleId="send-title" title={tn('send.title', bookIds.length)} {onClose} width={760}>
+<Dialog {open} titleId="send-title" title={isSeries ? t('send.titleSeries') : tn('send.title', bookIds.length)} {onClose} width={760}>
   <p class="subtitle">{titleLine}</p>
 
   <fieldset class="devices">
@@ -140,9 +179,18 @@
       {t('send.formattingNote')} ·
       <button type="button" class="link-btn" onclick={() => navigate('/settings/devices')}>{t('send.editProfile')}</button>
     </div>
+    {#if device.kind === 'email' && (isSeries || bookIds.length > 1)}
+      <div class="note"><Icon name="send" size={16} />{t('send.batchNote', { count: 25 })}</div>
+    {/if}
+    {#if phone && single}
+      <div class="phone"><HandoffPanel {lib} bookId={bookIds[0]} {device} /></div>
+    {/if}
   {/if}
 
   <div class="footer">
+    {#if single && !ios}
+      <button type="button" class="secondary" data-testid="send-dialog-phone" aria-pressed={phone} onclick={() => (phone = !phone)}><Icon name="phone" size={16} />{t('phone.action')}</button>
+    {/if}
     <span class="bg-note" class:warn={needsAddress}>{needsAddress ? t('send.needAddress') : t('send.background')}</span>
     <button type="button" class="secondary" onclick={onClose}>{t('send.cancel')}</button>
     <!-- svelte-ignore a11y_autofocus -->
@@ -183,6 +231,10 @@
     position: sticky; bottom: 0; background: var(--surface);
   }
   .bg-note { font-size: 13px; color: var(--muted); flex-grow: 1; }
+  .phone { margin: 14px 24px 0; }
+  button.secondary[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); }
+  button.secondary { gap: 6px; }
+  .footer button { white-space: nowrap; flex-shrink: 0; }
   .bg-note.warn { color: var(--amber); }
   button.secondary { display: flex; align-items: center; height: 40px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 14px; }
   button.primary { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 500; }

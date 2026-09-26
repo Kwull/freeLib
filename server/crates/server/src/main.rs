@@ -14,6 +14,7 @@ fn main() {
     match args.first().map(String::as_str) {
         None | Some("serve") => serve(),
         Some("healthcheck") => std::process::exit(healthcheck()),
+        Some("forget-secrets") => std::process::exit(forget_secrets()),
         Some("migrate-qt") => match args.get(1) {
             Some(p) => std::process::exit(migrate_qt(PathBuf::from(p))),
             None => usage(),
@@ -25,9 +26,34 @@ fn main() {
 
 fn usage() {
     eprintln!(
-        "usage: freelib-server [serve | healthcheck | migrate-qt <freeLib.sqlite> | --version]"
+        "usage: freelib-server [serve | healthcheck | migrate-qt <freeLib.sqlite> | forget-secrets | --version]"
     );
     std::process::exit(2);
+}
+
+/// Removes the encrypted secrets from app.db (the way out after losing the secret key); the
+/// SMTP password must then be entered again.
+fn forget_secrets() -> i32 {
+    let cfg = Config::from_env();
+    let c = match freelib_catalog::open_app_db(&cfg.data_dir.join("app.db")) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("cannot open app.db: {e}");
+            return 1;
+        }
+    };
+    match freelib_server::secrets::forget(&c) {
+        Ok(n) => {
+            println!(
+                "removed {n} stored secret(s); enter the SMTP password again in Settings → Server"
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
 }
 
 fn init_tracing() {

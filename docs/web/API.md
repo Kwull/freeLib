@@ -55,7 +55,10 @@ type Book = {
   libRating: number;               // library rating: INPX LIBRATE/STARS, 0..5 (0 = none)
   extRating: { avg: number; votes: number } | null;  // Open Library average + votes (cached; null = unknown or no votes)
   kidsAge: 0 | 6 | 12 | 16 | 18 | null;  // age estimate (heuristic from genres and keywords, see ARCHITECTURE.md); null = unknown
+  editions?: { count: number; ids: number[] };  // only on grouped rows (`group=1`) standing for ≥ 2 editions of one work:
+                                   // this book is the best copy; ids = the editions in the list, best first
 };
+type Edition = Book & { note: string | null };  // what sets it apart: title notes ("другой перевод", "пер. …") / translation keywords
 type BookDetail = Book & {
   annotation: string | null;       // sanitized HTML: <p>, <em>, <strong>, <br> only
   hasCover: boolean;
@@ -92,6 +95,8 @@ type Device = {
   fileName: string;                // template, see below
   shared: boolean;                 // true = visible to all users (admin-created)
   options: ConvertOptions;
+  preset: "kindle-email" | "kindle-usb" | "apple-books" | "kobo" | "server-folder" | "original" | null;
+                                   // read-only: the default preset a shared device was seeded from (DEVICES.md)
 };
 type ConvertOptions = {
   hyphenate: "none" | "soft" | "full";
@@ -116,6 +121,19 @@ type Job = {
   log: string[];                   // last ≤ 50 lines (import)
   downloadUrl: string | null;      // for finished download/export jobs
   createdAt: string; finishedAt: string | null;
+  items: JobItem[];                // per-book results of send/export/download jobs (≤ 200 books; [] otherwise)
+  retryable: boolean;              // POST /jobs/:id/retry would redo failed or interrupted books
+  hint: { code: "kindle_approved_sender"; from: string; url: string; text: string } | null;
+                                   // after mails to @kindle.com: check the Approved Personal Document E-mail List
+};
+type JobItem = {
+  bookId: number; title: string;
+  state: "queued" | "converting" | "converted" | "sending" | "retrying" | "accepted" | "saved" | "ready" | "failed";
+                                   // e-mail: converting → converted → sending (handed to the mail server) → accepted
+  detail: string;                  // the server's reply ("250 2.0.0 Ok: queued as …"), the error, or the retry plan
+  attempts: number;                // delivery attempts
+  size: number | null;             // produced file size (bytes)
+  mail: number | null;             // which e-mail of the job carries the book (1-based)
 };
 ```
 
@@ -169,11 +187,12 @@ passwords: a user created by single sign-on sets a password in Settings → Acco
 | `GET /libraries/:lib/authors/:id/summary` | – | `AuthorSummary` (below); 404 for an unknown author |
 | `GET /libraries/:lib/authors/:id/coauthors` | – | `{ columns: ["id","name","books","direct"], rows: [[id, name, books, direct], …] }`: everybody sharing a live book with the author, ranked like `AuthorSummary.coauthors` (not filtered); 404 for an unknown author |
 | `GET /libraries/:lib/genres` | `v?`, `lang=en\|ru\|uk` (default `en`) | `Genre[]` (all 322 genres, with counts for this library; zero-count leaves included). `name` is localized to `lang`; the ETag includes `lang`, so switching the SPA's language triggers a refetch |
-| `GET /libraries/:lib/books` | exactly one of `author`, `series`, `genre`, `shelf`, `since` (YYYY-MM-DD) plus optional `lang`, `ext`, `deleted=1`, `q` (text filter: every word is a prefix of a word of the title, authors, series or keywords, like search), `cursor`, `limit` (default 2000, max 5000) | `{ books: Book[], nextCursor: string \| null, total: number }`. Order: author → series name, serno, title; series → serno, title; genre/shelf/since → date desc, title |
+| `GET /libraries/:lib/books` | exactly one of `author`, `series`, `genre`, `shelf`, `since` (YYYY-MM-DD) plus optional `lang`, `ext`, `deleted=1`, `q` (text filter: every word is a prefix of a word of the title, authors, series or keywords, like search), `group=1` (one row per work, see "Editions"), `cursor`, `limit` (default 2000, max 5000) | `{ books: Book[], nextCursor: string \| null, total: number }`. Order: author → series name, serno, title; series → serno, title; genre/shelf/since → date desc, title. With `group=1` `total` counts rows (works) and pages are cut by offset from the grouped list |
+| `GET /libraries/:lib/books/:id/editions` | – | `{ best: number, books: Edition[] }`: every live edition of the book's work (the book itself even when deleted), best copy first; 404 for an unknown book |
 | `GET /libraries/:lib/books/:id` | – | `BookDetail` (first call may take up to ~150 ms, then cached) |
 | `GET /libraries/:lib/books/:id/cover` | `size=thumb\|full` | image (`image/webp` or original jpeg/png); `full` is 404 when the book has no cover. `thumb` = 240 px high; when the book has no cover, a generated SVG placeholder tile (background colour from the title, author + title text, like the SPA's own placeholder) is returned instead of 404, with header `X-Cover: generated` |
 | `GET /libraries/:lib/books/:id/file` | `format` (default `original`), `device?` (device id → its options & file name) , `inline=1` for the web reader | the file with `Content-Disposition: attachment`; `inline=1` is honoured for EPUB only. HTML, XHTML, XML, FB2 and SVG files are sent as `application/octet-stream`. Originals are streamed (no `Content-Length` for deflated zip entries); books above 256 MiB → 413. 501 `unsupported_format` if the format needs Calibre and it is missing, or the book is neither FB2 nor EPUB (other formats are offered as `original` only) |
-| `GET /libraries/:lib/search` | `q` (≥ 2 chars), `kind=all\|books\|authors\|series`, `genre` (comma ids), `lang` (comma), `ext`, `from`, `to` (YYYY-MM-DD), `limit` (books, default 200, max 1000) | `{ tookMs, authors: [{id,name,count}] (≤ 20), series: [{id,name,count,authors: string}] (≤ 20), books: Book[], total: number, facets: { genre: [[id,count]], lang: [[code,count]], ext: [[ext,count]] } }`. `q` is prefix-matched per word (FTS5 `word*`); authors/series match on `sort_key` prefix of any word |
+| `GET /libraries/:lib/search` | `q` (≥ 2 chars), `kind=all\|books\|authors\|series`, `genre` (comma ids), `lang` (comma), `ext`, `from`, `to` (YYYY-MM-DD), `limit` (books, default 200, max 1000), `group=1` (one row per work) | `{ tookMs, authors: [{id,name,count}] (≤ 20), series: [{id,name,count,authors: string}] (≤ 20), books: Book[], total: number, facets: { genre: [[id,count]], lang: [[code,count]], ext: [[ext,count]] }, corrected: string \| null, didYouMean: string \| null, highlight: string[] }`. Every word matches as a prefix of a word, as another form of the same word (Snowball stem: `книгу` → `Книга`, `книги`), or as a transliteration (`strugatsky` / `strugackie` → `Стругацкий`, `лем` → `Lem`); `ё` = `е`. Ranking: title starts with the query / contains it as a phrase (authors, series: the name starts with it) > every word as a prefix > word forms / transliterations; then bm25 (authors/series: more books first). When the query finds fewer than 3 matches, or no author/series, unknown words are corrected by edit distance (≤ 1 for 4–7 letters, ≤ 2 from 8) against the author/series/title vocabulary: when the corrected query finds more (or finds authors/series the query did not) its results are returned (`corrected` = the query used), otherwise it is offered as `didYouMean`. `exact=1` searches the query as typed (no correction; the SPA's "Search instead for …"). `highlight` = normalized words of the returned titles and names that matched (whole words, for `<mark>`). With `group=1` `total` counts works |
 | `GET /languages` | `lib` | `[[code, count]]` for that library |
 | `PUT /libraries/:lib/books/:id/rating` | `{rating: 0..5}` | 204 |
 
@@ -195,6 +214,49 @@ genre / `since` lists are ordered date desc, id (instead of date desc, title) be
 filtered books; search facets count the books left after the rating filters. Books of an author or series listed
 on a first page are queued for an Open Library lookup (priority 2).
 
+### Start page and follows
+
+User data is stored per library by the author's / series' normalized name, so it survives re-imports.
+
+| Method & path | Body / query | Response |
+|---|---|---|
+| `GET /libraries/:lib/home` | `days=1..3650` (the "new" window; absent or `visit` = since the previous visit, 30 days when there was none) | `HomeResponse` (below) |
+| `POST /libraries/:lib/home/dismiss` | `{series: id, dismissed?: boolean /*default true*/}` | 204: hides (or shows again) a series in "Continue series"; 404 for an unknown series |
+| `GET /libraries/:lib/follows` | – | `{ authors: {id,name,count}[], series: {id,name,count}[] }` |
+| `PUT /libraries/:lib/follows` | `{kind: "author" \| "series", id, follow: boolean}` | the follows as above; 400 for another kind, 404 for an unknown id |
+
+```ts
+type HomeResponse = {
+  empty: boolean;                  // no history, ratings, shelves or follows in this library yet
+  continueSeries: {                // series with a book sent / downloaded / read / rated, latest activity first (≤ 24)
+    series: { id; name; count; authors: string };
+    works: number; done: number;   // works (editions grouped) in the series / done by the user
+    lastAt: string;                // latest activity (RFC 3339)
+    next: Book[];                  // ≤ 2 works after the last one done that the user has not done, best copies
+  }[];                             // finished and dismissed series are left out; in a publisher series (> 3 first
+                                   // authors) only books sharing an author with the user's books count
+  newFromAuthors: {
+    since: string; days: number | null; total: number;
+    books: (Book & { reason: { kind: "author" | "series"; id; name; followed: boolean } })[];  // ≤ 60, newest first
+  };                               // live books dated ≥ since by followed authors, in followed series, or by authors of
+                                   // books the user sent/downloaded/read, rated ≥ 4 or shelved (anthologies ≥ 4 authors
+                                   // and "Автор неизвестен" do not count), without works the user already has; grouped
+  picks: Book[];                   // empty state (or both lists empty): best library-rated works of the 30 days before
+                                   // the newest book, ≤ 12
+  following: { authors: number; series: number };
+};
+```
+
+### Editions
+
+The importer gives every book a work: same language, same title without trailing edition notes (`(другой перевод)`,
+`[иллюстрации]`, `(СИ)`, `(пер. …)`, `(ред. …)`; other bracketed text such as `(Часть 2)` or `(сборник)` is kept),
+same set of authors. Books by "Автор неизвестен" and generic titles ("Избранное", "Рассказы", "Стихотворения", …) are
+never grouped. A grouped list shows each work once, at the position of its first edition in the list, as its **best
+copy**: not deleted > has a cover (as far as the server knows — covers are known for books whose preview was
+extracted since the server started) > FB2 > EPUB > other > larger file (20 % steps, capped at 30 MB) > newer date >
+higher library rating > lower id. Sending or downloading a grouped row uses that id; any edition can be picked instead.
+
 ## Shelves
 
 | Method & path | Body | Response |
@@ -211,12 +273,13 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 
 | Method & path | Body | Response |
 |---|---|---|
-| `GET /devices` | – | `Device[]` (shared + own). A fresh install has shared defaults: "Kindle" (email, epub), "Kindle (USB)" (download, azw3), "Apple Books" (download, epub), "Kobo" (download, kepub), "Server folder" (folder, epub), "Original" (download, original) |
+| `GET /devices` | – | `Device[]` (shared + own). A fresh install has shared defaults with tuned options (see [DEVICES.md](DEVICES.md)): "Kindle" (email, epub), "Kindle (USB)" (download, azw3), "Apple Books" (download, epub), "Kobo" (download, kepub), "Server folder" (folder, epub), "Original" (download, original). `preset` is read-only; changing a device's conversion options stops preset upgrades for it |
 | `POST /devices` | `Device` without `id` | `Device` (`shared: true` and `kind: "folder"` need admin; an `email` target must match `smtp.allowedRecipients`, else 403) |
 | `PUT /devices/:id` | `Device` | `Device` (shared and folder devices: admin only) |
 | `DELETE /devices/:id` | – | 204 |
 | `PUT /devices/order` | `{ids: number[]}` | `Device[]` in the new order. Per user: `ids` first (any subset of the devices the user sees, shared ones included), the others after them. `GET /devices` returns the user's order (devices never ordered follow, oldest first). **The first device is the user's default** (the quick-send button, the Send dialog's preselection, MCP `device: "default"`). 404 for an unknown id, 400 for duplicates |
-| `POST /send` | `{library, books: number[], device: number, target?: string, fileName?: string, options?: Partial<ConvertOptions>}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`). `options` is merged (shallow) over the device's own options for this send only; the device itself is not changed. E-mail: the recipient must match `smtp.allowedRecipients` (403 `forbidden` otherwise, admins included) and the user's mails today plus this request's books must not exceed `smtp.dailyLimitPerUser` (429 `rate_limited`). Folder: readers may only use shared folder devices with their configured target (403). At most 5 queued + running send/export/download jobs per user (429 `rate_limited`). Exports never overwrite: an existing file gets a ` (2)`, ` (3)`, … sibling |
+| `POST /send` | `{library, books: number[], series?: number[], device: number, target?: string, fileName?: string, options?: Partial<ConvertOptions>}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`). `series` (≤ 20, "send whole series"): the series' live books in reading order, each title once (newest edition), after the explicit `books`; 404 for an unknown series. E-mail jobs convert all books, then send them in as few mails as `smtp.maxAttachments` / `smtp.maxMailMb` allow, retrying temporary SMTP failures (DEVICES.md); the job's `items` show each book's delivery state. `options` is merged (shallow) over the device's own options for this send only; the device itself is not changed. E-mail: the recipient must match `smtp.allowedRecipients` (403 `forbidden` otherwise, admins included) and the user's mails today plus this request's books must not exceed `smtp.dailyLimitPerUser` (429 `rate_limited`). Folder: readers may only use shared folder devices with their configured target (403). At most 5 queued + running send/export/download jobs per user (429 `rate_limited`). Exports never overwrite: an existing file gets a ` (2)`, ` (3)`, … sibling. The daily mail limit counts mails; a request needs at least ⌈books / maxAttachments⌉ |
+| `POST /handoff` | `{library, book, device?: number, format?: string}` | `{url: "/h/<token>", absoluteUrl, expiresAt, maxUses: 3, format, fileName, title}`: a link for "Send to my phone" / "Open in Books". Format and options from `device` (default: the Apple Books device; e-mail devices give EPUB), `format` overrides. 15 minutes, 3 downloads, 20 links per user per 10 minutes (429). See DEVICES.md for the security properties |
 | `GET /fonts` | – | `string[]` font family names available for embedding |
 
 ## Jobs and events
@@ -225,8 +288,9 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 |---|---|
 | `GET /jobs` | `Job[]` of the current user (admins also see imports), newest first, last 50 |
 | `POST /jobs/:id/cancel` | `Job` (a running Calibre conversion is killed) |
+| `POST /jobs/:id/retry` | `Job` (queued again): redoes the books of a failed, interrupted or partly failed job that did not get through (accepted/saved books are kept); 409 when there is nothing to retry, 404 for another user's job. Send/export/download jobs are stored in `app.db`: queued jobs resume after a restart, running ones become `failed` + `retryable` |
 | `DELETE /jobs?finished=1` | 204 (clears finished/failed/cancelled) |
-| `GET /jobs/:id/download` | the produced file (kept 24 h) |
+| `GET /jobs/:id/download` | the produced file (kept 24 h, also across restarts) |
 | `GET /events` | `text/event-stream`. Events: `event: job` data `Job`; `event: library` data `Library` (status/count changes). Heartbeat comment every 25 s. The stream ends when the session ends, the user is deleted or an admin is demoted (reconnect to continue) |
 
 ## Settings and users
@@ -234,16 +298,20 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | Method & path | Body | Response |
 |---|---|---|
 | `GET /settings` **(admin)** | – | `{ externalRatings: {enabled, source: "openlibrary", contactSet, progress: {lookedUp, found, rated, total}, queued, requests, pausedFor (s), lastError}, mcp: {enabled, url}, smtp: {host, port, security: "none"\|"starttls"\|"tls", username, from, passwordSet: boolean, pauseSeconds, allowedRecipients: string[], dailyLimitPerUser: number, subject: string (mail subject template: `%b` title, `%a` author; default `%b`)}, opds: {enabled: boolean, requireAuth: boolean}, calibre: {available: boolean, version: string\|null} }` |
-| `PUT /settings` **(admin)** | same shape (`externalRatings.enabled`, default true: when false the server sends nothing to Open Library; `mcp.enabled`, default true: when false `/mcp` answers 403; the other `externalRatings` fields are read-only); `smtp.password` write-only (omit to keep, `""` to remove). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100) | same as GET |
+| `PUT /settings` **(admin)** | same shape (`externalRatings.enabled`, default true: when false the server sends nothing to Open Library; `mcp.enabled`, default true: when false `/mcp` answers 403; the other `externalRatings` fields are read-only); `smtp.password` write-only (omit to keep, `""` to remove; stored encrypted, see ARCHITECTURE.md "Secrets at rest"). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100). `maxAttachments` (1..100, default 25) and `maxMailMb` (1..200, default 50, base64 size): books per mail and mail size (Amazon's Send to Kindle limits). `retries` (0..10, default 3) and `retryDelaySeconds` (0..3600, default 30, ×4 per retry): automatic retries of temporary SMTP failures | same as GET |
 | `POST /settings/smtp/test` **(admin)** | `{to}` | 204 or 400 with message |
 | `GET /users` **(admin)** | – | `[{id, username, role, hasPassword: boolean, sso: {issuer, email, createdAt, lastLogin} \| null}]` (`sso`: the linked single sign-on identity) |
 | `POST /users` **(admin)** | `{username, password, role}` | user; 409 when the name exists (case-insensitive). User ids are never reused |
 | `PATCH /users/:id` **(admin)** | `{password?, role?}` | user |
 | `DELETE /users/:id` **(admin)** | – | 204 (also cancels and removes the user's jobs and their files) |
-| `GET /me/tokens` | – | `{ tokens: ApiToken[], scopes: ["read","write","send"], mcp: {enabled, url} }` (`url`: `FREELIB_PUBLIC_URL` + `/mcp`, else built from the request's host) |
+| `GET /me/tokens` | – | `{ tokens: ApiToken[], scopes: ["read","write","send"], mcp: {enabled, url, oauth} }` (`url`: `FREELIB_PUBLIC_URL` + `/mcp`, else built from the request's host; `oauth`: apps can connect by signing in, i.e. `FREELIB_PUBLIC_URL` is `https://`) |
 | `POST /me/tokens` | `{name, scopes: ("read"\|"write"\|"send")[], expiresInDays?: 1..3650}` | `{ token: ApiToken, secret: "fl_…" }` — the secret is returned **only here**; the server keeps its SHA-256. At most 50 tokens per user (409) |
 | `DELETE /me/tokens/:id` | – | 204 (revoked at once, also for cached authentications); 404 for another user's token |
-| `GET /me/tokens/audit` | – | the last 50 MCP tool calls with the user's tokens: `[{id, tokenId, tokenName (null when revoked), tool, ok, detail (arguments, ≤ 200 chars), at}]` newest first |
+| `GET /me/tokens/audit` | – | the last 50 MCP tool calls with the user's tokens and authorized apps, and OAuth events (`oauth.authorize`, `oauth.revoke`, `oauth.refresh_reuse`, `oauth.code_reuse`): `[{id, tokenId, tokenName (null when revoked), grantId, appName (null when revoked), tool, ok, detail (arguments, ≤ 200 chars), at}]` newest first |
+| `GET /me/oauth/apps` | – | the user's authorized apps: `[{id, clientName, clientKind: "cimd"\|"dcr", verifiedHost (host of a CIMD client id) \| null, redirectHost, scopes, createdAt, lastUsedAt}]` |
+| `DELETE /me/oauth/apps/:id` | – | 204: all tokens of the app are revoked at once; 404 for another user's app |
+| `GET /oauth/requests/:id` | – | the pending authorization request shown by the consent page `/oauth/consent?request=:id`: `{client: {name, kind, verifiedHost, clientUri}, redirectUri, redirectHost, loopback, scopes, resource, csrf}`; 404 when unknown or expired (15 min) |
+| `POST /oauth/requests/:id` | `{approve: boolean, scopes: ("read"\|"write"\|"send")[] (a non-empty subset of the requested ones when approving), csrf}` | `{redirect: <redirect URI with code or error=access_denied, state, iss>}`; 403 for a wrong `csrf`, 404 when unknown, expired or already answered |
 | `GET /me/prefs`, `PUT /me/prefs` | arbitrary JSON ≤ 64 KB (UI state: pane and column widths, visible columns, sort orders, view mode, last library and device…; the SPA writes the whole object) | JSON |
 
 `ApiToken = { id, name, prefix /* "fl_" + 8 chars */, scopes, createdAt, lastUsedAt /* updated ≤ once a minute */, expiresAt: string | null }`.
@@ -253,15 +321,33 @@ Tokens are accepted by `/mcp` only (not by the REST API or OPDS); the REST endpo
 
 `POST /mcp` — Model Context Protocol, streamable HTTP transport (official Rust SDK `rmcp`), **stateless**: no
 `Mcp-Session-Id`; each POST carries one JSON-RPC message and is answered with `application/json` (or SSE when a tool
-streams notifications). Protocol versions up to `2026-07-28`. Requires `Authorization: Bearer fl_…` (401 with a
-`WWW-Authenticate: Bearer` challenge otherwise), 403 when `mcp.enabled` is false, 429 + `Retry-After` above
-`FREELIB_MCP_RATE` requests per token and minute (default 120). `tools/list` lists only the tools the token's scopes
-allow; every `tools/call` is checked again (a refused call is a tool error naming the missing scope) and audited.
+streams notifications). Protocol versions up to `2026-07-28`. Requires `Authorization: Bearer fl_…` (personal API
+token) or `Bearer flo_…` (OAuth access token, see below); otherwise 401 with `WWW-Authenticate: Bearer
+realm="freeLib"` plus, when OAuth is on, `resource_metadata="<public url>/.well-known/oauth-protected-resource/mcp",
+scope="read write send"` (and `error="invalid_token"` when a token was sent). 403 when `mcp.enabled` is false, 429 +
+`Retry-After` above `FREELIB_MCP_RATE` requests per token (or app) and minute (default 120). `tools/list` lists only
+the tools the token's scopes allow; every `tools/call` is checked again (for an API token a refused call is a tool
+error naming the missing scope; for an OAuth token it is HTTP 403 with `WWW-Authenticate: Bearer
+error="insufficient_scope", scope="<granted + needed>"`, so the client can ask the user for more) and audited.
+
+### OAuth (MCP authorization)
+
+Available when `FREELIB_PUBLIC_URL` is an `https://` origin (issuer = that URL, resource = `<issuer>/mcp`); otherwise
+these endpoints answer 404. Public clients only (`token_endpoint_auth_method: none`), PKCE `S256` required.
+
+| Method & path | Request | Response |
+|---|---|---|
+| `GET /.well-known/oauth-protected-resource`, `…/oauth-protected-resource/mcp` | – | RFC 9728: `{resource, authorization_servers: [issuer], scopes_supported: ["read","write","send"], bearer_methods_supported: ["header"], resource_name}` |
+| `GET /.well-known/oauth-authorization-server` | – | RFC 8414: `issuer`, `authorization_endpoint`, `token_endpoint`, `registration_endpoint`, `revocation_endpoint`, `scopes_supported`, `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code","refresh_token"]`, `token_endpoint_auth_methods_supported: ["none"]`, `code_challenge_methods_supported: ["S256"]`, `client_id_metadata_document_supported: true`, `authorization_response_iss_parameter_supported: true` |
+| `POST /oauth/register` | RFC 7591 JSON: `redirect_uris` (1–10; `https://` on `FREELIB_OAUTH_CLIENT_HOSTS` or `http://127.0.0.1\|[::1]\|localhost`), `client_name?`, `client_uri?`, `grant_types?`, `response_types?` | 201 `{client_id: "flc_…", client_id_issued_at, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method: "none"}`; 400 `invalid_redirect_uri` / `invalid_client_metadata`; 429 above 20 per address and hour; 503 when 500 clients are registered |
+| `GET /oauth/authorize` | `response_type=code`, `client_id` (registered, or an `https://` Client ID Metadata Document URL on a trusted host), `redirect_uri` (exact; loopback: any port), `code_challenge` + `code_challenge_method=S256`, `scope?` (none = all; `offline_access` ignored), `state?`, `resource?` | 303 to `/oauth/consent?request=<id>`; a bad client or redirect URI → 303 to `/oauth/consent?error=invalid_client\|invalid_redirect_uri` (never to the client); other errors → 303 to the redirect URI with `error` (`invalid_request`, `unsupported_response_type`, `invalid_scope`, `invalid_target`), `state`, `iss` |
+| `POST /oauth/token` | form: `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `code_verifier`, `resource?` — or `grant_type=refresh_token`, `refresh_token`, `client_id`, `scope?` (a subset), `resource?` | `{access_token: "flo_…", token_type: "Bearer", expires_in: 3600, refresh_token: "flr_…", scope}` with `Cache-Control: no-store`. Refresh tokens rotate on every use; presenting a used one revokes the app (`invalid_grant`), as does a second use of a code. Errors: 400 `invalid_request` / `invalid_grant` / `invalid_scope` / `invalid_target` / `unsupported_grant_type`, 401 `invalid_client`, 429 `slow_down` |
+| `POST /oauth/revoke` | form: `token`, `token_type_hint?`, `client_id?` | 200 (RFC 7009; a refresh token revokes the whole app, an access token itself) |
 
 | Tool | Scope | Arguments (all ids are per library; `library` optional, default library otherwise) |
 |---|---|---|
 | `list_libraries` | read | – |
-| `search_books` | read | `query`, `author`/`author_id`, `series`/`series_id`, `genre`/`genre_id`, `language`, `added_after`, `added_before`, `min_my_rating`, `min_library_rating`, `min_openlibrary_rating`, `min_openlibrary_votes`, `unrated_by_me`, `kids_max_age`, `sort` (`relevance`\|`date`\|`my_rating`\|`library_rating`\|`openlibrary_rating`), `limit` ≤ 50, `cursor` |
+| `search_books` | read | `query`, `author`/`author_id`, `series`/`series_id`, `genre`/`genre_id`, `language`, `added_after`, `added_before`, `min_my_rating`, `min_library_rating`, `min_openlibrary_rating`, `min_openlibrary_votes`, `unrated_by_me`, `kids_max_age`, `sort` (`relevance`\|`date`\|`my_rating`\|`library_rating`\|`openlibrary_rating`), `limit` ≤ 50, `cursor` → one result per work (`editions`, `otherEditionIds`), `corrected` when a typo was fixed; the query matches like `GET search` |
 | `get_book` | read | `id` → authors, series + number, genres, language, added, size, format, formats, annotation (plain text ≤ 4000 chars), keywords, my / library / Open Library rating, kids age, my shelves, `myHistory {lastSent, lastDownloaded, lastRead}` |
 | `get_author` | read | `id` or `name` → counts, series, genres, languages, years, co-authors, best-rated books |
 | `list_author_books` | read | `author_id`, `sort`, `limit` ≤ 100, `cursor` |
@@ -274,8 +360,8 @@ allow; every `tools/call` is checked again (a refused call is a tool error namin
 | `list_shelves` | read | – |
 | `add_to_shelf`, `remove_from_shelf` | write | `shelf_id` or `shelf` (name; `create: true` makes it), `book_ids` ≤ 500 |
 | `rate_book` | write | `id`, `rating` 0..5 |
-| `send_books` | send | `book_ids` ≤ 50, `device` (id or `"default"`) → `{jobId}`; same rules as `POST /send` (allowed recipients, daily limit, 5 jobs per user) |
-| `get_job` | send | `id` |
+| `send_books` | send | `book_ids` ≤ 50 and/or `series_id`, `device` (id or `"default"`) → `{jobId, books}`; same rules as `POST /send` (allowed recipients, daily limit, 5 jobs per user) |
+| `get_job` | send | `id` → state, message, log, `books` (`{id, title, state, detail, attempts, mail}` per book), `retryable`, `hint` (text) |
 
 Prompts: `suggest_next_book` (`wishes?`), `books_for_kid` (`age`, `interests?`), `similar_to` (`book_id`).
 
@@ -293,8 +379,18 @@ Basic auth when `opds.requireAuth` (same users and the same login rate limits). 
 - Genre names are localized from the request's `Accept-Language` (`ru` or `uk` recognized, highest `q` wins); anything else, including no header, is served in English.
 - Pagination: 100 entries per page with `rel="next"`.
 
+## Phone hand-off pages (not under /api, no login)
+
+- `GET /h/:token` → a small HTML page (cover, title, author, series, "Open in Books" on iPhone/iPad, else "Download";
+  `ru`/`uk`/`en` from `Accept-Language`); 410 with an explanation when the link expired or was used up.
+  `Content-Security-Policy: default-src 'none'; img-src 'self'; style-src 'unsafe-inline'…`, `Cache-Control: no-store`,
+  `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex`.
+- `GET /h/:token/cover` → the cover thumbnail while the link is valid.
+- `GET /h/:token/file` → the book as an attachment (`application/epub+zip` for EPUB/KEPUB) with the device's file name;
+  counts one of the 3 uses (`HEAD` does not); 410 afterwards.
+
 ## Web app
 
 `GET /` and any non-`/api`, non-`/opds` path → SPA `index.html` (history routing). Static assets under `/assets/*` with long cache.
-SPA routes: `/`, `/l/:lib/new`, `/l/:lib/authors[/:id][?book=:id]`, `/l/:lib/series[/:id][?book=:id]`, `/l/:lib/genres[/:id]`, `/l/:lib/shelves/:id`,
+SPA routes: `/` (→ the current library's start page), `/l/:lib[/home]` (start page), `/l/:lib/new`, `/l/:lib/authors[/:id][?book=:id]`, `/l/:lib/series[/:id][?book=:id]`, `/l/:lib/genres[/:id]`, `/l/:lib/shelves/:id`,
 `/l/:lib/search?q=…`, `/l/:lib/book/:id` (phone), `/l/:lib/read/:id`, `/libraries`, `/settings[/:section]`, `/login`.

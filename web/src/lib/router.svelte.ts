@@ -31,18 +31,20 @@ document.addEventListener('click', (e) => {
 
 export type Route =
   | { name: 'home' }
+  | { name: 'start'; lib: number }
   | { name: 'new'; lib: number }
   | { name: 'authors'; lib: number; id: number | null }
   | { name: 'series'; lib: number; id: number | null }
   | { name: 'genres'; lib: number; id: number | null }
   | { name: 'shelvesIndex'; lib: number }
   | { name: 'shelf'; lib: number; id: number }
-  | { name: 'search'; lib: number; q: string }
+  | { name: 'search'; lib: number; q: string; exact: boolean }
   | { name: 'book'; lib: number; id: number }
   | { name: 'read'; lib: number; id: number }
   | { name: 'libraries' }
   | { name: 'settings'; section: string | null }
   | { name: 'login' }
+  | { name: 'oauthConsent'; request: string | null; error: string | null }
   | { name: 'notFound' };
 
 export function parseRoute(path: string, search: string): Route {
@@ -50,19 +52,20 @@ export function parseRoute(path: string, search: string): Route {
   const q = new URLSearchParams(search);
   if (segs.length === 0) return { name: 'home' };
   if (segs[0] === 'login') return { name: 'login' };
+  if (segs[0] === 'oauth' && segs[1] === 'consent') return { name: 'oauthConsent', request: q.get('request'), error: q.get('error') };
   if (segs[0] === 'libraries') return { name: 'libraries' };
   if (segs[0] === 'settings') return { name: 'settings', section: segs[1] ?? null };
   if (segs[0] === 'l' && segs[1]) {
     const lib = Number(segs[1]);
     const rest = segs[2];
-    if (!rest) return { name: 'authors', lib, id: null };
+    if (!rest || rest === 'home') return { name: 'start', lib };
     if (rest === 'new') return { name: 'new', lib };
     if (rest === 'authors') return { name: 'authors', lib, id: segs[3] ? Number(segs[3]) : null };
     if (rest === 'series') return { name: 'series', lib, id: segs[3] ? Number(segs[3]) : null };
     if (rest === 'genres') return { name: 'genres', lib, id: segs[3] ? Number(segs[3]) : null };
     if (rest === 'shelves' && segs[3]) return { name: 'shelf', lib, id: Number(segs[3]) };
     if (rest === 'shelves') return { name: 'shelvesIndex', lib };
-    if (rest === 'search') return { name: 'search', lib, q: q.get('q') ?? '' };
+    if (rest === 'search') return { name: 'search', lib, q: q.get('q') ?? '', exact: q.get('exact') === '1' };
     if (rest === 'book' && segs[3]) return { name: 'book', lib, id: Number(segs[3]) };
     if (rest === 'read' && segs[3]) return { name: 'read', lib, id: Number(segs[3]) };
   }

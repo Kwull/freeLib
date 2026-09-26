@@ -14,6 +14,7 @@ export type MockBook = {
   authorIds: number[]; seriesId: number | null; serno: number | null;
   genreIds: number[]; lang: string; ext: string; size: number; date: string; deleted: boolean;
   annotation?: string;
+  keywords?: string;
 };
 
 export type MockLibrary = {
@@ -275,13 +276,60 @@ export function generateLibrary(id: number, seed: number): MockLibrary {
     nextId++;
   }
 
+  // --- Russian books for the start page, word-form / transliteration search and editions ---
+  // (appended after everything random, so the rest of the library stays as it was)
+  const byKey = (a: { sortKey: string }, b: { sortKey: string }) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0);
+  const addAuthor = (name: string) => {
+    const a: MockAuthor = { id: authors.length + 1, name, sortKey: normalize(name), bookCount: 0 };
+    authors.push(a);
+    return a.id;
+  };
+  const addSeries = (name: string) => {
+    const s: MockSeries = { id: series.length + 1, name, sortKey: normalize(name), bookCount: 0 };
+    series.push(s);
+    return s.id;
+  };
+  const arkady = authorIdByName.get('Стругацкий Аркадий Натанович')!;
+  const boris = addAuthor('Стругацкий Борис Натанович');
+  const azimov = authorIdByName.get('Азимов Айзек')!;
+  const noon = addSeries('Мир Полудня');
+  const robots = addSeries('Роботы');
+  const strug = [arkady, boris];
+  const RU_SF = 2;
+  const curated: [string, number[], number | null, number | null, string, number, string, string?][] = [
+    ['Полдень, XXII век', strug, noon, 1, 'fb2', 820_000, '2024-03-01'],
+    ['Попытка к бегству', strug, noon, 2, 'fb2', 410_000, '2024-05-01'],
+    ['Трудно быть богом', strug, noon, 3, 'fb2', 640_000, '2025-01-10'],
+    ['Обитаемый остров', strug, noon, 4, 'fb2', 1_100_000, '2026-09-10'],
+    ['Жук в муравейнике', strug, noon, 5, 'fb2', 520_000, '2026-09-15'],
+    ['Пикник на обочине', strug, null, null, 'fb2', 700_000, '2023-01-01'],
+    ['Пикник на обочине (другой перевод)', strug, null, null, 'epub', 900_000, '2024-02-01', 'перевод А. Бромфилда'],
+    ['Пикник на обочине', strug, null, null, 'fb2', 1_250_000, '2022-06-01'],
+    ['Пикник на обочине [иллюстрации]', strug, null, null, 'fb2', 400_000, '2025-02-01'],
+    ['Град обреченный', strug, null, null, 'fb2', 980_000, '2026-09-18'],
+    ['Я, робот', [azimov], robots, 1, 'fb2', 560_000, '2023-04-01'],
+    ['Я, робот (другой перевод)', [azimov], robots, 1, 'fb2', 590_000, '2024-04-01'],
+    ['Стальные пещеры', [azimov], robots, 2, 'fb2', 610_000, '2025-06-01'],
+    ['Обнажённое солнце', [azimov], robots, 3, 'fb2', 600_000, '2026-09-05'],
+    ['Конец Вечности', [azimov], null, null, 'fb2', 700_000, '2026-09-20'],
+    ['Книга о книгах', [azimov], null, null, 'fb2', 300_000, '2026-09-21'],
+    ['Записки на полях', [azimov], null, null, 'fb2', 200_000, '2021-01-01', 'азимвв'],
+  ];
+  for (const [title, aids, sid, serno, ext, size, date, keywords] of curated) {
+    addBook({
+      id: nextId, key: `ru:${nextId}`, title, sortKey: normalize(title),
+      authorIds: aids, seriesId: sid, serno, genreIds: [RU_SF], lang: 'ru', ext, size, date, deleted: false, keywords,
+    });
+    nextId++;
+  }
+
   for (const b of books) {
     if (b.deleted) continue;
     for (const aid of b.authorIds) authors[aid - 1].bookCount++;
     if (b.seriesId) series[b.seriesId - 1].bookCount++;
   }
-  const al = nameList(authors);
-  const sl = nameList(series);
+  const al = nameList(authors.slice().sort(byKey));
+  const sl = nameList(series.slice().sort(byKey));
 
   return {
     id, authors, series, genres, books, booksByAuthor, booksBySeries, bookById,

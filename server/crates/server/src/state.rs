@@ -60,6 +60,12 @@ pub struct Inner {
     pub ext: Arc<crate::extrating::ExtRatings>,
     /// MCP requests per API token (rate limiting).
     pub tokens: crate::tokens::Tokens,
+    /// Encryption keys of secrets stored in app.db.
+    pub secrets: Arc<crate::secrets::Secrets>,
+    /// OAuth authorization server state (pending consents, codes, client metadata cache).
+    pub oauth: crate::oauth::OAuth,
+    /// Cover presence of books whose preview was extracted (best copy of a work).
+    pub covers: crate::find::CoverHints,
 }
 
 impl AppState {
@@ -69,10 +75,12 @@ impl AppState {
         calibre: Option<Calibre>,
         oidc: Option<crate::oidc::Provider>,
         ext: Arc<crate::extrating::ExtRatings>,
+        secrets: Arc<crate::secrets::Secrets>,
     ) -> AppState {
         let (tx, _) = broadcast::channel(1024);
         let workers = Arc::new(Semaphore::new(cfg.workers.max(1)));
         let preview_permits = cfg.workers.max(1) * 2;
+        let oauth = crate::oauth::OAuth::new(&cfg);
         AppState(Arc::new(Inner {
             cfg,
             db,
@@ -93,6 +101,9 @@ impl AppState {
             oidc: oidc.map(Arc::new),
             ext,
             tokens: crate::tokens::Tokens::default(),
+            secrets,
+            oauth,
+            covers: crate::find::CoverHints::default(),
         }))
     }
 

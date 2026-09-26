@@ -7,7 +7,7 @@
   const route = $derived(currentRoute());
 
   const tabs = $derived([
-    { name: 'new', href: `/l/${lib}/new`, icon: 'newArrivals', label: t('phone.tabs.new'), active: route.name === 'new' },
+    { name: 'home', href: `/l/${lib}/home`, icon: 'home', label: t('phone.tabs.home'), active: route.name === 'start' || route.name === 'new' },
     { name: 'authors', href: `/l/${lib}/authors`, icon: 'authors', label: t('phone.tabs.authors'), active: route.name === 'authors' || route.name === 'series' },
     { name: 'search', href: `/l/${lib}/search`, icon: 'search', label: t('phone.tabs.search'), active: route.name === 'search' },
     { name: 'genres', href: `/l/${lib}/genres`, icon: 'genres', label: t('phone.tabs.genres'), active: route.name === 'genres' },

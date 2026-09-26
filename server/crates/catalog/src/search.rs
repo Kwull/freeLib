@@ -15,6 +15,7 @@ use crate::catalog::{BookFilter, Catalog, CountSel, Result, load_books};
 use crate::genres::genres;
 use crate::model::*;
 use crate::normalize::search_tokens;
+use crate::text::{latin_key, stem};
 
 /// What to search for (`kind` query parameter).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -46,6 +47,10 @@ pub struct SearchQuery {
     /// Rating filters (applied before facets are counted) and an optional rating sort
     /// (instead of relevance; relevance breaks ties).
     pub rating: crate::rank::RatingQuery,
+    /// One row per work (editions grouped, see [`crate::works`]); `total` then counts works.
+    pub group: bool,
+    /// Search the query exactly as typed: no typo correction ("Search instead for …").
+    pub exact: bool,
 }
 
 pub(crate) const FLAG_EXISTS: u8 = 1;
@@ -62,6 +67,10 @@ pub struct BookAttrs {
     pub(crate) stars: Vec<u8>,
     /// Age estimate (`kids::age_code`), `kids::AGE_UNKNOWN` = unknown.
     pub(crate) age: Vec<u8>,
+    /// File size in bytes (clamped to `u32`).
+    pub(crate) size: Vec<u32>,
+    /// Work id (`book.work_id`: the first book of the work), 0 = none.
+    pub(crate) work: Vec<u32>,
     pub(crate) genre_off: Vec<u32>,
     pub(crate) genre_ids: Vec<u16>,
     pub(crate) langs: Vec<String>,
@@ -89,6 +98,8 @@ impl BookAttrs {
             date: vec![0; n],
             stars: vec![0; n],
             age: vec![crate::kids::AGE_UNKNOWN; n],
+            size: vec![0; n],
+            work: vec![0; n],
             genre_off: vec![0; n + 1],
             genre_ids: Vec::new(),
             langs: Vec::new(),
@@ -98,8 +109,9 @@ impl BookAttrs {
         let mut ext_idx: HashMap<String, u16> = HashMap::new();
         // keywords only feed the age estimate; most books have none
         let mut keywords: Vec<(u32, String)> = Vec::new();
-        let mut st =
-            conn.prepare("SELECT id, lang, ext, date, deleted, stars, keywords FROM book")?;
+        let mut st = conn.prepare(
+            "SELECT id, lang, ext, date, deleted, stars, keywords, size, work_id FROM book",
+        )?;
         let mut q = st.query([])?;
         while let Some(r) = q.next()? {
             let id = r.get::<_, i64>(0)? as usize;
@@ -127,6 +139,8 @@ impl BookAttrs {
             a.ext[id] = ei;
             a.date[id] = date_num(r.get_ref(3)?.as_str().unwrap_or(""));
             a.stars[id] = r.get::<_, i64>(5)?.clamp(0, 5) as u8;
+            a.size[id] = r.get::<_, i64>(7)?.clamp(0, u32::MAX as i64) as u32;
+            a.work[id] = r.get::<_, i64>(8)?.clamp(0, u32::MAX as i64) as u32;
             let kw = r.get_ref(6)?.as_str().unwrap_or("");
             if !kw.is_empty() {
                 keywords.push((id as u32, kw.to_string()));
@@ -212,6 +226,29 @@ impl BookAttrs {
             .unwrap_or("")
     }
 
+    /// File extension of book `id`.
+    pub fn ext(&self, id: i64) -> &str {
+        self.ext
+            .get(id as usize)
+            .and_then(|e| self.exts.get(*e as usize))
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    /// File size of book `id` in bytes.
+    pub fn size(&self, id: i64) -> u32 {
+        self.size.get(id as usize).copied().unwrap_or(0)
+    }
+
+    /// Work id of book `id` (the id of the work's first book; the book's own id when it is
+    /// not grouped with others).
+    pub fn work(&self, id: i64) -> i64 {
+        match self.work.get(id as usize).copied().unwrap_or(0) {
+            0 => id,
+            w => w as i64,
+        }
+    }
+
     /// Whether book `id` exists and is live (not deleted).
     pub fn is_live(&self, id: i64) -> bool {
         self.flags
@@ -290,21 +327,26 @@ impl BookAttrs {
 
     /// Approximate heap size in bytes.
     pub fn memory_bytes(&self) -> usize {
-        self.flags.len() * (1 + 2 + 2 + 4 + 1 + 1 + 4) + self.genre_ids.len() * 2
+        self.flags.len() * (1 + 2 + 2 + 4 + 1 + 1 + 4 + 4 + 4) + self.genre_ids.len() * 2
     }
+}
+
+/// Words of `q` used for matching: one-letter words are dropped when longer ones exist
+/// (`Война и мир` → `война`, `мир`), since `и*` would match most of the catalog.
+fn used_tokens(all: &[String]) -> Vec<String> {
+    let long: Vec<String> = all
+        .iter()
+        .filter(|t| t.chars().count() >= 2)
+        .cloned()
+        .collect();
+    if long.is_empty() { all.to_vec() } else { long }
 }
 
 /// Build the FTS5 MATCH expression: every token as a quoted prefix, implicitly AND-ed.
 /// One-letter tokens are dropped when longer ones exist (`Война и мир` → `война* мир*`),
 /// since `и*` would match most of the catalog without narrowing the result.
 pub fn fts_query(q: &str) -> Option<String> {
-    let tokens = search_tokens(q);
-    let long: Vec<&String> = tokens.iter().filter(|t| t.chars().count() >= 2).collect();
-    let used: Vec<&String> = if long.is_empty() {
-        tokens.iter().collect()
-    } else {
-        long
-    };
+    let used = used_tokens(&search_tokens(q));
     if used.is_empty() {
         return None;
     }
@@ -316,6 +358,161 @@ pub fn fts_query(q: &str) -> Option<String> {
     )
 }
 
+/// Ways a query word can match besides its own prefix: the same stem (word form: `книгу` →
+/// `книг`, matched exactly against words and stored stems) and the same Latin key
+/// (transliteration: `strugatsky` ↔ `стругацкий`; a prefix from 4 characters, exact for 3).
+fn alternatives(t: &str) -> Vec<String> {
+    let mut v = vec![format!("\"{t}\"*")];
+    let n = t.chars().count();
+    if n >= 3 {
+        let s = stem(t);
+        if s != t {
+            v.push(format!("\"{s}\""));
+        }
+        if let Some(k) = latin_key(t)
+            && k != t
+        {
+            v.push(if n >= 4 {
+                format!("\"{k}\"*")
+            } else {
+                format!("\"{k}\"")
+            });
+        }
+    }
+    v
+}
+
+/// Relevance tiers are added to bm25 (lower = better) in steps of this size.
+const TIER: f64 = 1000.0;
+
+/// Fewer matches than this (books + authors + series) try a typo correction.
+const FEW_RESULTS: i64 = 3;
+
+/// How one query is matched. Tiers, best first: 3 = the title starts with the query word /
+/// contains the query as a phrase (authors, series: the name starts with it); 2 = every word
+/// is a prefix of a word; 1 = some words matched only by word form or transliteration
+/// (`broad`); 0 = found through a typo correction.
+pub(crate) struct Plan {
+    pub(crate) tokens: Vec<String>,
+    pub(crate) strict: String,
+    pub(crate) broad: Option<String>,
+    pub(crate) phrase: String,
+    pub(crate) phrase_key: String,
+}
+
+pub(crate) fn plan(q: &str) -> Option<Plan> {
+    let all = search_tokens(q);
+    let tokens = used_tokens(&all);
+    if tokens.is_empty() {
+        return None;
+    }
+    let strict = tokens
+        .iter()
+        .map(|t| format!("\"{t}\"*"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut expanded = false;
+    let parts: Vec<String> = tokens
+        .iter()
+        .map(|t| {
+            let alts = alternatives(t);
+            if alts.len() > 1 {
+                expanded = true;
+                format!("({})", alts.join(" OR "))
+            } else {
+                alts[0].clone()
+            }
+        })
+        .collect();
+    let phrase = if all.len() >= 2 {
+        format!("title : \"{}\"*", all.join(" "))
+    } else {
+        format!("title : ^ \"{}\"*", all[0])
+    };
+    Some(Plan {
+        strict,
+        broad: expanded.then(|| parts.join(" AND ")),
+        phrase,
+        phrase_key: all.join(" "),
+        tokens,
+    })
+}
+
+/// Words of displayed names that a query word matched: by prefix, by stem, or by Latin key.
+struct Highlighter {
+    tokens: Vec<(String, String, Option<String>)>,
+    seen: HashMap<String, bool>,
+}
+
+impl Highlighter {
+    fn new(tokens: &[String]) -> Highlighter {
+        Highlighter {
+            tokens: tokens
+                .iter()
+                .map(|t| {
+                    let n = t.chars().count();
+                    let s = if n >= 3 { stem(t) } else { String::new() };
+                    (t.clone(), s, latin_key(t))
+                })
+                .collect(),
+            seen: HashMap::new(),
+        }
+    }
+
+    fn add(&mut self, text: &str) {
+        for w in search_tokens(text) {
+            if self.seen.contains_key(&w) {
+                continue;
+            }
+            let hit = self.tokens.iter().any(|(t, s, k)| {
+                if w.starts_with(t.as_str()) {
+                    return true;
+                }
+                if !s.is_empty() && stem(&w) == *s {
+                    return true;
+                }
+                match (k, latin_key(&w)) {
+                    (Some(k), Some(wk)) if t.chars().count() >= 4 => wk.starts_with(k.as_str()),
+                    (Some(k), Some(wk)) => wk == *k,
+                    _ => false,
+                }
+            });
+            self.seen.insert(w, hit);
+        }
+    }
+
+    fn words(self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .seen
+            .into_iter()
+            .filter(|(_, hit)| *hit)
+            .map(|(w, _)| w)
+            .collect();
+        v.sort();
+        v
+    }
+}
+
+fn highlight(tokens: &[String], res: &SearchResult) -> Vec<String> {
+    let mut h = Highlighter::new(tokens);
+    for a in &res.authors {
+        h.add(&a.name);
+    }
+    for s in &res.series {
+        h.add(&s.name);
+    }
+    for b in &res.books {
+        h.add(&b.title);
+        for a in &b.authors {
+            h.add(&a.name);
+        }
+        if let Some(s) = &b.series {
+            h.add(&s.name);
+        }
+    }
+    h.words()
+}
+
 impl Catalog {
     /// Full-text search over titles, authors, series and keywords, plus author and series name
     /// matches. `q` must have at least 2 characters, otherwise the result is empty.
@@ -324,27 +521,113 @@ impl Catalog {
     }
 
     /// [`search`](Self::search) with the user's and external ratings for `sq.rating`.
+    ///
+    /// Words match as prefixes, word forms (Snowball stems) and transliterations (Latin keys);
+    /// results are ranked by tier (see [`Plan`]), then bm25. When the query finds fewer than 3
+    /// matches or no author/series, words unknown to the catalog are corrected by edit distance:
+    /// when the corrected query finds more (or finds authors/series the query did not) its
+    /// results are returned (`corrected`), else it is offered (`did_you_mean`). `exact` skips
+    /// the correction.
     pub fn search_rated(
         &self,
         sq: &SearchQuery,
         src: &dyn crate::rank::RatingSource,
     ) -> Result<SearchResult> {
         let started = Instant::now();
-        let mut res = SearchResult::default();
-        let fts = match fts_query(&sq.q) {
-            Some(f) if sq.q.trim().chars().count() >= 2 => f,
-            _ => return Ok(res),
+        if sq.q.trim().chars().count() < 2 {
+            return Ok(SearchResult::default());
+        }
+        let Some(p) = plan(&sq.q) else {
+            return Ok(SearchResult::default());
         };
         let conn = self.conn()?;
+        let mut res = self.search_plan(&conn, &p, sq, src)?;
+        let mut used = p.tokens.clone();
+        let found = |r: &SearchResult| r.total + r.authors.len() as i64 + r.series.len() as i64;
+        let n = found(&res);
+        let names = |r: &SearchResult| r.authors.len() + r.series.len();
+        let wants_names = sq.kind != SearchKind::Books;
+        if !sq.exact
+            && (n < FEW_RESULTS || (wants_names && names(&res) == 0))
+            && let Some(fixed) = self.correct(&sq.q)?
+            && let Some(fp) = plan(&fixed)
+        {
+            let alt = self.search_plan(&conn, &fp, sq, src)?;
+            // the corrected query is shown instead when the query as typed found little, or no
+            // author/series where the corrected one finds some; else it is only offered
+            if (n < FEW_RESULTS && found(&alt) > n)
+                || (wants_names && names(&res) == 0 && names(&alt) > 0)
+            {
+                res = alt;
+                res.corrected = Some(fixed);
+                used = fp.tokens;
+            } else if found(&alt) > n {
+                res.did_you_mean = Some(fixed);
+            }
+        }
+        res.highlight = highlight(&used, &res);
+        res.took_ms = started.elapsed().as_millis() as u64;
+        Ok(res)
+    }
 
+    /// `q` with the words the catalog does not know (no vocabulary word starts with them, nor
+    /// with their transliteration) replaced by the closest known word; `None` when nothing
+    /// changes.
+    pub fn correct(&self, q: &str) -> Result<Option<String>> {
+        let vocab = self.vocab()?;
+        if vocab.is_empty() {
+            return Ok(None);
+        }
+        let mut changed = false;
+        let words: Vec<String> = search_tokens(q)
+            .into_iter()
+            .map(|t| {
+                if t.chars().count() < 4 || !t.chars().any(char::is_alphabetic) || vocab.knows(&t) {
+                    return t;
+                }
+                match vocab.closest(&t) {
+                    Some((w, _)) => {
+                        changed = true;
+                        w
+                    }
+                    None => t,
+                }
+            })
+            .collect();
+        Ok(changed.then(|| words.join(" ")))
+    }
+
+    fn fts_ids(
+        conn: &rusqlite::Connection,
+        table: &str,
+        q: &str,
+    ) -> Result<std::collections::HashSet<i64>> {
+        let mut st =
+            conn.prepare_cached(&format!("SELECT rowid FROM {table} WHERE {table} MATCH ?1"))?;
+        Ok(st
+            .query_map([q], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
+    fn search_plan(
+        &self,
+        conn: &rusqlite::Connection,
+        p: &Plan,
+        sq: &SearchQuery,
+        src: &dyn crate::rank::RatingSource,
+    ) -> Result<SearchResult> {
+        let mut res = SearchResult::default();
+        let any = p.broad.as_deref().unwrap_or(&p.strict);
         if matches!(sq.kind, SearchKind::All | SearchKind::Authors) {
             let mut st = conn.prepare_cached(
                 "SELECT a.id, a.name, a.book_count FROM author a \
                  WHERE a.id IN (SELECT rowid FROM author_fts WHERE author_fts MATCH ?1) \
-                 ORDER BY a.book_count DESC, a.sort_key LIMIT 20",
+                 ORDER BY substr(a.sort_key, 1, length(?3)) = ?3 DESC, \
+                 a.id IN (SELECT rowid FROM author_fts WHERE author_fts MATCH ?2) DESC, \
+                 a.book_count DESC, a.sort_key LIMIT 20",
             )?;
             res.authors = st
-                .query_map([&fts], |r| {
+                .query_map([any, &p.strict, &p.phrase_key], |r| {
                     Ok(NameCount {
                         id: r.get(0)?,
                         name: r.get(1)?,
@@ -357,10 +640,12 @@ impl Catalog {
             let mut st = conn.prepare_cached(
                 "SELECT s.id, s.name, s.book_count, s.authors FROM series s \
                  WHERE s.id IN (SELECT rowid FROM series_fts WHERE series_fts MATCH ?1) \
-                 ORDER BY s.book_count DESC, s.sort_key LIMIT 20",
+                 ORDER BY substr(s.sort_key, 1, length(?3)) = ?3 DESC, \
+                 s.id IN (SELECT rowid FROM series_fts WHERE series_fts MATCH ?2) DESC, \
+                 s.book_count DESC, s.sort_key LIMIT 20",
             )?;
             res.series = st
-                .query_map([&fts], |r| {
+                .query_map([any, &p.strict, &p.phrase_key], |r| {
                     Ok(SeriesHit {
                         id: r.get(0)?,
                         name: r.get(1)?,
@@ -372,14 +657,29 @@ impl Catalog {
         }
         if matches!(sq.kind, SearchKind::All | SearchKind::Books) {
             let attrs = self.attrs()?;
-            let hits: Vec<(i64, f64)> = {
-                // Column weights: title, authors, series, keywords.
+            let mut hits: Vec<(i64, f64)> = {
+                // Column weights: title, authors, series, keywords, stems, Latin keys.
                 let mut st = conn.prepare_cached(
-                    "SELECT rowid, bm25(book_fts, 10.0, 4.0, 3.0, 1.0) FROM book_fts WHERE book_fts MATCH ?1",
+                    "SELECT rowid, bm25(book_fts, 10.0, 4.0, 3.0, 1.0, 3.0, 2.0) FROM book_fts WHERE book_fts MATCH ?1",
                 )?;
-                st.query_map([&fts], |r| Ok((r.get(0)?, r.get(1)?)))?
+                st.query_map([any], |r| Ok((r.get(0)?, r.get(1)?)))?
                     .collect::<rusqlite::Result<_>>()?
             };
+            let strict = match &p.broad {
+                Some(_) => Some(Self::fts_ids(conn, "book_fts", &p.strict)?),
+                None => None,
+            };
+            let phrase = Self::fts_ids(conn, "book_fts", &p.phrase)?;
+            for (id, score) in hits.iter_mut() {
+                let tier = if phrase.contains(id) {
+                    3.0
+                } else if strict.as_ref().is_none_or(|s| s.contains(id)) {
+                    2.0
+                } else {
+                    1.0
+                };
+                *score -= tier * TIER;
+            }
             let hits: Vec<(i64, f64)> = if sq.rating.has_filter() {
                 hits.into_iter()
                     .filter(|(id, _)| {
@@ -391,7 +691,9 @@ impl Catalog {
             };
             let (ranked, total, facets) = filter_and_facet(&attrs, &hits, sq);
             let limit = sq.limit.clamp(1, 1000);
-            let top = if sq.rating.sort != crate::rank::RatingSort::None {
+            // with grouping every hit is ordered (groups are cut after grouping)
+            let keep = if sq.group { usize::MAX } else { limit };
+            let ordered: Vec<i64> = if sq.rating.sort != crate::rank::RatingSort::None {
                 let mut keyed: Vec<(u64, f64, i64)> = ranked
                     .into_iter()
                     .map(|(id, score)| (sq.rating.key(id, &attrs, src), score, id))
@@ -402,16 +704,23 @@ impl Catalog {
                         .then_with(|| attrs.date[b.2 as usize].cmp(&attrs.date[a.2 as usize]))
                         .then(a.2.cmp(&b.2))
                 });
-                keyed.truncate(limit);
+                keyed.truncate(keep);
                 keyed.into_iter().map(|x| x.2).collect()
             } else {
-                top_n(ranked, limit, &attrs)
+                top_n(ranked, keep, &attrs)
             };
-            res.books = load_books(&conn, &top)?;
-            res.total = total;
+            if sq.group {
+                let mut groups = crate::works::group_ids(&ordered, &attrs, src);
+                crate::works::sort_groups(&mut groups, &sq.rating, &attrs, src);
+                res.total = groups.len() as i64;
+                groups.truncate(limit);
+                res.books = crate::works::load_groups(conn, &groups)?;
+            } else {
+                res.books = load_books(conn, &ordered)?;
+                res.total = total;
+            }
             res.facets = facets;
         }
-        res.took_ms = started.elapsed().as_millis() as u64;
         Ok(res)
     }
 }
@@ -507,6 +816,7 @@ fn filter_and_facet(
 
 /// Best `n` hits: bm25 ascending (more relevant first), then newer first, then id.
 fn top_n(mut v: Vec<(i64, f64)>, n: usize, a: &BookAttrs) -> Vec<i64> {
+    let n = n.min(v.len());
     let cmp = |x: &(i64, f64), y: &(i64, f64)| {
         x.1.total_cmp(&y.1)
             .then_with(|| a.date[y.0 as usize].cmp(&a.date[x.0 as usize]))

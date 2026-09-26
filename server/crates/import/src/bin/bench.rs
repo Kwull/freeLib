@@ -359,6 +359,145 @@ fn main() {
     s.report();
     sb.report();
     println!("|   (largest match set: {max_total} books) | | | | |");
+
+    let mut s = Series::new("search: vocabulary load (once per catalog)");
+    let vocab = s.time(|| cat.vocab().unwrap());
+    s.report();
+    println!(
+        "|   (vocabulary: {} words, {} MB) | | | | |",
+        vocab.len(),
+        vocab.memory_bytes() / 1_000_000
+    );
+    // word forms, transliterations and typos (the typo ones run the correction as well)
+    let fuzzy = [
+        "книгу",
+        "мирами",
+        "дозоры",
+        "звёздных",
+        "хроник",
+        "лукьяненка",
+        "strugatsky",
+        "strugackie",
+        "azimov",
+        "shekli",
+        "tolstoi",
+        "dark towers",
+        "стругацкй",
+        "азимв",
+        "лукяненко",
+        "sheckley robrt",
+    ];
+    let mut s = Series::new("search: word forms / translit (10 queries × 3)");
+    let mut t = Series::new("search: typos, corrected (6 queries × 3)");
+    for (i, q) in fuzzy.iter().enumerate() {
+        for _ in 0..3 {
+            let sq = SearchQuery {
+                q: (*q).into(),
+                limit: 200,
+                group: true,
+                ..Default::default()
+            };
+            if i < 10 {
+                s.time(|| cat.search(&sq).unwrap());
+            } else {
+                let r = t.time(|| cat.search(&sq).unwrap());
+                if r.corrected.is_none() && r.did_you_mean.is_none() {
+                    eprintln!("  no correction for {q}");
+                }
+            }
+        }
+    }
+    s.report();
+    t.report();
+    let mut s = Series::new("search grouped by work (25 queries × 3)");
+    let mut all = Series::new("search, all 41 queries (p95 target)");
+    for q in queries.iter().chain(fuzzy.iter()) {
+        for _ in 0..3 {
+            let sq = SearchQuery {
+                q: (*q).into(),
+                limit: 200,
+                group: true,
+                ..Default::default()
+            };
+            let d = Instant::now();
+            s.time(|| cat.search(&sq).unwrap());
+            all.samples.push(ms(d.elapsed()));
+        }
+    }
+    s.report();
+    all.report();
+
+    // grouped lists (editions of one work as one row)
+    let nr = freelib_catalog::NoRatings;
+    let rq = freelib_catalog::RatingQuery::default();
+    let mut s = Series::new("grouped: books by author (400 authors)");
+    for id in &ids {
+        s.time(|| {
+            cat.books_page(&BookSelector::Author(*id), &f, &rq, &nr, &page, true)
+                .unwrap()
+        });
+    }
+    s.report();
+    for (label, date) in [
+        ("since 30 days", "2026-08-02"),
+        ("since 1900 (all)", "1900-01-01"),
+    ] {
+        let mut s = Series::new(&format!("grouped: books {label}"));
+        for _ in 0..5 {
+            s.time(|| {
+                cat.books_page(&BookSelector::Since(date.into()), &f, &rq, &nr, &page, true)
+                    .unwrap()
+            });
+        }
+        s.report();
+    }
+    let top = genres
+        .iter()
+        .filter(|g| g.parent == 0)
+        .max_by_key(|g| g.count)
+        .unwrap();
+    let mut s = Series::new("grouped: biggest top-level genre");
+    for _ in 0..5 {
+        s.time(|| {
+            cat.books_page(&BookSelector::Genre(top.id), &f, &rq, &nr, &page, true)
+                .unwrap()
+        });
+    }
+    s.report();
+
+    // start page: 300 books read by a user, 50 read authors, 10 followed series
+    let mut s = Series::new("start page: continue series (300 read)");
+    let mut n = Series::new("start page: new from authors (30 days)");
+    for round in 0..5 {
+        let mut r = Rng::new(100 + round);
+        let done: std::collections::HashMap<i64, String> = (0..300)
+            .map(|i| {
+                (
+                    1 + r.below(st.book_count as usize) as i64,
+                    format!("2026-09-{:02}T10:00:00Z", 1 + i % 28),
+                )
+            })
+            .collect();
+        s.time(|| {
+            cat.continue_series(&done, &Default::default(), &nr, 2, 24)
+                .unwrap()
+        });
+        let read: Vec<i64> = done.keys().copied().collect();
+        let seeds = freelib_catalog::home::NewFromSeeds {
+            read_authors: cat.reading_authors(&read).unwrap(),
+            followed_series: (0..10)
+                .map(|_| 1 + r.below(st.series_count as usize) as i64)
+                .collect(),
+            ..Default::default()
+        };
+        let exclude = done.keys().copied().collect();
+        n.time(|| {
+            cat.new_from(&seeds, "2026-08-02", &exclude, &nr, 60)
+                .unwrap()
+        });
+    }
+    s.report();
+    n.report();
     println!(
         "\nauthors JSON: {} KB for {} rows",
         json_len / 1000,

@@ -13,7 +13,7 @@ test('no console errors browsing authors, a book list and search', async ({ page
   const author = await pickAuthor(request, 1, 3);
   const books = await booksOfAuthor(request, author.id, 1, 10);
 
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await expect(page.getByRole('heading', { name: 'Authors' })).toBeVisible({ timeout: 15000 });
 
   await page.getByLabel('Filter authors').fill(author.name);

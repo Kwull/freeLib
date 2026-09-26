@@ -22,6 +22,11 @@ pub trait RatingSource {
     fn my(&self, id: i64) -> u8;
     /// External rating of book `id`: (average × 100, vote count); `None` = unknown or no votes.
     fn ext(&self, id: i64) -> Option<(u16, u32)>;
+    /// Whether book `id` has a cover, when known (the server knows it for books whose preview
+    /// was extracted); used to pick the best copy of a work.
+    fn has_cover(&self, _id: i64) -> Option<bool> {
+        None
+    }
 }
 
 /// No user and no external ratings.

@@ -35,7 +35,7 @@ test('letter strip: one script at a time, diacritics folded, empty letters disab
 });
 
 test('breadcrumb uses the index letter', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await page.getByLabel('Filter authors').fill('1984');
   await page.getByRole('button', { name: /1984 Group/ }).click();
   await expect(page.locator('.scope-header .crumb')).toHaveText('Authors / #');

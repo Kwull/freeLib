@@ -60,6 +60,10 @@ fn settings_json(
             "allowedRecipients": smtp.allowed_recipients,
             "dailyLimitPerUser": smtp.daily_limit_per_user,
             "subject": smtp.subject,
+            "maxAttachments": smtp.max_attachments,
+            "maxMailMb": smtp.max_mail_mb,
+            "retries": smtp.retries,
+            "retryDelaySeconds": smtp.retry_delay_seconds,
         },
         "opds": opds,
         "calibre": {
@@ -98,6 +102,10 @@ pub struct SmtpIn {
     allowed_recipients: Option<Vec<String>>,
     daily_limit_per_user: Option<u32>,
     subject: Option<String>,
+    max_attachments: Option<u32>,
+    max_mail_mb: Option<u32>,
+    retries: Option<u32>,
+    retry_delay_seconds: Option<u64>,
 }
 
 /// Recipient patterns: at most 100, each `*` or containing `@`, no spaces or control characters.
@@ -160,6 +168,12 @@ pub async fn put(
             "security must be none, starttls or tls",
         ));
     }
+    // the password is encrypted before it reaches app.db
+    let new_password = b
+        .smtp
+        .as_ref()
+        .and_then(|s| s.password.as_deref())
+        .map(|v| (!v.is_empty()).then(|| st.secrets.encrypt("smtp.password", v)));
     let patterns = match b.smtp.as_ref().and_then(|s| s.allowed_recipients.clone()) {
         Some(v) => Some(clean_patterns(v)?),
         None => None,
@@ -197,15 +211,27 @@ pub async fn put(
                 if let Some(v) = s.from {
                     smtp.from = v.trim().to_string();
                 }
-                if let Some(v) = s.password {
+                if let Some(v) = new_password {
                     // write-only; an empty string clears it
-                    smtp.password = (!v.is_empty()).then_some(v);
+                    smtp.password = v;
                 }
                 if let Some(v) = s.pause_seconds {
                     smtp.pause_seconds = v.min(600);
                 }
                 if let Some(v) = s.daily_limit_per_user {
                     smtp.daily_limit_per_user = v.min(100_000);
+                }
+                if let Some(v) = s.max_attachments {
+                    smtp.max_attachments = v.clamp(1, 100);
+                }
+                if let Some(v) = s.max_mail_mb {
+                    smtp.max_mail_mb = v.clamp(1, 200);
+                }
+                if let Some(v) = s.retries {
+                    smtp.retries = v.min(10);
+                }
+                if let Some(v) = s.retry_delay_seconds {
+                    smtp.retry_delay_seconds = v.min(3600);
                 }
                 if let Some(v) = s.subject {
                     smtp.subject = v
@@ -243,7 +269,11 @@ pub async fn smtp_test(
     Admin(_): Admin,
     Json(b): Json<SmtpTest>,
 ) -> ApiResult<StatusCode> {
-    let smtp: SmtpConfig = st.db.run(|c| db::get_setting(c, "smtp")).await?;
+    let smtp: SmtpConfig = st
+        .db
+        .run(|c| db::get_setting::<SmtpConfig>(c, "smtp"))
+        .await?
+        .revealed(&st.secrets)?;
     crate::mail::send(
         &smtp,
         &b.to,

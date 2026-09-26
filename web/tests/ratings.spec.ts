@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 async function openDoyle(page: Page) {
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');
   await page.getByRole('button', { name: /Doyle Arthur Conan/ }).first().click();
   await expect(page.getByText('The Hound of the Baskervilles')).toBeVisible();

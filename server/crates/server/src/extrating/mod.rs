@@ -116,6 +116,8 @@ impl Dense {
 pub struct Ratings<'a> {
     pub my: HashMap<i64, u8>,
     pub ext: Option<std::sync::RwLockReadGuard<'a, Dense>>,
+    /// Books whose cover presence is known (best copy of a work).
+    pub covers: HashMap<i64, bool>,
 }
 
 impl RatingSource for Ratings<'_> {
@@ -124,6 +126,9 @@ impl RatingSource for Ratings<'_> {
     }
     fn ext(&self, id: i64) -> Option<(u16, u32)> {
         self.ext.as_ref().and_then(|d| d.get(id))
+    }
+    fn has_cover(&self, id: i64) -> Option<bool> {
+        self.covers.get(&id).copied()
     }
 }
 

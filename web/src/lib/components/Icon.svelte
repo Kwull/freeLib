@@ -11,6 +11,7 @@
     chevronRight: 'm9 6 6 6-6 6',
     chevronLeft: 'm15 6-6 6 6 6',
     send: 'M22 2 11 13M22 2 15 22l-4-9-9-4Z',
+    phone: 'M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm3 17h2',
     download: 'M12 3v12m0 0-5-5m5 5 5-5M4 21h16',
     read: 'M2 5h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2ZM22 5h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8Z',
     library: 'M4 21h16M6 21V9l6-4 6 4v12M10 21v-6h4v6',
@@ -41,6 +42,9 @@
     key: 'M15 7a4 4 0 1 1-3.5 6L4 20.5V17h3v-3h3l1.5-1.5A4 4 0 0 1 15 7ZM16 9h.01',
     link: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7',
     user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21c0-4 4-6 8-6s8 2 8 6',
+    home: 'M3 11 12 4l9 7M5 10v10h5v-6h4v6h5V10',
+    bell: 'M6 16v-5a6 6 0 0 1 12 0v5l2 2H4ZM10 21a2 2 0 0 0 4 0',
+    layers: 'm12 3 9 5-9 5-9-5ZM3 12l9 5 9-5M3 16l9 5 9-5',
   };
 
   let { name, size = 18, strokeWidth = 1.8, ...rest }: { name: string; size?: number; strokeWidth?: number; class?: string } = $props();

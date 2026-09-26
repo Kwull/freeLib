@@ -195,6 +195,18 @@ fn adopt_open_mode_data(c: &Connection, id: i64) -> ApiResult<()> {
         "UPDATE OR IGNORE device_order SET user_id=?1 WHERE user_id=0",
         [id],
     )?;
+    // apps authorized anonymously in open mode do not get the new account
+    c.execute("DELETE FROM oauth_grant WHERE user_id=0", [])?;
+    c.execute(
+        "UPDATE OR IGNORE follow SET user_id=?1 WHERE user_id=0",
+        [id],
+    )?;
+    c.execute(
+        "UPDATE OR IGNORE series_dismiss SET user_id=?1 WHERE user_id=0",
+        [id],
+    )?;
+    c.execute("UPDATE job SET owner=?1 WHERE owner=0", [id])?;
+    c.execute("UPDATE handoff SET user_id=?1 WHERE user_id=0", [id])?;
     Ok(())
 }
 
@@ -230,6 +242,11 @@ pub fn delete_user(c: &Connection, id: i64) -> ApiResult<bool> {
     c.execute("DELETE FROM api_audit WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM book_history WHERE user_id=?1", [id])?;
     c.execute("DELETE FROM device_order WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM oauth_grant WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM follow WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM series_dismiss WHERE user_id=?1", [id])?;
+    c.execute("DELETE FROM job WHERE owner=?1", [id])?;
+    c.execute("DELETE FROM handoff WHERE user_id=?1", [id])?;
     Ok(c.execute("DELETE FROM user WHERE id=?1", [id])? > 0)
 }
 
@@ -596,6 +613,8 @@ pub fn update_library(c: &Connection, l: &LibraryRow) -> ApiResult<()> {
 pub fn delete_library(c: &Connection, id: i64) -> ApiResult<()> {
     c.execute("DELETE FROM shelf_book WHERE library_id=?1", [id])?;
     c.execute("DELETE FROM book_history WHERE library_id=?1", [id])?;
+    c.execute("DELETE FROM follow WHERE library_id=?1", [id])?;
+    c.execute("DELETE FROM series_dismiss WHERE library_id=?1", [id])?;
     c.execute("DELETE FROM rating WHERE library_id=?1", [id])?;
     c.execute("DELETE FROM library WHERE id=?1", [id])?;
     Ok(())
@@ -1035,6 +1054,9 @@ pub struct AuditRow {
     pub token_id: Option<i64>,
     /// Name of the token at the time of the listing (`null` when revoked).
     pub token_name: Option<String>,
+    pub grant_id: Option<i64>,
+    /// Name of the authorized app (OAuth), while it is authorized.
+    pub app_name: Option<String>,
     pub tool: String,
     pub ok: bool,
     pub detail: String,
@@ -1044,18 +1066,21 @@ pub struct AuditRow {
 /// Audit entries kept per user.
 pub const AUDIT_MAX_PER_USER: i64 = 500;
 
+/// Adds an audit entry: an MCP tool call made with personal token `token_id` or OAuth grant
+/// `grant_id`, or an OAuth event (`oauth.authorize`, `oauth.revoke`, …).
 pub fn add_audit(
     c: &Connection,
     user_id: i64,
     token_id: Option<i64>,
+    grant_id: Option<i64>,
     tool: &str,
     ok: bool,
     detail: &str,
 ) -> ApiResult<()> {
     let detail: String = detail.chars().take(200).collect();
     c.execute(
-        "INSERT INTO api_audit(user_id, token_id, tool, ok, detail, at) VALUES (?1,?2,?3,?4,?5,?6)",
-        params![user_id, token_id, tool, ok, detail, now_rfc3339()],
+        "INSERT INTO api_audit(user_id, token_id, grant_id, tool, ok, detail, at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![user_id, token_id, grant_id, tool, ok, detail, now_rfc3339()],
     )?;
     c.execute(
         "DELETE FROM api_audit WHERE user_id=?1 AND id <= \
@@ -1068,14 +1093,17 @@ pub fn add_audit(
 /// The newest `limit` audit entries of `user_id`.
 pub fn audit(c: &Connection, user_id: i64, limit: i64) -> ApiResult<Vec<AuditRow>> {
     let mut st = c.prepare(
-        "SELECT a.id, a.token_id, t.name, a.tool, a.ok, a.detail, a.at FROM api_audit a \
-         LEFT JOIN api_token t ON t.id = a.token_id WHERE a.user_id=?1 ORDER BY a.id DESC LIMIT ?2",
+        "SELECT a.id, a.token_id, t.name, a.tool, a.ok, a.detail, a.at, a.grant_id, g.client_name \
+         FROM api_audit a LEFT JOIN api_token t ON t.id = a.token_id \
+         LEFT JOIN oauth_grant g ON g.id = a.grant_id WHERE a.user_id=?1 ORDER BY a.id DESC LIMIT ?2",
     )?;
     let rows = st.query_map(params![user_id, limit], |r| {
         Ok(AuditRow {
             id: r.get(0)?,
             token_id: r.get(1)?,
             token_name: r.get(2)?,
+            grant_id: r.get(7)?,
+            app_name: r.get(8)?,
             tool: r.get(3)?,
             ok: r.get(4)?,
             detail: r.get(5)?,
@@ -1105,6 +1133,11 @@ pub struct Device {
     pub options: ConvertOptions,
     #[serde(skip)]
     pub user_id: Option<i64>,
+    /// The default preset a shared device was seeded from (`kindle-email`, `kindle-usb`,
+    /// `apple-books`, `kobo`, `server-folder`, `original`); read-only, `null` for devices
+    /// users created. Clients use it to recognise e.g. the Apple Books device.
+    #[serde(default, skip_deserializing)]
+    pub preset: Option<String>,
 }
 
 pub fn default_file_name() -> String {
@@ -1124,16 +1157,17 @@ fn device_row(r: &rusqlite::Row) -> rusqlite::Result<Device> {
         target: r.get(5)?,
         file_name: r.get(6)?,
         options: serde_json::from_str(&options).unwrap_or_default(),
+        preset: r.get(8)?,
     })
 }
 
-const DEVICE_COLS: &str = "id, user_id, name, kind, format, target, file_name, options";
+const DEVICE_COLS: &str = "id, user_id, name, kind, format, target, file_name, options, preset";
 
 /// Devices visible to `user_id` (shared + own) in the user's order ([`set_device_order`]);
 /// devices the user never ordered follow, oldest first. The first one is the user's default.
 pub fn list_devices(c: &Connection, user_id: i64) -> ApiResult<Vec<Device>> {
     let mut st = c.prepare(
-        "SELECT d.id, d.user_id, d.name, d.kind, d.format, d.target, d.file_name, d.options FROM device d \
+        "SELECT d.id, d.user_id, d.name, d.kind, d.format, d.target, d.file_name, d.options, d.preset FROM device d \
          LEFT JOIN device_order o ON o.device_id = d.id AND o.user_id = ?1 \
          WHERE d.user_id IS NULL OR d.user_id=?1 ORDER BY o.pos IS NULL, o.pos, d.id",
     )?;
@@ -1159,8 +1193,8 @@ pub fn save_device(c: &Connection, d: &Device) -> ApiResult<i64> {
         serde_json::to_string(&d.options).map_err(|e| ApiError::internal(e.to_string()))?;
     if d.id == 0 {
         c.execute(
-            "INSERT INTO device(user_id, name, kind, format, target, file_name, options) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            params![d.user_id, d.name, d.kind, d.format, d.target, d.file_name, options],
+            "INSERT INTO device(user_id, name, kind, format, target, file_name, options, preset) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![d.user_id, d.name, d.kind, d.format, d.target, d.file_name, options, d.preset],
         )?;
         Ok(c.last_insert_rowid())
     } else {
@@ -1199,40 +1233,35 @@ pub fn set_device_order(c: &Connection, user_id: i64, ids: &[i64]) -> ApiResult<
     Ok(())
 }
 
+/// Marks a device as customized when its conversion options changed, so preset upgrades
+/// ([`crate::presets::upgrade`]) no longer touch it. Renaming or changing the target does not
+/// count.
+pub fn mark_customized_if_changed(
+    c: &Connection,
+    id: i64,
+    before: &ConvertOptions,
+    after: &ConvertOptions,
+) -> ApiResult<()> {
+    if before != after {
+        c.execute("UPDATE device SET customized=1 WHERE id=?1", [id])?;
+    }
+    Ok(())
+}
+
 pub fn delete_device(c: &Connection, id: i64) -> ApiResult<()> {
     c.execute("DELETE FROM device_order WHERE device_id=?1", [id])?;
     c.execute("DELETE FROM device WHERE id=?1", [id])?;
     Ok(())
 }
 
-/// Seeds the shared default devices once (API.md "Devices and sending").
+/// Seeds the shared default devices once and upgrades untouched seeded devices to the current
+/// presets ([`crate::presets`]).
 pub fn seed_devices(c: &Connection) -> ApiResult<()> {
-    if get_setting_raw(c, "devices_seeded")?.is_some() {
-        return Ok(());
+    crate::presets::seed(c)?;
+    let n = crate::presets::upgrade(c)?;
+    if n > 0 {
+        tracing::info!("updated {n} default device(s) to the current presets");
     }
-    let defaults: [(&str, &str, &str, Option<&str>); 6] = [
-        ("Kindle", "email", "epub", None),
-        ("Kindle (USB)", "download", "azw3", None),
-        ("Apple Books", "download", "epub", None),
-        ("Kobo", "download", "kepub", None),
-        ("Server folder", "folder", "epub", Some("")),
-        ("Original", "download", "original", None),
-    ];
-    for (name, kind, format, target) in defaults {
-        let d = Device {
-            id: 0,
-            name: name.into(),
-            kind: kind.into(),
-            format: format.into(),
-            target: target.map(String::from),
-            file_name: default_file_name(),
-            shared: true,
-            options: ConvertOptions::default(),
-            user_id: None,
-        };
-        save_device(c, &d)?;
-    }
-    put_setting_raw(c, "devices_seeded", "true")?;
     Ok(())
 }
 
@@ -1266,7 +1295,8 @@ pub fn put_setting<T: Serialize>(c: &Connection, key: &str, v: &T) -> ApiResult<
     put_setting_raw(c, key, &s)
 }
 
-/// Stored SMTP settings (the password never leaves the server).
+/// Stored SMTP settings (the password never leaves the server and is stored encrypted:
+/// `enc:v1:…`, see [`crate::secrets`]; [`SmtpConfig::revealed`] decrypts it for sending).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SmtpConfig {
@@ -1284,6 +1314,15 @@ pub struct SmtpConfig {
     pub daily_limit_per_user: u32,
     /// Subject of Send to Kindle mails; `%b` = book title, `%a` = author(s).
     pub subject: String,
+    /// Attachments per mail when several books are sent at once (Amazon: at most 25).
+    pub max_attachments: u32,
+    /// Size limit of one mail in MB, measured as encoded (base64) attachments (Amazon: 50 MB;
+    /// many SMTP providers allow less, e.g. Gmail 25 MB).
+    pub max_mail_mb: u32,
+    /// Automatic retries of a mail after a temporary SMTP or network error.
+    pub retries: u32,
+    /// Delay before the first retry; each further retry waits four times longer.
+    pub retry_delay_seconds: u64,
 }
 
 pub fn default_allowed_recipients() -> Vec<String> {
@@ -1303,11 +1342,24 @@ impl Default for SmtpConfig {
             allowed_recipients: default_allowed_recipients(),
             daily_limit_per_user: 100,
             subject: "%b".into(),
+            max_attachments: 25,
+            max_mail_mb: 50,
+            retries: 3,
+            retry_delay_seconds: 30,
         }
     }
 }
 
 impl SmtpConfig {
+    /// This configuration with the password decrypted, for sending (the stored one is
+    /// encrypted, see [`crate::secrets`]).
+    pub fn revealed(mut self, s: &crate::secrets::Secrets) -> ApiResult<SmtpConfig> {
+        if let Some(p) = &self.password {
+            self.password = Some(s.reveal("smtp.password", p)?.to_string());
+        }
+        Ok(self)
+    }
+
     /// The mail subject for a book, from the [`subject`](Self::subject) template.
     pub fn subject_for(&self, title: &str, authors: &str) -> String {
         let tpl = if self.subject.trim().is_empty() {

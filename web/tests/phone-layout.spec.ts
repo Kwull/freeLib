@@ -5,7 +5,7 @@ import { test, expect, devices } from '@playwright/test';
 test.use({ ...devices['iPhone 13'], defaultBrowserType: undefined, browserName: undefined });
 
 test('phone layout navigates list -> books -> detail', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await expect(page.locator('nav[aria-label="Main"]').last()).toBeVisible({ timeout: 15000 });
 
   // List pane visible first, books pane hidden.

@@ -32,7 +32,8 @@ fn mcp_url(st: &AppState, headers: &HeaderMap) -> String {
     format!("{scheme}://{host}/mcp")
 }
 
-/// `GET /me/tokens`: `{ tokens, scopes, mcp: {enabled, url} }`.
+/// `GET /me/tokens`: `{ tokens, scopes, mcp: {enabled, url, oauth} }` (`oauth`: whether apps
+/// can connect by signing in, i.e. `FREELIB_PUBLIC_URL` is an https URL).
 pub async fn list(
     State(st): State<AppState>,
     Auth(u): Auth,
@@ -50,7 +51,11 @@ pub async fn list(
     Ok(Json(json!({
         "tokens": list,
         "scopes": tokens::SCOPES,
-        "mcp": { "enabled": mcp.enabled, "url": mcp_url(&st, &headers) },
+        "mcp": {
+            "enabled": mcp.enabled,
+            "url": mcp_url(&st, &headers),
+            "oauth": crate::oauth::issuer(&st).is_some(),
+        },
     })))
 }
 

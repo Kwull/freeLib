@@ -2,9 +2,12 @@
 //! streamable HTTP transport in stateless mode (every POST is answered on its own, JSON
 //! responses; protocol versions up to 2026-07-28).
 //!
-//! * **Auth**: `Authorization: Bearer fl_…` personal API tokens ([`crate::tokens`]); the
-//!   [`gate`] middleware checks the token, the admin switch `mcp.enabled` and the per-token rate
-//!   limit, then hands the token to the handler through the request extensions.
+//! * **Auth**: `Authorization: Bearer fl_…` personal API tokens ([`crate::tokens`]) or OAuth
+//!   access tokens `flo_…` ([`crate::oauth`]); the [`gate`] middleware checks the token, the
+//!   admin switch `mcp.enabled` and the per-token rate limit, then hands the token to the
+//!   handler through the request extensions. Without a valid token it answers 401 with
+//!   `WWW-Authenticate: Bearer resource_metadata="…"` (MCP authorization discovery); an OAuth
+//!   token calling a tool outside its scopes gets 403 `insufficient_scope` (step-up).
 //! * **Tools** ([`tools`]): each declares a scope (`read`, `write`, `send`); `tools/list` shows
 //!   the tools the token may call and every call is checked again and written to the audit log
 //!   (Settings → Account → API tokens shows the last 50).
@@ -83,20 +86,58 @@ pub fn router(st: AppState) -> axum::Router<AppState> {
 }
 
 fn json_error(status: StatusCode, code: &str, message: &str) -> Response {
-    let mut r = (
+    (
         status,
         axum::Json(json!({"error": code, "message": message})),
     )
-        .into_response();
-    if status == StatusCode::UNAUTHORIZED {
-        r.headers_mut().insert(
-            header::WWW_AUTHENTICATE,
-            header::HeaderValue::from_static(
-                "Bearer realm=\"freeLib\", error=\"invalid_token\", error_description=\"create a token in Settings > Account > API tokens\"",
-            ),
+        .into_response()
+}
+
+/// 401 with the `WWW-Authenticate` challenge: with OAuth available, the Protected Resource
+/// Metadata URL and the scopes to ask for; `invalid_token` when a token was sent.
+fn unauthorized(st: &AppState, message: &str, token_sent: bool) -> Response {
+    let mut r = json_error(StatusCode::UNAUTHORIZED, "unauthorized", message);
+    let mut v = String::from("Bearer realm=\"freeLib\"");
+    if let Some(iss) = crate::oauth::issuer(st) {
+        v.push_str(&format!(
+            ", resource_metadata=\"{}\", scope=\"{}\"",
+            crate::oauth::resource_metadata_url(&iss),
+            tokens::SCOPES.join(" ")
+        ));
+    }
+    if token_sent {
+        v.push_str(
+            ", error=\"invalid_token\", error_description=\"invalid, revoked or expired token\"",
         );
     }
+    if let Ok(h) = header::HeaderValue::from_str(&v) {
+        r.headers_mut().insert(header::WWW_AUTHENTICATE, h);
+    }
     r
+}
+
+/// The scopes the tools called in a JSON-RPC body need (a message or a batch).
+fn needed_scopes(body: &[u8]) -> Vec<&'static str> {
+    let Ok(v) = serde_json::from_slice::<Value>(body) else {
+        return Vec::new();
+    };
+    let msgs = match &v {
+        Value::Array(a) => a.iter().collect(),
+        m => vec![m],
+    };
+    let mut out = Vec::new();
+    for m in msgs {
+        if m.get("method").and_then(Value::as_str) == Some("tools/call")
+            && let Some(s) = m
+                .pointer("/params/name")
+                .and_then(Value::as_str)
+                .and_then(tools::scope_of)
+            && !out.contains(&s)
+        {
+            out.push(s);
+        }
+    }
+    out
 }
 
 /// Checks `mcp.enabled`, the bearer token and its rate limit; stores the [`TokenAuth`] in the
@@ -116,24 +157,23 @@ pub async fn gate(State(st): State<AppState>, mut req: Request<Body>, next: Next
         );
     }
     let Some(secret) = tokens::bearer(req.headers()).map(str::to_string) else {
-        return json_error(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "an API token is required: Authorization: Bearer fl_…",
+        return unauthorized(
+            &st,
+            "sign in (OAuth) or send an API token: Authorization: Bearer fl_…",
+            false,
         );
     };
     let auth = match tokens::authenticate(&st, &secret).await {
         Ok(Some(a)) => a,
         Ok(None) => {
-            return json_error(
-                StatusCode::UNAUTHORIZED,
-                "unauthorized",
-                "invalid, revoked or expired API token",
-            );
+            return unauthorized(&st, "invalid, revoked or expired token", true);
         }
         Err(e) => return e.into_response(),
     };
-    if let Err(wait) = st.tokens.check_rate(auth.token.id, st.cfg.mcp_rate_per_min) {
+    if let Err(wait) = st
+        .tokens
+        .check_rate(auth.rate_key(), st.cfg.mcp_rate_per_min)
+    {
         let mut r = json_error(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -143,6 +183,28 @@ pub async fn gate(State(st): State<AppState>, mut req: Request<Body>, next: Next
             r.headers_mut().insert(header::RETRY_AFTER, v);
         }
         return r;
+    }
+    // OAuth clients get a step-up challenge for a tool outside the granted scopes
+    if auth.is_oauth() && req.method() == axum::http::Method::POST {
+        let (parts, body) = req.into_parts();
+        let bytes = match axum::body::to_bytes(body, crate::api::BODY_LIMIT).await {
+            Ok(b) => b,
+            Err(_) => {
+                return json_error(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "bad_request",
+                    "request body too large",
+                );
+            }
+        };
+        let missing: Vec<&str> = needed_scopes(&bytes)
+            .into_iter()
+            .filter(|s| !auth.has(s))
+            .collect();
+        if !missing.is_empty() {
+            return insufficient_scope(&st, &auth, &missing);
+        }
+        req = Request::from_parts(parts, Body::from(bytes));
     }
     req.extensions_mut().insert(auth);
     // HTTP/2 carries the host in the URI authority; the transport wants a Host header
@@ -155,6 +217,34 @@ pub async fn gate(State(st): State<AppState>, mut req: Request<Body>, next: Next
         req.headers_mut().insert(header::HOST, v);
     }
     next.run(req).await
+}
+
+/// 403 `insufficient_scope` naming every scope the client needs (granted + missing).
+fn insufficient_scope(st: &AppState, auth: &TokenAuth, missing: &[&str]) -> Response {
+    let all: Vec<&str> = tokens::SCOPES
+        .iter()
+        .copied()
+        .filter(|s| auth.has(s) || missing.contains(s))
+        .collect();
+    let mut r = json_error(
+        StatusCode::FORBIDDEN,
+        "insufficient_scope",
+        &format!("this app was not allowed '{}'", missing.join(" ")),
+    );
+    let mut v = format!(
+        "Bearer realm=\"freeLib\", error=\"insufficient_scope\", scope=\"{}\"",
+        all.join(" ")
+    );
+    if let Some(iss) = crate::oauth::issuer(st) {
+        v.push_str(&format!(
+            ", resource_metadata=\"{}\"",
+            crate::oauth::resource_metadata_url(&iss)
+        ));
+    }
+    if let Ok(h) = header::HeaderValue::from_str(&v) {
+        r.headers_mut().insert(header::WWW_AUTHENTICATE, h);
+    }
+    r
 }
 
 /// The MCP handler (one per request in stateless mode).
@@ -322,11 +412,11 @@ impl ServerHandler for FreeLibMcp {
             Some(_) => tools::call(&self.st, &auth, &name, args).await,
         };
         let ok = result.is_ok();
-        let (uid, tid, tool) = (auth.user.id, auth.token.id, name.clone());
+        let (uid, tid, gid, tool) = (auth.user.id, auth.token_id(), auth.grant_id(), name.clone());
         let _ = self
             .st
             .db
-            .run(move |c| db::add_audit(c, uid, Some(tid), &tool, ok, &detail))
+            .run(move |c| db::add_audit(c, uid, tid, gid, &tool, ok, &detail))
             .await;
         Ok(match result {
             Ok(v) => CallToolResult::structured(v).into(),

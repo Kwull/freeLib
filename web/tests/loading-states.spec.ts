@@ -46,7 +46,7 @@ for (const v of VIEWS) {
 
       test('rebuild after an update: progress, other library, continues by itself', async ({ page, context }) => {
         await scenario(context, 'rebuild', '&dur=7000');
-        await page.goto('/');
+        await page.goto('/l/1/authors');
         const card = page.getByTestId('library-importing');
         await expect(card).toBeVisible();
         await expect(card.getByRole('heading', { name: 'Rebuilding the catalog' })).toBeVisible();
@@ -128,7 +128,7 @@ test.describe('more states (desktop)', () => {
     // the server recovers
     await context.clearCookies();
     await card.getByRole('button', { name: 'Retry' }).click();
-    await expect(page.getByLabel('Filter authors')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'What to read next' })).toBeVisible();
   });
 
   test('reader without libraries gets a note', async ({ page, context }) => {

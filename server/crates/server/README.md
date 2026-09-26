@@ -43,6 +43,7 @@ Subcommands:
 |---|---|
 | `freelib-server` / `freelib-server serve` | run the server |
 | `freelib-server healthcheck` | `GET /api/v1/session` on `127.0.0.1:$FREELIB_PORT`; exit 0 on 200, else 1 (Docker `HEALTHCHECK`) |
+| `freelib-server forget-secrets` | remove the encrypted secrets (SMTP password) from `app.db`: the way out when the secret key is lost |
 | `freelib-server migrate-qt <freeLib.sqlite>` | import libraries, shelves (tags) and ratings from the Qt app into `app.db` for the first admin (user 0 in open mode); then re-import each library in the UI |
 
 ## Module layout (`src/`)
@@ -62,16 +63,21 @@ Subcommands:
 | `api/*.rs` | `/api/v1` handlers: `session`, `libraries` (+ `/fs`), `browse` (lists, genres, books, search, languages), `books` (detail, cover, file), `shelves` (+ rating), `devices` (+ `/send`, `/fonts`), `jobs` (+ SSE `/events`), `settings` (+ SMTP test, users, prefs), `oidc` (`/auth/oidc/*`, `/me/account`, `/me/password`, `/me/oidc`) |
 | `extrating/` | Open Library ratings: `openlibrary.rs` (HTTP trait, rate limiter with backoff, search + conservative title/surname matcher with transliteration, `ratings.json`), `mod.rs` (`ratings.db` cache, in-memory index + dense per-catalog arrays, priority queue, background worker, on-demand lookup) |
 | `tokens.rs` | personal API tokens: `fl_` secrets, SHA-256 storage, scopes, bearer authentication (60 s cache), per-token rate limit; `api/tokens.rs` = `/me/tokens` |
+| `secrets.rs` | encryption at rest of reversible secrets (XChaCha20-Poly1305, `enc:v1:<key id>:…`), key loading (`FREELIB_SECRET_KEY[_FILE]`, generated `secret.key`), start-up migration / rotation / wrong-key refusal |
+| `oauth/` | OAuth 2.1 authorization server for MCP clients: `mod.rs` (metadata documents, `/oauth/authorize`, `/token`, `/register`, `/revoke`, redirect URI policy, PKCE, resource binding, in-memory consents and codes, rate limits, cleanup), `cimd.rs` (Client ID Metadata Documents with SSRF guards), `store.rs` (`oauth_client` / `oauth_grant` / `oauth_token`); `api/oauth.rs` = consent page API and `/me/oauth/apps` |
 | `mcp/` | MCP server at `/mcp` (rmcp streamable HTTP, stateless): `mod.rs` (gate middleware, `ServerHandler`, prompts, instructions), `tools.rs` (17 tools with scopes and schemas), `suggest.rs` (candidate scoring) |
+| `find.rs`, `api/find.rs` | start page (`/home`: continue series, new from authors, picks), follows and dismissed series (`app.db` v6), editions endpoint, known covers (`CoverHints`) for the best copy |
 | `importer.rs` | import jobs: `freelib_import::import_inpx` in a blocking thread, progress → job/library events, catalog reload and warm-up |
-| `jobs.rs` | in-memory job list, cancel flags, produced files, SSE `Event`s with per-user visibility |
-| `sender.rs` | `/send` jobs: e-mail (one message per book, `pauseSeconds` between), folder export under `FREELIB_EXPORT_DIR/<target>`, download (single file or zip), `joinSeries` |
+| `jobs.rs` | job list (memory + write-through to `app.db` for send/export/download: resume queued jobs, interrupted ones become retryable), per-book `JobItem`s, cancel flags, produced files, SSE `Event`s with per-user visibility |
+| `sender.rs` | `/send` jobs: e-mail (convert all, then batch into mails by `maxAttachments`/`maxMailMb`, retries of temporary SMTP errors with backoff, per-book delivery state, Kindle approved-sender hint), whole series, folder export under `FREELIB_EXPORT_DIR/<target>`, download (single file or zip), `joinSeries`, resume/retry |
+| `presets.rs` | seeded default devices with tuned options (docs/web/DEVICES.md), upgrades of untouched seeded devices |
+| `handoff.rs` | "Send to my phone": `POST /api/v1/handoff`, public `/h/<token>` page, cover and file (15 min, 3 downloads, hashed tokens) |
 | `output.rs` | formats per book, conversion pipeline and cache `cache/out/<lib>/<bookhash>-<profilehash>.<ext>`, download file names |
 | `conv.rs` | `Converter` trait: the only place that calls `freelib-fb2conv` |
-| `calibre.rs` | `ebook-convert` detection (`--version`, ≥ 6.19 required) and subprocess in a private temp dir with timeout and cancellation |
+| `calibre.rs` | `ebook-convert` detection (`--version`, ≥ 6.19 required), metadata arguments (`--title`, `--series`, `--cover`, …), subprocess in a private temp dir with timeout and cancellation |
 | `bookio.rs` | original books as bounded streams: seek to `arch_offset` (validated against the file; raw deflate/stored), zip fallback with the importer's name rules, plain files; 256 MiB limit; rejects `..` in stored paths |
 | `preview.rs` | annotation/cover cache (`cache/info`, `cache/covers`), WebP thumbnails (240 px high, libwebp lossy q80) |
-| `mail.rs` | SMTP via lettre (rustls; `none` / `starttls` / `tls`) |
+| `mail.rs` | SMTP via lettre (rustls; `none` / `starttls` / `tls`), several attachments per mail, the server's reply, temporary/permanent error classification |
 | `opds.rs` | OPDS 1.2 feeds, OpenSearch, Basic auth gate, legacy `/opds_<lib>/…` 301 redirects |
 | `spa.rs` | embedded or on-disk web app; `/assets/*` immutable, other GETs → `index.html` |
 | `util.rs`, `compress.rs` | time, hashes, ETag/304, RFC 5987 `Content-Disposition`, path checks, Accept-Encoding, br/gzip |
@@ -150,7 +156,8 @@ Subcommands:
   * `/opds/:lib/new` lists books from the 30 days before the newest book date in the catalog.
   * Search accepts `q` or the Qt-style `search_string`.
 * **Jobs.**
-  * Jobs live in memory, so a restart forgets them.
+  * Send, export and download jobs are stored in `app.db`: queued ones resume after a restart, running ones become
+    failed and retryable (`POST /jobs/:id/retry`). Import jobs live in memory only.
   * Finished jobs and their files are removed after 24 h by a task that runs every 10 minutes.
     That task also removes leftovers in `cache/tmp` and `cache/jobs`.
   * At most 5 queued + running send/export/download jobs per user (429). Only finished jobs are
@@ -192,4 +199,9 @@ calls it through `tower::ServiceExt::oneshot`. The tests cover:
 * OPDS feeds, with well-formedness and OPDS rel/type checks, and the legacy redirects;
 * Calibre formats, using a fake `ebook-convert` shell script;
 * SMTP test and Send to Kindle, against an in-process fake SMTP server;
+* delivery (`tests/delivery.rs`): batched mails with per-book states and the Kindle hint, retry
+  classification against a scripted SMTP server (4xx retried, 5xx and rejected recipients not,
+  unreachable server retried), whole-series sends, job persistence across a restart (resume,
+  interrupted → retry), phone hand-off links (headers, reuse limit, tampering, expiry, rate
+  limit), device presets, Calibre metadata arguments (recording `ebook-convert`);
 * SPA serving.

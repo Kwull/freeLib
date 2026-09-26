@@ -1,4 +1,4 @@
-//! Embedded resources: fonts, CSS, hyphenation dictionaries and the cover background.
+//! Embedded resources: fonts, CSS and hyphenation dictionaries.
 //! Copied from the Qt app (`freeLib/src/xsl`) into `assets/` so the crate builds without the
 //! Qt tree (the Docker context excludes it). About 2 MB in total.
 
@@ -26,7 +26,6 @@ pub(crate) static PT_SERIF_ITALIC: &[u8] = include_bytes!("../assets/fonts/PTF56
 pub(crate) static PT_SERIF_BOLD: &[u8] = include_bytes!("../assets/fonts/PTF75F.ttf");
 pub(crate) static PT_SERIF_BOLD_ITALIC: &[u8] = include_bytes!("../assets/fonts/PTF76F.ttf");
 pub(crate) static SANGHA: &[u8] = include_bytes!("../assets/fonts/sangha.ttf");
-pub(crate) static COVER_BACKGROUND: &[u8] = include_bytes!("../assets/img/cover.jpg");
 pub(crate) static MAIN_CSS: &str = include_str!("../assets/css/main.css");
 
 static HYPH_SRC: &[(&str, &str)] = &[
@@ -151,8 +150,9 @@ impl Assets {
         })
     }
 
-    pub(crate) fn cover_background(&self) -> &'static [u8] {
-        COVER_BACKGROUND
+    /// Italic face for series lines on generated covers.
+    pub(crate) fn cover_italic(&self) -> &'static [u8] {
+        PT_SERIF_ITALIC
     }
 
     pub(crate) fn cover_font(&self, bold: bool) -> &'static [u8] {

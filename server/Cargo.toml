@@ -28,6 +28,22 @@ opt-level = 3
 [profile.dev.package.miniz_oxide]
 opt-level = 3
 
+# Cover drawing and JPEG encoding run in many tests.
+[profile.dev.package.jpeg-encoder]
+opt-level = 3
+
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.ab_glyph_rasterizer]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
 # RSA signature checks (single sign-on) and test key generation.
 [profile.dev.package.num-bigint-dig]
 opt-level = 3
