@@ -17,9 +17,13 @@ test('device order: arrows and drag and drop; the first device is the default ev
     await expect(page.getByRole('button', { name: 'Move Kindle (USB) up' })).toBeDisabled();
     // drag "Kobo" onto the first row
     const kobo = page.getByTestId('device-row').filter({ hasText: 'Kobo' }).locator('.handle');
+    const saved = page.waitForResponse(
+      async (r) => r.url().endsWith('/devices/order') && r.request().method() === 'PUT' && (await r.json().catch(() => []))[0]?.name === 'Kobo',
+    );
     await kobo.dragTo(page.getByTestId('device-row').first(), { targetPosition: { x: 20, y: 4 } });
     await expect.poll(async () => (await names(page))[0]).toBe('Kobo');
-    // persisted on the server
+    // persisted on the server (reload only once the new order is saved)
+    await saved;
     await page.reload();
     await expect.poll(async () => (await names(page))[0]).toBe('Kobo');
 
