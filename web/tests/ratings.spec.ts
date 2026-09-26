@@ -75,10 +75,12 @@ test('genre lists are filtered and sorted by rating on the server', async ({ pag
   await expect(page.locator('.scroll .brow').first()).toBeVisible({ timeout: 15000 });
   const req = page.waitForRequest((r) => r.url().includes('/books?') && r.url().includes('sort=ext'));
   await page.getByTestId('books-sort').selectOption('extRating');
-  await req;
+  await (await req).response();
   await page.getByRole('button', { name: 'Columns' }).click();
   await page.getByRole('menu').getByLabel('Open Library').check();
   await page.getByRole('button', { name: 'Columns' }).click();
+  // the sorted page and the new column render after the response: wait for the values
+  await expect.poll(() => page.locator('.scroll .brow .ext .avg').count(), { timeout: 10000 }).toBeGreaterThan(3);
   const avgs = (await page.locator('.scroll .brow .ext .avg').allTextContents()).map(Number);
   expect(avgs.length).toBeGreaterThan(3);
   for (let i = 1; i < avgs.length; i++) expect(avgs[i - 1]).toBeGreaterThanOrEqual(avgs[i]);
