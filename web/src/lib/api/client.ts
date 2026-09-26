@@ -3,6 +3,7 @@ import type {
   Library, Book, BookDetail, Genre, Shelf, Device, Job, Session, NameListResponse,
   BooksResponse, SearchResponse, Settings, User, ConvertOptions, AuthorSummary, CoauthorsResponse,
   Account, UserRow, RatingParams, TokensResponse, ApiToken, AuditRow, TokenScope,
+  EditionsResponse, FollowList, HomeResponse,
 } from './types';
 
 const BASE = '/api/v1';
@@ -115,9 +116,18 @@ export const api = {
   books: (lib: number, params: {
     author?: number; series?: number; genre?: number; shelf?: number; since?: string;
     lang?: string; ext?: string; deleted?: boolean; q?: string; cursor?: string; limit?: number;
+    group?: boolean;
   } & RatingParams, init?: RequestInit) => request<BooksResponse>(`/libraries/${lib}/books${qs({
     ...params, deleted: params.deleted ? 1 : undefined, unratedByMe: params.unratedByMe ? 1 : undefined,
+    group: params.group ? 1 : undefined,
   })}`, init),
+  editions: (lib: number, id: number) => request<EditionsResponse>(`/libraries/${lib}/books/${id}/editions`),
+  home: (lib: number, days?: number | null) => request<HomeResponse>(`/libraries/${lib}/home${qs({ days: days ?? undefined })}`),
+  dismissSeries: (lib: number, series: number, dismissed = true) =>
+    request<void>(`/libraries/${lib}/home/dismiss`, { method: 'POST', body: JSON.stringify({ series, dismissed }) }),
+  follows: (lib: number) => request<FollowList>(`/libraries/${lib}/follows`),
+  setFollow: (lib: number, kind: 'author' | 'series', id: number, follow: boolean) =>
+    request<FollowList>(`/libraries/${lib}/follows`, { method: 'PUT', body: JSON.stringify({ kind, id, follow }) }),
   authorSummary: (lib: number, id: number) => request<AuthorSummary>(`/libraries/${lib}/authors/${id}/summary`),
   coauthors: (lib: number, id: number) => request<CoauthorsResponse>(`/libraries/${lib}/authors/${id}/coauthors`),
   book: (lib: number, id: number) => request<BookDetail>(`/libraries/${lib}/books/${id}`),
@@ -127,8 +137,10 @@ export const api = {
     `${BASE}/libraries/${lib}/books/${id}/file${qs({ format, device: opts?.device, inline: opts?.inline ? 1 : undefined })}`,
   search: (lib: number, params: {
     q: string; kind?: 'all' | 'books' | 'authors' | 'series'; genre?: string; lang?: string;
-    ext?: string; from?: string; to?: string; limit?: number;
-  } & RatingParams) => request<SearchResponse>(`/libraries/${lib}/search${qs({ ...params, unratedByMe: params.unratedByMe ? 1 : undefined })}`),
+    ext?: string; from?: string; to?: string; limit?: number; group?: boolean;
+  } & RatingParams) => request<SearchResponse>(`/libraries/${lib}/search${qs({
+    ...params, unratedByMe: params.unratedByMe ? 1 : undefined, group: params.group ? 1 : undefined,
+  })}`),
   languages: (lib: number) => request<[string, number][]>(`/languages${qs({ lib })}`),
   setRating: (lib: number, id: number, rating: number) =>
     request<void>(`/libraries/${lib}/books/${id}/rating`, { method: 'PUT', body: JSON.stringify({ rating }) }),

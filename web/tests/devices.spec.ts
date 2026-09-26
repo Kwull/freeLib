@@ -24,7 +24,7 @@ test('device order: arrows and drag and drop; the first device is the default ev
     await expect.poll(async () => (await names(page))[0]).toBe('Kobo');
 
     // the details pane: plain verb by kind, device as a caption, other devices in the menu
-    await page.goto('/');
+    await page.goto('/l/1/authors');
     await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');
     await page.getByRole('button', { name: /Doyle Arthur Conan/ }).first().click();
     await page.getByText('The Hound of the Baskervilles').first().click();

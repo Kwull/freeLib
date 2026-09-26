@@ -6,7 +6,7 @@ test.describe('screenshots @ 1440x900', () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
   test('main (authors + books + details)', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/l/1/authors');
     await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');
     await page.getByRole('button', { name: /Doyle Arthur Conan/ }).first().click();
     await page.getByText('The Hound of the Baskervilles').first().click();
@@ -27,7 +27,7 @@ test.describe('screenshots @ 1440x900', () => {
   });
 
   test('send dialog', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/l/1/authors');
     await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');
     await page.getByRole('button', { name: /Doyle Arthur Conan/ }).first().click();
     await page.getByRole('checkbox', { name: 'Select The Hound of the Baskervilles' }).check();
@@ -47,13 +47,13 @@ test.describe('screenshots @ 390x844', () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
   test('phone authors list', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/l/1/authors');
     await page.waitForTimeout(400);
     await page.screenshot({ path: `${DIR}/phone-authors-390x844.png` });
   });
 
   test('phone books', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/l/1/authors');
     await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');
     await page.getByRole('button', { name: /Doyle Arthur Conan/ }).first().click();
     await page.waitForTimeout(400);
@@ -66,7 +66,7 @@ for (const scheme of ['light', 'dark'] as const) {
     test.use({ viewport: { width: 1440, height: 900 }, colorScheme: scheme });
 
     test('ratings columns, filters and details', async ({ page }) => {
-      await page.goto('/');
+      await page.goto('/l/1/authors');
       await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');
       await page.getByRole('button', { name: /Doyle Arthur Conan/ }).first().click();
       await page.getByRole('button', { name: 'Columns' }).click();
@@ -111,7 +111,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await expect(page.getByTestId('device-row').first()).toBeVisible();
       await page.waitForTimeout(200);
       await page.screenshot({ path: `${DIR}/devices-${scheme}-1440x900.png` });
-      await page.goto('/');
+      await page.goto('/l/1/authors');
       await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');
       await page.getByRole('button', { name: /Doyle Arthur Conan/ }).first().click();
       await page.getByText('The Hound of the Baskervilles').first().click();
@@ -127,4 +127,38 @@ for (const scheme of ['light', 'dark'] as const) {
       await page.screenshot({ path: `${DIR}/server-settings-${scheme}-1440x900.png` });
     });
   });
+}
+
+// Start page, search with a correction and editions (docs/web/screenshots/find-*.png)
+for (const scheme of ['light', 'dark'] as const) {
+  for (const [w, h] of [[1440, 900], [390, 844]] as const) {
+    const size = `${w}x${h}`;
+    test.describe(`find screenshots @ ${size} ${scheme}`, () => {
+      test.use({ viewport: { width: w, height: h }, colorScheme: scheme });
+
+      test('start page', async ({ page }) => {
+        await page.goto('/l/1/home');
+        await expect(page.getByTestId('home-continue')).toBeVisible();
+        await page.waitForTimeout(600);
+        await page.screenshot({ path: `${DIR}/find-home-${scheme}-${size}.png` });
+      });
+
+      test('search with did-you-mean', async ({ page }) => {
+        await page.goto('/l/1/search?q=азимв');
+        await expect(page.getByTestId('did-you-mean')).toBeVisible();
+        await page.waitForTimeout(400);
+        await page.screenshot({ path: `${DIR}/find-didyoumean-${scheme}-${size}.png` });
+      });
+
+      test('editions expanded', async ({ page }) => {
+        await page.goto('/l/1/search?q=piknik obochine');
+        const row = page.getByTestId('search-book').filter({ hasText: 'Пикник на обочине' });
+        await row.getByTestId('editions-toggle').click();
+        await expect(page.getByTestId('editions-list').getByRole('listitem')).toHaveCount(4);
+        if (w > 900) await row.locator('.title').click();
+        await page.waitForTimeout(500);
+        await page.screenshot({ path: `${DIR}/find-editions-${scheme}-${size}.png` });
+      });
+    });
+  }
 }

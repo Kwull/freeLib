@@ -123,6 +123,7 @@ pub struct Catalog {
     idle: Mutex<Vec<Connection>>,
     stats: LibraryStats,
     attrs: Mutex<Option<Arc<BookAttrs>>>,
+    vocab: Mutex<Option<Arc<crate::vocab::Vocab>>>,
     big_genre: i64,
 }
 
@@ -212,6 +213,7 @@ impl Catalog {
             idle: Mutex::new(vec![conn]),
             stats,
             attrs: Mutex::new(None),
+            vocab: Mutex::new(None),
             big_genre: BIG_GENRE_MIN_BOOKS,
         })
     }
@@ -582,6 +584,20 @@ impl Catalog {
     }
 }
 
+impl Catalog {
+    /// The typo-tolerance vocabulary; loaded on first use (warm it with the attributes).
+    pub fn vocab(&self) -> Result<Arc<crate::vocab::Vocab>> {
+        let mut guard = self.vocab.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(v) = guard.as_ref() {
+            return Ok(v.clone());
+        }
+        let conn = self.conn()?;
+        let v = Arc::new(crate::vocab::Vocab::load(&conn)?);
+        *guard = Some(v.clone());
+        Ok(v)
+    }
+}
+
 /// Load full `Book` rows for `ids` (in that order) with 3 queries: books, authors, genres.
 pub(crate) fn load_books(conn: &Connection, ids: &[i64]) -> Result<Vec<Book>> {
     if ids.is_empty() {
@@ -623,6 +639,7 @@ pub(crate) fn load_books(conn: &Connection, ids: &[i64]) -> Result<Vec<Book>> {
                     deleted: r.get::<_, i64>(10)? != 0,
                     lib_rating: r.get(11)?,
                     kids_age: None,
+                    editions: None,
                 },
             );
             let kw: String = r.get(12)?;

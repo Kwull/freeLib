@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('reader opens an EPUB and turns a page', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await expect(page.getByRole('heading', { name: 'Authors' })).toBeVisible({ timeout: 15000 });
 
   await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');

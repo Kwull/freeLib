@@ -60,6 +60,8 @@ pub struct Inner {
     pub ext: Arc<crate::extrating::ExtRatings>,
     /// MCP requests per API token (rate limiting).
     pub tokens: crate::tokens::Tokens,
+    /// Cover presence of books whose preview was extracted (best copy of a work).
+    pub covers: crate::find::CoverHints,
 }
 
 impl AppState {
@@ -93,6 +95,7 @@ impl AppState {
             oidc: oidc.map(Arc::new),
             ext,
             tokens: crate::tokens::Tokens::default(),
+            covers: crate::find::CoverHints::default(),
         }))
     }
 

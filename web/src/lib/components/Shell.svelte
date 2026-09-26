@@ -59,7 +59,7 @@
               <button
                 type="button"
                 role="menuitem"
-                onclick={() => { setCurrentLibrary(l.id); libMenuOpen = false; navigate(`/l/${l.id}/authors`); }}
+                onclick={() => { setCurrentLibrary(l.id); libMenuOpen = false; navigate(`/l/${l.id}/home`); }}
               ><span class="dot {statusClass(l)}"></span>{l.name}</button>
             {/each}
           </div>
@@ -112,6 +112,9 @@
   <div class="body">
     {#if lib}
       <nav aria-label="Main" class="sidenav" style:--w="{navWidth}px">
+        <a class="nav" href="/l/{lib.id}/home" data-link aria-current={isActive('start') ? 'page' : undefined} class:active={isActive('start')}>
+          <Icon name="home" size={18} /><span class="label">{t('nav.home')}</span>
+        </a>
         <a class="nav" href="/l/{lib.id}/new" data-link aria-current={isActive('new') ? 'page' : undefined} class:active={isActive('new')}>
           <Icon name="newArrivals" size={18} /><span class="label">{t('nav.newArrivals')}</span>
           {#if lib.newSinceLastVisit > 0}<span class="count">{lib.newSinceLastVisit}</span>{/if}

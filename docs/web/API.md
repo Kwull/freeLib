@@ -55,7 +55,10 @@ type Book = {
   libRating: number;               // library rating: INPX LIBRATE/STARS, 0..5 (0 = none)
   extRating: { avg: number; votes: number } | null;  // Open Library average + votes (cached; null = unknown or no votes)
   kidsAge: 0 | 6 | 12 | 16 | 18 | null;  // age estimate (heuristic from genres and keywords, see ARCHITECTURE.md); null = unknown
+  editions?: { count: number; ids: number[] };  // only on grouped rows (`group=1`) standing for ≥ 2 editions of one work:
+                                   // this book is the best copy; ids = the editions in the list, best first
 };
+type Edition = Book & { note: string | null };  // what sets it apart: title notes ("другой перевод", "пер. …") / translation keywords
 type BookDetail = Book & {
   annotation: string | null;       // sanitized HTML: <p>, <em>, <strong>, <br> only
   hasCover: boolean;
@@ -169,11 +172,12 @@ passwords: a user created by single sign-on sets a password in Settings → Acco
 | `GET /libraries/:lib/authors/:id/summary` | – | `AuthorSummary` (below); 404 for an unknown author |
 | `GET /libraries/:lib/authors/:id/coauthors` | – | `{ columns: ["id","name","books","direct"], rows: [[id, name, books, direct], …] }`: everybody sharing a live book with the author, ranked like `AuthorSummary.coauthors` (not filtered); 404 for an unknown author |
 | `GET /libraries/:lib/genres` | `v?`, `lang=en\|ru\|uk` (default `en`) | `Genre[]` (all 322 genres, with counts for this library; zero-count leaves included). `name` is localized to `lang`; the ETag includes `lang`, so switching the SPA's language triggers a refetch |
-| `GET /libraries/:lib/books` | exactly one of `author`, `series`, `genre`, `shelf`, `since` (YYYY-MM-DD) plus optional `lang`, `ext`, `deleted=1`, `q` (text filter: every word is a prefix of a word of the title, authors, series or keywords, like search), `cursor`, `limit` (default 2000, max 5000) | `{ books: Book[], nextCursor: string \| null, total: number }`. Order: author → series name, serno, title; series → serno, title; genre/shelf/since → date desc, title |
+| `GET /libraries/:lib/books` | exactly one of `author`, `series`, `genre`, `shelf`, `since` (YYYY-MM-DD) plus optional `lang`, `ext`, `deleted=1`, `q` (text filter: every word is a prefix of a word of the title, authors, series or keywords, like search), `group=1` (one row per work, see "Editions"), `cursor`, `limit` (default 2000, max 5000) | `{ books: Book[], nextCursor: string \| null, total: number }`. Order: author → series name, serno, title; series → serno, title; genre/shelf/since → date desc, title. With `group=1` `total` counts rows (works) and pages are cut by offset from the grouped list |
+| `GET /libraries/:lib/books/:id/editions` | – | `{ best: number, books: Edition[] }`: every live edition of the book's work (the book itself even when deleted), best copy first; 404 for an unknown book |
 | `GET /libraries/:lib/books/:id` | – | `BookDetail` (first call may take up to ~150 ms, then cached) |
 | `GET /libraries/:lib/books/:id/cover` | `size=thumb\|full` | image (`image/webp` or original jpeg/png); `full` is 404 when the book has no cover. `thumb` = 240 px high; when the book has no cover, a generated SVG placeholder tile (background colour from the title, author + title text, like the SPA's own placeholder) is returned instead of 404, with header `X-Cover: generated` |
 | `GET /libraries/:lib/books/:id/file` | `format` (default `original`), `device?` (device id → its options & file name) , `inline=1` for the web reader | the file with `Content-Disposition: attachment`; `inline=1` is honoured for EPUB only. HTML, XHTML, XML, FB2 and SVG files are sent as `application/octet-stream`. Originals are streamed (no `Content-Length` for deflated zip entries); books above 256 MiB → 413. 501 `unsupported_format` if the format needs Calibre and it is missing, or the book is neither FB2 nor EPUB (other formats are offered as `original` only) |
-| `GET /libraries/:lib/search` | `q` (≥ 2 chars), `kind=all\|books\|authors\|series`, `genre` (comma ids), `lang` (comma), `ext`, `from`, `to` (YYYY-MM-DD), `limit` (books, default 200, max 1000) | `{ tookMs, authors: [{id,name,count}] (≤ 20), series: [{id,name,count,authors: string}] (≤ 20), books: Book[], total: number, facets: { genre: [[id,count]], lang: [[code,count]], ext: [[ext,count]] } }`. `q` is prefix-matched per word (FTS5 `word*`); authors/series match on `sort_key` prefix of any word |
+| `GET /libraries/:lib/search` | `q` (≥ 2 chars), `kind=all\|books\|authors\|series`, `genre` (comma ids), `lang` (comma), `ext`, `from`, `to` (YYYY-MM-DD), `limit` (books, default 200, max 1000), `group=1` (one row per work) | `{ tookMs, authors: [{id,name,count}] (≤ 20), series: [{id,name,count,authors: string}] (≤ 20), books: Book[], total: number, facets: { genre: [[id,count]], lang: [[code,count]], ext: [[ext,count]] }, corrected: string \| null, didYouMean: string \| null, highlight: string[] }`. Every word matches as a prefix of a word, as another form of the same word (Snowball stem: `книгу` → `Книга`, `книги`), or as a transliteration (`strugatsky` / `strugackie` → `Стругацкий`, `лем` → `Lem`); `ё` = `е`. Ranking: title starts with the query / contains it as a phrase (authors, series: the name starts with it) > every word as a prefix > word forms / transliterations; then bm25 (authors/series: more books first). When the query finds fewer than 3 matches, unknown words are corrected by edit distance (≤ 1 for 4–7 letters, ≤ 2 from 8) against the author/series/title vocabulary: with no match at all the corrected query is searched instead (`corrected` = the query used), otherwise it is offered as `didYouMean`. `highlight` = normalized words of the returned titles and names that matched (whole words, for `<mark>`). With `group=1` `total` counts works |
 | `GET /languages` | `lib` | `[[code, count]]` for that library |
 | `PUT /libraries/:lib/books/:id/rating` | `{rating: 0..5}` | 204 |
 
@@ -194,6 +198,49 @@ selections from the per-book attribute table, author/series/shelf ids from one q
 genre / `since` lists are ordered date desc, id (instead of date desc, title) before a rating sort. `total` counts the
 filtered books; search facets count the books left after the rating filters. Books of an author or series listed
 on a first page are queued for an Open Library lookup (priority 2).
+
+### Start page and follows
+
+User data is stored per library by the author's / series' normalized name, so it survives re-imports.
+
+| Method & path | Body / query | Response |
+|---|---|---|
+| `GET /libraries/:lib/home` | `days=1..3650` (the "new" window; absent or `visit` = since the previous visit, 30 days when there was none) | `HomeResponse` (below) |
+| `POST /libraries/:lib/home/dismiss` | `{series: id, dismissed?: boolean /*default true*/}` | 204: hides (or shows again) a series in "Continue series"; 404 for an unknown series |
+| `GET /libraries/:lib/follows` | – | `{ authors: {id,name,count}[], series: {id,name,count}[] }` |
+| `PUT /libraries/:lib/follows` | `{kind: "author" \| "series", id, follow: boolean}` | the follows as above; 400 for another kind, 404 for an unknown id |
+
+```ts
+type HomeResponse = {
+  empty: boolean;                  // no history, ratings, shelves or follows in this library yet
+  continueSeries: {                // series with a book sent / downloaded / read / rated, latest activity first (≤ 24)
+    series: { id; name; count; authors: string };
+    works: number; done: number;   // works (editions grouped) in the series / done by the user
+    lastAt: string;                // latest activity (RFC 3339)
+    next: Book[];                  // ≤ 2 works after the last one done that the user has not done, best copies
+  }[];                             // finished and dismissed series are left out; in a publisher series (> 3 first
+                                   // authors) only books sharing an author with the user's books count
+  newFromAuthors: {
+    since: string; days: number | null; total: number;
+    books: (Book & { reason: { kind: "author" | "series"; id; name; followed: boolean } })[];  // ≤ 60, newest first
+  };                               // live books dated ≥ since by followed authors, in followed series, or by authors of
+                                   // books the user sent/downloaded/read, rated ≥ 4 or shelved (anthologies ≥ 4 authors
+                                   // and "Автор неизвестен" do not count), without works the user already has; grouped
+  picks: Book[];                   // empty state (or both lists empty): best library-rated works of the 30 days before
+                                   // the newest book, ≤ 12
+  following: { authors: number; series: number };
+};
+```
+
+### Editions
+
+The importer gives every book a work: same language, same title without trailing edition notes (`(другой перевод)`,
+`[иллюстрации]`, `(СИ)`, `(пер. …)`, `(ред. …)`; other bracketed text such as `(Часть 2)` or `(сборник)` is kept),
+same set of authors. Books by "Автор неизвестен" and generic titles ("Избранное", "Рассказы", "Стихотворения", …) are
+never grouped. A grouped list shows each work once, at the position of its first edition in the list, as its **best
+copy**: not deleted > has a cover (as far as the server knows — covers are known for books whose preview was
+extracted since the server started) > FB2 > EPUB > other > larger file (20 % steps, capped at 30 MB) > newer date >
+higher library rating > lower id. Sending or downloading a grouped row uses that id; any edition can be picked instead.
 
 ## Shelves
 
@@ -261,7 +308,7 @@ allow; every `tools/call` is checked again (a refused call is a tool error namin
 | Tool | Scope | Arguments (all ids are per library; `library` optional, default library otherwise) |
 |---|---|---|
 | `list_libraries` | read | – |
-| `search_books` | read | `query`, `author`/`author_id`, `series`/`series_id`, `genre`/`genre_id`, `language`, `added_after`, `added_before`, `min_my_rating`, `min_library_rating`, `min_openlibrary_rating`, `min_openlibrary_votes`, `unrated_by_me`, `kids_max_age`, `sort` (`relevance`\|`date`\|`my_rating`\|`library_rating`\|`openlibrary_rating`), `limit` ≤ 50, `cursor` |
+| `search_books` | read | `query`, `author`/`author_id`, `series`/`series_id`, `genre`/`genre_id`, `language`, `added_after`, `added_before`, `min_my_rating`, `min_library_rating`, `min_openlibrary_rating`, `min_openlibrary_votes`, `unrated_by_me`, `kids_max_age`, `sort` (`relevance`\|`date`\|`my_rating`\|`library_rating`\|`openlibrary_rating`), `limit` ≤ 50, `cursor` → one result per work (`editions`, `otherEditionIds`), `corrected` when a typo was fixed; the query matches like `GET search` |
 | `get_book` | read | `id` → authors, series + number, genres, language, added, size, format, formats, annotation (plain text ≤ 4000 chars), keywords, my / library / Open Library rating, kids age, my shelves, `myHistory {lastSent, lastDownloaded, lastRead}` |
 | `get_author` | read | `id` or `name` → counts, series, genres, languages, years, co-authors, best-rated books |
 | `list_author_books` | read | `author_id`, `sort`, `limit` ≤ 100, `cursor` |
@@ -296,5 +343,5 @@ Basic auth when `opds.requireAuth` (same users and the same login rate limits). 
 ## Web app
 
 `GET /` and any non-`/api`, non-`/opds` path → SPA `index.html` (history routing). Static assets under `/assets/*` with long cache.
-SPA routes: `/`, `/l/:lib/new`, `/l/:lib/authors[/:id][?book=:id]`, `/l/:lib/series[/:id][?book=:id]`, `/l/:lib/genres[/:id]`, `/l/:lib/shelves/:id`,
+SPA routes: `/` (→ the current library's start page), `/l/:lib[/home]` (start page), `/l/:lib/new`, `/l/:lib/authors[/:id][?book=:id]`, `/l/:lib/series[/:id][?book=:id]`, `/l/:lib/genres[/:id]`, `/l/:lib/shelves/:id`,
 `/l/:lib/search?q=…`, `/l/:lib/book/:id` (phone), `/l/:lib/read/:id`, `/libraries`, `/settings[/:section]`, `/login`.

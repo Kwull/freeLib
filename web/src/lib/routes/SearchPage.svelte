@@ -8,7 +8,8 @@
   import SendDialog from '../components/SendDialog.svelte';
   import ShelfDialog from '../components/ShelfDialog.svelte';
   import DetailsPane from '../components/DetailsPane.svelte';
-  import { normalize } from '../utils/normalize';
+  import Hl from '../components/Hl.svelte';
+  import EditionsList from '../components/EditionsList.svelte';
   import { formatDate } from '../utils/format';
   import RatingFilters from '../components/RatingFilters.svelte';
   import ExtRating from '../components/ExtRating.svelte';
@@ -33,7 +34,8 @@
   let allGenres = $state(false);
   let facetsOpen = $state(false);
   let selectedBookId = $state<number | null>(null);
-  let expanded = $state<Set<string>>(new Set());
+  let expanded = $state<Set<number>>(new Set());
+  const groupEditions = $derived(getPref<boolean>('groupEditions', true));
   let ratingFilters = $state<RatingFiltersT>(emptyRatingFilters());
   type SearchSort = 'relevance' | RatingSortKey;
   const sortKey = $derived(getPref<SearchSort>('sort.search', 'relevance'));
@@ -55,6 +57,7 @@
       genre: [...genreFilter].join(',') || undefined,
       lang: [...langFilter].join(',') || undefined,
       ext: [...extFilter].join(',') || undefined,
+      group: groupEditions,
       ...ratingParams(ratingFilters, sortKey === 'relevance' ? null : sortKey),
     }).then((r) => { if (!cancelled) result = r; })
       .catch((e) => { if (!cancelled) error = errorText(e); })
@@ -76,56 +79,30 @@
   }
   const filterCount = $derived(genreFilter.size + langFilter.size + extFilter.size + ratingFilterCount(ratingFilters));
 
-  function highlight(title: string): { pre: string; hit: string; post: string } | null {
-    const words = normalize(q).split(' ').filter(Boolean).sort((a, b) => b.length - a.length);
-    const norm = normalize(title);
-    // only when normalization kept the length (index positions then match the title)
-    if (norm.length !== title.length) return null;
-    for (const w of words) {
-      const idx = norm.indexOf(w);
-      if (idx >= 0) return { pre: title.slice(0, idx), hit: title.slice(idx, idx + w.length), post: title.slice(idx + w.length) };
-    }
-    return null;
-  }
+  // words to highlight: the server says which words of the shown names matched (by prefix,
+  // word form, transliteration or a typo fix)
+  const hl = $derived(new Set(result?.highlight ?? []));
+  const searchFor = (text: string) => `/l/${lib}/search?q=${encodeURIComponent(text)}`;
 
-  // Flibusta has many editions of the same book (same title and authors): show one row per
-  // work, with the other editions behind a toggle.
-  type Work = { key: string; first: Book; others: Book[] };
-  const works = $derived.by<Work[]>(() => {
-    if (!result) return [];
-    const map = new Map<string, Work>();
-    const out: Work[] = [];
-    for (const b of result.books) {
-      const key = `${normalize(b.title)}|${b.authors.map((a) => a.id).join(',')}`;
-      const w = map.get(key);
-      if (w) w.others.push(b);
-      else { const nw = { key, first: b, others: [] }; map.set(key, nw); out.push(nw); }
-    }
-    return out;
-  });
-
-  function pick(b: Book) {
-    if (window.innerWidth < 900) navigate(`/l/${lib}/book/${b.id}`);
-    else selectedBookId = b.id;
+  function pick(b: Book) { pickId(b.id); }
+  function pickId(id: number) {
+    if (window.innerWidth < 900) navigate(`/l/${lib}/book/${id}`);
+    else selectedBookId = id;
   }
+  const selectedId = $derived(selectedBookId);
   const authorsLine = (b: Book) =>
     b.authors.length > 3 ? `${b.authors.slice(0, 2).map((a) => a.name).join(', ')} ${t('books.andMore', { count: b.authors.length - 2 })}` : b.authors.map((a) => a.name).join(', ');
   const genreLine = (b: Book) => b.genres.map((g) => genresById.get(g)).filter(Boolean)[0] ?? '';
   const facetGenres = $derived(result ? (allGenres ? result.facets.genre : result.facets.genre.slice(0, 8)) : []);
 </script>
 
-{#snippet bookRow(b: Book, w: Work | null, edition: boolean)}
-  <div class="res-row" class:edition class:selected={b.id === selectedBookId}>
-    {#if !edition}<CoverThumb {lib} bookId={b.id} title={b.title} />{:else}<span></span>{/if}
+{#snippet bookRow(b: Book)}
+  <div class="res-row" class:selected={b.id === selectedBookId} data-testid="search-book">
+    <CoverThumb {lib} bookId={b.id} title={b.title} />
     <div class="info">
-      <a href="/l/{lib}/book/{b.id}" class="title" onclick={(e) => { e.preventDefault(); pick(b); }}>
-        {#if !edition && highlight(b.title)}
-          {@const h = highlight(b.title)}
-          {h!.pre}<mark>{h!.hit}</mark>{h!.post}
-        {:else}{b.title}{/if}
-      </a>
-      {#if !edition}<span class="muted ellipsis">{authorsLine(b)}{#if b.series}{` · ${b.series.name}${b.serno ? ` #${b.serno}` : ''}`}{/if}</span>{/if}
-      {#if !edition && (b.libRating || b.extRating || b.rating || (b.kidsAge !== null && b.kidsAge !== undefined))}
+      <a href="/l/{lib}/book/{b.id}" class="title" onclick={(e) => { e.preventDefault(); pick(b); }}><Hl text={b.title} words={hl} /></a>
+      <span class="muted ellipsis"><Hl text={authorsLine(b)} words={hl} />{#if b.series}{' · '}<Hl text={`${b.series.name}${b.serno ? ` #${b.serno}` : ''}`} words={hl} />{/if}</span>
+      {#if b.libRating || b.extRating || b.rating || (b.kidsAge !== null && b.kidsAge !== undefined)}
         <span class="rates">
           {#if b.rating}<span class="my" title={t('ratings.myTooltip')}>★ {b.rating}</span>{/if}
           {#if b.libRating}<span class="lib" title={t('ratings.libTooltip', { n: b.libRating })}>{t('ratings.libShort')} {b.libRating}/5</span>{/if}
@@ -133,14 +110,13 @@
           <KidsBadge age={b.kidsAge} />
         </span>
       {/if}
-      {#if edition}<span class="muted ellipsis">{b.series ? `${b.series.name}${b.serno ? ` #${b.serno}` : ''} · ` : ''}{b.ext.toUpperCase()} · {b.lang}</span>{/if}
-      {#if w && w.others.length}
-        <button type="button" class="editions" aria-expanded={expanded.has(w.key)} onclick={() => (expanded = toggleSet(expanded, w.key))}>
-          {expanded.has(w.key) ? t('search.hideEditions') : tn('search.moreEditions', w.others.length)}
+      {#if b.editions}
+        <button type="button" class="editions" data-testid="editions-toggle" aria-expanded={expanded.has(b.id)} onclick={() => (expanded = toggleSet(expanded, b.id))}>
+          {expanded.has(b.id) ? t('search.hideEditions') : tn('editions.countBest', b.editions.count)}
         </button>
       {/if}
     </div>
-    <span class="muted genre">{edition ? '' : genreLine(b)}</span>
+    <span class="muted genre">{genreLine(b)}</span>
     <span class="muted date-col">{formatDate(b.date, i18nState.lang)}</span>
     <button type="button" class="send-btn" aria-label={t('selection.sendTo')} onclick={() => (send = { ids: [b.id] })}><Icon name="send" size={14} /><span>{t('selection.sendTo')}</span></button>
   </div>
@@ -213,7 +189,7 @@
       <div class="empty"><p>{t('common.loading')}</p></div>
     {:else}
       <div class="summary" class:stale={loading}>
-        <span><b>{result.total}</b> {tn('search.resultsCount', result.total)} «{q}»</span>
+        <span><b>{result.total}</b> {tn('search.resultsCount', result.total)} «{result.corrected ?? q}»</span>
         <label class="sort-sel">
           <span class="visually-hidden">{t('books.sort')}</span>
           <select data-testid="search-sort" value={sortKey} aria-label={t('books.sort')} onchange={(e) => setPref('sort.search', (e.currentTarget as HTMLSelectElement).value)}>
@@ -235,6 +211,16 @@
         {#if filterCount > 1}<button type="button" class="link-btn" onclick={clearFilters}>{t('books.resetFilters')}</button>{/if}
       </div>
 
+      {#if result.corrected}
+        <p class="dym" data-testid="search-corrected">
+          {t('search.correctedTo')} <b>{result.corrected}</b>. {t('search.noneFor')} «{q}».
+        </p>
+      {:else if result.didYouMean}
+        <p class="dym" data-testid="did-you-mean">
+          {t('search.didYouMean')} <a href={searchFor(result.didYouMean)} data-link>{result.didYouMean}</a>?
+        </p>
+      {/if}
+
       {#if !result.authors.length && !result.series.length && !result.books.length}
         <div class="empty">
           <p class="big">{t('search.noResults')}</p>
@@ -249,7 +235,7 @@
           <div class="series-grid">
             {#each result.authors as a (a.id)}
               <a href="/l/{lib}/authors/{a.id}" data-link class="series-card">
-                <span class="name">{a.name}</span>
+                <span class="name"><Hl text={a.name} words={hl} /></span>
                 <span class="muted">{tn('browse.booksCount', a.count)}</span>
               </a>
             {/each}
@@ -263,7 +249,7 @@
           <div class="series-grid">
             {#each result.series as s (s.id)}
               <a href="/l/{lib}/series/{s.id}" data-link class="series-card">
-                <span class="name">{s.name}</span>
+                <span class="name"><Hl text={s.name} words={hl} /></span>
                 <span class="muted ellipsis">{tn('browse.booksCount', s.count)}{s.authors ? ` · ${s.authors}` : ''}</span>
               </a>
             {/each}
@@ -271,13 +257,15 @@
         </section>
       {/if}
 
-      {#if works.length}
+      {#if result.books.length}
         <section aria-labelledby="h-books" class="books-section">
-          <h2 id="h-books">{t('search.books')}{#if result.total > result.books.length}<span class="cap">{t('search.firstN', { count: result.books.length })}</span>{/if}</h2>
-          {#each works as w (w.key)}
-            {@render bookRow(w.first, w, false)}
-            {#if expanded.has(w.key)}
-              {#each w.others as b (b.id)}{@render bookRow(b, null, true)}{/each}
+          <h2 id="h-books">{t('search.books')}{#if result.total > result.books.length}<span class="cap">{t('search.firstN', { count: result.books.length })}</span>{/if}
+            <label class="group-toggle"><input type="checkbox" data-testid="group-editions" checked={groupEditions} onchange={() => setPref('groupEditions', !groupEditions)} />{t('editions.group')}</label>
+          </h2>
+          {#each result.books as b (b.id)}
+            {@render bookRow(b)}
+            {#if expanded.has(b.id)}
+              <EditionsList {lib} bookId={b.id} {selectedId} onPick={(id) => pickId(id)} onSend={(ids) => (send = { ids })} />
             {/if}
           {/each}
         </section>
@@ -328,17 +316,18 @@
   .books-section h2 { margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
   .res-row { display: grid; grid-template-columns: 44px minmax(0,1fr) minmax(0, 150px) 90px auto; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line-soft); }
   .res-row.selected { background: var(--accent-soft); }
-  .res-row.edition { padding-top: 6px; padding-bottom: 6px; background: var(--surface-alt); }
-  .res-row.edition .title { font-size: 14px; font-weight: 400; font-family: var(--font-body); }
   .res-row:last-child { border-bottom: none; }
   .info { display: flex; flex-direction: column; gap: 3px; min-width: 0; align-items: flex-start; }
   .info > * { max-width: 100%; }
   .title { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .title:hover { color: var(--accent); }
   .editions { all: unset; font-size: 12px; color: var(--accent); cursor: pointer; }
+  .dym { margin: 0; font-size: 15px; color: var(--ink); }
+  .dym a { font-weight: 600; }
+  .group-toggle { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-weight: 400; letter-spacing: 0; font-size: 12px; color: var(--muted-2); text-transform: none; }
+  .group-toggle input { accent-color: var(--accent); }
   .editions:hover { text-decoration: underline; }
   .editions:focus-visible { outline: 2px solid var(--focus); }
-  mark { background: rgba(184,116,26,.25); color: inherit; border-radius: 2px; }
   .genre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .date-col { font-variant-numeric: tabular-nums; }
   .send-btn { justify-self: end; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 13px; white-space: nowrap; flex-shrink: 0; }

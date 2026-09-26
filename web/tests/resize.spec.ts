@@ -13,7 +13,7 @@ async function drag(page: import('@playwright/test').Page, handle: import('@play
 }
 
 test('panes and columns resize by drag and keyboard, and the widths persist', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/l/1/authors');
   await page.getByLabel('Filter authors').fill('Doyle Arthur Conan');
   await page.getByRole('button', { name: /Doyle Arthur Conan/ }).first().click();
   await page.getByText('The Hound of the Baskervilles').first().click();

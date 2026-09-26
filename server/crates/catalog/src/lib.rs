@@ -6,6 +6,7 @@
 
 pub mod catalog;
 pub mod genres;
+pub mod home;
 pub mod kids;
 pub mod model;
 pub mod normalize;
@@ -13,7 +14,10 @@ pub mod rank;
 pub mod schema;
 pub mod search;
 pub mod summary;
+pub mod text;
 pub mod util;
+pub mod vocab;
+pub mod works;
 
 pub use catalog::{
     BookFilter, BookSelector, Catalog, CatalogError, CatalogHandle, Page, PooledConn,
@@ -29,3 +33,4 @@ pub use schema::{
 };
 pub use search::{BookAttrs, SearchKind, SearchQuery};
 pub use summary::{ANTHOLOGY_MIN_AUTHORS, AuthorSummary, Coauthor, SeriesCount};
+pub use works::{Edition, Group, edition_cmp};

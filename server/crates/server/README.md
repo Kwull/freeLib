@@ -63,6 +63,7 @@ Subcommands:
 | `extrating/` | Open Library ratings: `openlibrary.rs` (HTTP trait, rate limiter with backoff, search + conservative title/surname matcher with transliteration, `ratings.json`), `mod.rs` (`ratings.db` cache, in-memory index + dense per-catalog arrays, priority queue, background worker, on-demand lookup) |
 | `tokens.rs` | personal API tokens: `fl_` secrets, SHA-256 storage, scopes, bearer authentication (60 s cache), per-token rate limit; `api/tokens.rs` = `/me/tokens` |
 | `mcp/` | MCP server at `/mcp` (rmcp streamable HTTP, stateless): `mod.rs` (gate middleware, `ServerHandler`, prompts, instructions), `tools.rs` (17 tools with scopes and schemas), `suggest.rs` (candidate scoring) |
+| `find.rs`, `api/find.rs` | start page (`/home`: continue series, new from authors, picks), follows and dismissed series (`app.db` v6), editions endpoint, known covers (`CoverHints`) for the best copy |
 | `importer.rs` | import jobs: `freelib_import::import_inpx` in a blocking thread, progress → job/library events, catalog reload and warm-up |
 | `jobs.rs` | in-memory job list, cancel flags, produced files, SSE `Event`s with per-user visibility |
 | `sender.rs` | `/send` jobs: e-mail (one message per book, `pauseSeconds` between), folder export under `FREELIB_EXPORT_DIR/<target>`, download (single file or zip), `joinSeries` |

@@ -6,7 +6,9 @@ use rusqlite::Connection;
 /// (the server then triggers a re-import).
 ///
 /// 2: sort keys fold accented Latin letters (`Čapek` sorts and indexes under `C`).
-pub const CATALOG_SCHEMA_VERSION: i64 = 2;
+/// 3: stems and Latin keys in the FTS tables, `vocab` (typo tolerance), `book.work_id`
+///    (editions of one work).
+pub const CATALOG_SCHEMA_VERSION: i64 = 3;
 
 /// Catalog tables. Created on an empty database by the importer *before* the bulk load;
 /// indexes ([`CATALOG_INDEXES`]) are created afterwards.
@@ -44,16 +46,18 @@ CREATE TABLE book (
   stars INTEGER NOT NULL DEFAULT 0,
   keywords TEXT NOT NULL DEFAULT '',
   arch_offset INTEGER,
-  arch_csize INTEGER, arch_method INTEGER
+  arch_csize INTEGER, arch_method INTEGER,
+  work_id INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE book_author (book_id INTEGER NOT NULL, author_id INTEGER NOT NULL, pos INTEGER NOT NULL, PRIMARY KEY (author_id, book_id)) WITHOUT ROWID;
 CREATE TABLE book_genre  (book_id INTEGER NOT NULL, genre_id INTEGER NOT NULL, PRIMARY KEY (genre_id, book_id)) WITHOUT ROWID;
 CREATE TABLE genre_count (genre_id INTEGER PRIMARY KEY, count INTEGER NOT NULL);
 CREATE TABLE lang_count (lang TEXT PRIMARY KEY, count INTEGER NOT NULL) WITHOUT ROWID;
 CREATE TABLE letter_index (kind TEXT NOT NULL, letter TEXT NOT NULL, count INTEGER NOT NULL, first_pos INTEGER NOT NULL, PRIMARY KEY (kind, letter)) WITHOUT ROWID;
-CREATE VIRTUAL TABLE book_fts USING fts5(title, authors, series, keywords, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2', prefix='2 3');
-CREATE VIRTUAL TABLE author_fts USING fts5(name, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
-CREATE VIRTUAL TABLE series_fts USING fts5(name, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE book_fts USING fts5(title, authors, series, keywords, stems, latin, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2', prefix='2 3');
+CREATE VIRTUAL TABLE author_fts USING fts5(name, stems, latin, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE series_fts USING fts5(name, stems, latin, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+CREATE TABLE vocab (word TEXT PRIMARY KEY, freq INTEGER NOT NULL) WITHOUT ROWID;
 "#;
 
 /// Indexes built after the bulk load.
@@ -66,6 +70,7 @@ CREATE INDEX book_date ON book(date);
 CREATE INDEX book_lang ON book(lang);
 CREATE INDEX book_ba_rev ON book_author(book_id, pos);
 CREATE INDEX book_bg_rev ON book_genre(book_id);
+CREATE INDEX book_work ON book(work_id);
 "#;
 
 /// Create all catalog tables on an empty connection.
@@ -127,6 +132,12 @@ CREATE INDEX book_history_key ON book_history(user_id, library_id, book_key);
     // default device
     r#"
 CREATE TABLE device_order (user_id INTEGER NOT NULL, device_id INTEGER NOT NULL, pos INTEGER NOT NULL, PRIMARY KEY (user_id, device_id)) WITHOUT ROWID;
+"#,
+    // v6: followed authors / series and series dismissed from "Continue series" (start page),
+    // keyed by the normalized name (author and series ids change between imports)
+    r#"
+CREATE TABLE follow (user_id INTEGER NOT NULL, library_id INTEGER NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('author','series')), key TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (user_id, library_id, kind, key)) WITHOUT ROWID;
+CREATE TABLE series_dismiss (user_id INTEGER NOT NULL, library_id INTEGER NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (user_id, library_id, key)) WITHOUT ROWID;
 "#,
 ];
 

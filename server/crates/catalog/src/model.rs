@@ -39,6 +39,20 @@ pub struct Book {
     pub lib_rating: i64,
     /// Age suitability estimate (`kids::age_for`, a heuristic): 0, 6, 12, 16, 18; `None` = unknown.
     pub kids_age: Option<u8>,
+    /// Set on a grouped list row that stands for several editions of one work (this book is the
+    /// best copy); `None` otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editions: Option<Editions>,
+}
+
+/// Editions of one work shown as one list row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Editions {
+    /// Number of editions in the list (≥ 2).
+    pub count: usize,
+    /// Their ids, the best copy first, then in list order.
+    pub ids: Vec<i64>,
 }
 
 /// A book with its storage location and remaining INPX fields.
@@ -184,7 +198,15 @@ pub struct SearchResult {
     pub authors: Vec<NameCount>,
     pub series: Vec<SeriesHit>,
     pub books: Vec<Book>,
-    /// Number of matching books after filters.
+    /// Number of matching books after filters (rows: works when grouped).
     pub total: i64,
     pub facets: Facets,
+    /// The results are for this corrected query (typo fix), because the query as typed found
+    /// nothing.
+    pub corrected: Option<String>,
+    /// A corrected query worth offering ("Did you mean …?") when the query found little.
+    pub did_you_mean: Option<String>,
+    /// Normalized words of the returned titles and names that matched (by prefix, word form,
+    /// transliteration or typo fix), for highlighting.
+    pub highlight: Vec<String>,
 }

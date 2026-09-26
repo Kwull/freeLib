@@ -22,6 +22,7 @@ use freelib_catalog::normalize::{letter_of, normalize};
 use freelib_catalog::schema::{
     CATALOG_SCHEMA_VERSION, create_catalog_indexes, create_catalog_tables,
 };
+use freelib_catalog::text::{latin_text, stems_text, words, work_title_key};
 use freelib_catalog::util::{now_millis, now_rfc3339};
 
 use crate::ImportError;
@@ -89,7 +90,41 @@ struct PartOut {
     idx: usize,
     name: String,
     books: Vec<RawBook>,
+    /// Search text of each book, computed by the parser threads.
+    prep: Vec<Prep>,
     missing: Vec<String>,
+}
+
+/// Normalized search text of one book (FTS columns) and its work title key.
+struct Prep {
+    title: String,
+    authors: String,
+    series: String,
+    keywords: String,
+    stems: String,
+    latin: String,
+    work_title: Option<String>,
+}
+
+fn prepare(b: &RawBook) -> Prep {
+    let title = normalize(&b.title);
+    let authors = b
+        .authors
+        .iter()
+        .map(|a| normalize(&a.display()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let series = normalize(&b.series);
+    let all = format!("{title} {authors} {series}");
+    Prep {
+        stems: stems_text(&all),
+        latin: latin_text(&all),
+        keywords: normalize(&b.keywords),
+        work_title: work_title_key(&b.title),
+        title,
+        authors,
+        series,
+    }
 }
 
 fn process_part(
@@ -120,10 +155,12 @@ fn process_part(
             }
         }
     }
+    let prep = books.iter().map(prepare).collect();
     Ok(PartOut {
         idx,
         name: name.to_string(),
         books,
+        prep,
         missing,
     })
 }
@@ -153,6 +190,10 @@ struct Agg {
     genre_counts: HashMap<u16, i64>,
     lang_counts: HashMap<String, i64>,
     keys: HashSet<String>,
+    /// work key (language, title key, author ids) → first book id
+    works: HashMap<String, i64>,
+    /// title words → live books
+    vocab: HashMap<String, i64>,
     next_book_id: i64,
 }
 
@@ -320,8 +361,8 @@ fn build(
             let part = r?;
             pending.insert(part.idx, part);
             while let Some(part) = pending.remove(&next) {
-                for b in &part.books {
-                    w.add(&mut agg, b, &mut stats)?;
+                for (b, p) in part.books.iter().zip(&part.prep) {
+                    w.add(&mut agg, b, p, &mut stats)?;
                 }
                 stats.missing_archives.extend(part.missing);
                 next += 1;
@@ -348,7 +389,7 @@ fn build(
 
     let parts = info.parts.len() as u64;
     progress(parts, total, "Writing authors, series and counts");
-    write_aggregates(&tx_conn, &agg)?;
+    write_aggregates(&tx_conn, &mut agg)?;
     stats.authors = agg.author_rows.len() as u64;
     stats.series = agg.series_rows.len() as u64;
     mark(&mut stats, "authors/series/counts");
@@ -440,12 +481,12 @@ impl<'c> Writer<'c> {
         Ok(Writer {
             book: conn.prepare(
                 "INSERT INTO book(id, book_key, title, sort_key, series_id, serno, first_author_id, lang, ext, file, \
-                 archive, folder, size, date, deleted, lib_id, stars, keywords, arch_offset, arch_csize, arch_method) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+                 archive, folder, size, date, deleted, lib_id, stars, keywords, arch_offset, arch_csize, arch_method, work_id) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
             )?,
             ba: conn.prepare("INSERT OR IGNORE INTO book_author(book_id, author_id, pos) VALUES (?1,?2,?3)")?,
             bg: conn.prepare("INSERT OR IGNORE INTO book_genre(book_id, genre_id) VALUES (?1,?2)")?,
-            fts: conn.prepare("INSERT INTO book_fts(rowid, title, authors, series, keywords) VALUES (?1,?2,?3,?4,?5)")?,
+            fts: conn.prepare("INSERT INTO book_fts(rowid, title, authors, series, keywords, stems, latin) VALUES (?1,?2,?3,?4,?5,?6,?7)")?,
             gbuf: Vec::with_capacity(8),
         })
     }
@@ -454,6 +495,7 @@ impl<'c> Writer<'c> {
         &mut self,
         agg: &mut Agg,
         b: &RawBook,
+        p: &Prep,
         stats: &mut ImportStats,
     ) -> Result<(), ImportError> {
         let mut key = b.book_key();
@@ -475,9 +517,23 @@ impl<'c> Writer<'c> {
 
         let author_ids: Vec<i64> = b.authors.iter().map(|a| agg.author_id(a)).collect();
         let series_id = agg.series_id(&b.series);
-        let series_name = series_id
-            .map(|s| agg.series_rows[(s - 1) as usize].name.clone())
-            .unwrap_or_default();
+        // Editions of one work: same language, title key and author set. Books by an unknown
+        // author and generic titles ("Избранное") are never grouped.
+        let unknown = b
+            .authors
+            .iter()
+            .any(|a| a.last == crate::inpx::UNKNOWN_AUTHOR);
+        let work_id = match (&p.work_title, unknown) {
+            (Some(t), false) => {
+                let mut ids = author_ids.clone();
+                ids.sort_unstable();
+                ids.dedup();
+                let ids: Vec<String> = ids.iter().map(i64::to_string).collect();
+                let key = format!("{}\x1f{t}\x1f{}", b.lang, ids.join(","));
+                *agg.works.entry(key).or_insert(id)
+            }
+            _ => id,
+        };
 
         self.book.execute(params![
             id,
@@ -501,6 +557,7 @@ impl<'c> Writer<'c> {
             b.loc.map(|l| l.offset as i64),
             b.loc.map(|l| l.csize as i64),
             b.loc.map(|l| l.method as i64),
+            work_id,
         ])?;
         if b.loc.is_some() {
             stats.offsets_resolved += 1;
@@ -521,13 +578,9 @@ impl<'c> Writer<'c> {
             self.bg.execute(params![id, gid])?;
         }
 
-        let authors_text: Vec<String> = b.authors.iter().map(|a| normalize(&a.display())).collect();
+        // (series are deduplicated by their normalized name, so `p.series` is the stored one's)
         self.fts.execute(params![
-            id,
-            normalize(&b.title),
-            authors_text.join(" "),
-            normalize(&series_name),
-            normalize(&b.keywords)
+            id, p.title, p.authors, p.series, p.keywords, p.stems, p.latin
         ])?;
 
         agg.keys.insert(key);
@@ -554,6 +607,7 @@ impl<'c> Writer<'c> {
                 }
             }
             *agg.lang_counts.entry(b.lang.clone()).or_default() += 1;
+            add_vocab(&mut agg.vocab, &p.title, 1);
         } else if let Some(sid) = series_id {
             // Deleted books still count for the "main authors" of a series without live books.
             agg.series_rows[(sid - 1) as usize]
@@ -562,6 +616,21 @@ impl<'c> Writer<'c> {
                 .or_default();
         }
         Ok(())
+    }
+}
+
+/// Counts the words of normalized `text` (at least 3 characters with a letter) for the typo
+/// tolerance vocabulary.
+fn add_vocab(vocab: &mut HashMap<String, i64>, text: &str, n: i64) {
+    for w in words(text) {
+        if w.chars().count() >= 3 && w.chars().any(char::is_alphabetic) {
+            match vocab.get_mut(w) {
+                Some(c) => *c += n,
+                None => {
+                    vocab.insert(w.to_string(), n);
+                }
+            }
+        }
     }
 }
 
@@ -591,25 +660,37 @@ fn write_letter_index(
     Ok(())
 }
 
-fn write_aggregates(conn: &Connection, agg: &Agg) -> rusqlite::Result<()> {
+fn write_aggregates(conn: &Connection, agg: &mut Agg) -> rusqlite::Result<()> {
+    let mut title_vocab = std::mem::take(&mut agg.vocab);
+    let vocab = &mut title_vocab;
     {
         let mut st = conn.prepare(
             "INSERT INTO author(id, last, first, middle, name, sort_key, book_count) VALUES (?1,?2,?3,?4,?5,?6,?7)",
         )?;
-        let mut fts = conn.prepare("INSERT INTO author_fts(rowid, name) VALUES (?1, ?2)")?;
+        let mut fts =
+            conn.prepare("INSERT INTO author_fts(rowid, name, stems, latin) VALUES (?1,?2,?3,?4)")?;
         for (i, a) in agg.author_rows.iter().enumerate() {
             let id = i as i64 + 1;
             st.execute(params![
                 id, a.a.last, a.a.first, a.a.middle, a.name, a.sort_key, a.live
             ])?;
-            fts.execute(params![id, a.sort_key])?;
+            fts.execute(params![
+                id,
+                a.sort_key,
+                stems_text(&a.sort_key),
+                latin_text(&a.sort_key)
+            ])?;
+            if a.live > 0 {
+                add_vocab(vocab, &a.sort_key, a.live);
+            }
         }
     }
     {
         let mut st = conn.prepare(
             "INSERT INTO series(id, name, sort_key, book_count, authors) VALUES (?1,?2,?3,?4,?5)",
         )?;
-        let mut fts = conn.prepare("INSERT INTO series_fts(rowid, name) VALUES (?1, ?2)")?;
+        let mut fts =
+            conn.prepare("INSERT INTO series_fts(rowid, name, stems, latin) VALUES (?1,?2,?3,?4)")?;
         for (i, s) in agg.series_rows.iter().enumerate() {
             let id = i as i64 + 1;
             let mut top: Vec<(&i64, &u32)> = s.authors.iter().collect();
@@ -620,7 +701,15 @@ fn write_aggregates(conn: &Connection, agg: &Agg) -> rusqlite::Result<()> {
                 .map(|(aid, _)| agg.author_rows[(**aid - 1) as usize].name.as_str())
                 .collect();
             st.execute(params![id, s.name, s.sort_key, s.live, names.join(", ")])?;
-            fts.execute(params![id, s.sort_key])?;
+            fts.execute(params![
+                id,
+                s.sort_key,
+                stems_text(&s.sort_key),
+                latin_text(&s.sort_key)
+            ])?;
+            if s.live > 0 {
+                add_vocab(vocab, &s.sort_key, s.live);
+            }
         }
     }
     {
@@ -647,5 +736,12 @@ fn write_aggregates(conn: &Connection, agg: &Agg) -> rusqlite::Result<()> {
         .map(|(i, s)| (s.sort_key.clone(), i as i64 + 1))
         .collect();
     write_letter_index(conn, "series", &mut keys)?;
+    {
+        let mut st = conn.prepare("INSERT INTO vocab(word, freq) VALUES (?1, ?2)")?;
+        for (w, c) in vocab.iter() {
+            st.execute(params![w, c])?;
+        }
+    }
+    agg.vocab = title_vocab;
     Ok(())
 }

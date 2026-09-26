@@ -108,6 +108,7 @@
           anthologies: kind === 'authors' && summary?.id === id ? summary.anthologies : undefined,
           coauthors: kind === 'authors' && summary?.id === id ? summary.coauthors : undefined,
           coauthorCount: kind === 'authors' && summary?.id === id ? summary.coauthorCount : undefined,
+          follow: { kind: kind === 'authors' ? 'author' as const : 'series' as const, id: current[0] },
         }
       : undefined,
   );
