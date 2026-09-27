@@ -177,19 +177,33 @@ top-level "Прочее" (id 11). A book's genre ids are deduplicated; books wit
   (Porter2) for Latin, a small suffix stripper for words with `і ї є ґ` — Snowball has no Ukrainian); stems that differ
   from the word go to the `stems` column. A query word of ≥ 3 letters also matches its stem exactly, so `книгу`,
   `книгой` find `Книга`, `Книги`, and `стругацкие` finds `Стругацкий`.
-* **Transliteration.** `latin` holds each word's Latin key — the Open Library matcher's `word_key`, moved into the
-  catalog: Russian/Ukrainian → Latin, accents folded, `iy/ii/yi → y`, `ts → c`, `kh → h`, `ks → x`, … — when it differs
-  from the word. A query word of ≥ 3 letters also matches its own key (a prefix from 4 letters, exact for 3), in all
-  columns, so `strugatsky`, `Strugatskii`, `strugackie` find `Стругацкий`, `лем` finds `Lem`, and a Latin-script record
-  written `Strugatsky` is found by `Strugatskii` too. `ё = е` comes from `normalize`.
+* **Transliteration.** `latin` holds each word's coarse **phonetic key** (`text::phonetic_key`, catalog schema 6) when
+  it differs from the word: Russian/Ukrainian → Latin, accents folded, then the English / German / Polish spellings of
+  Russian names folded together — `w→v`, `q→k`, `tsch→q` (ч), `shch/sch/sh/zh→w` (ш щ ж), `tch/ch→q`, `kh→h`, `ph→f`,
+  `ks→x`, `ts/tz/tc→c`, `z→s`, `yo/jo` after a consonant `→e` (ё), `y/j→i`, `ie→e`, doubled letters collapsed, final
+  `of/ef → ov/ev`. So `asimov`, `azimov`, `asimow`, `azimoff`, `азимоф` all have the key `asimov` of `Азимов`;
+  `Jurij = Yuri = Юрий`, `Majakowski = Маяковский`, `Tschechow`/`Chekhov` share `qeqov`/`qehov`'s consonants. The
+  query word matches its own key too (a prefix from 4 letters, exact for 3) in all columns; plain prefixes also hit
+  the `latin` column, so `asimov osnovanie` finds `Азимов. Основание`. It is indexed (FTS terms), never a scan.
+  Precision: voiced/unvoiced pairs other than `s/z` stay apart (`Маркс ≠ Маркес`, `Толстой ≠ Толстая`); `x` is `ks`,
+  not `х`, and a German `ch` is read as `ч`. The same key is used for typo tolerance (`vocab.rs`), the highlighter,
+  the Open Library author match, and — ported to TypeScript (`web/src/lib/utils/phonetic.ts`, shared vectors in
+  `docs/web/phonetic-vectors.json`) — the SPA's name filter. `ё = е` comes from `normalize`.
 * **One FTS query**: every word becomes `("word"* OR "stem" OR "key"*)`, AND-ed; a second query with plain prefixes and a
   third with the phrase on the title column (`title : "война и мир"*`, one word: `title : ^ "word"*`) assign tiers:
   phrase 3 > all prefixes 2 > word forms / transliterations 1; the score is `bm25 − 1000 × tier`, so the existing
-  relevance/rating ordering code is unchanged. Authors/series: name starts with the query, then all prefixes, then
-  the rest, each by book count.
+  relevance/rating ordering code is unchanged. With several words, a book whose author matches one word (the word's
+  `author_fts` matches → their books) while another word matches elsewhere (title, series) gains 1.5 tiers — above a
+  title phrase match — so `азимоф роботы` puts Азимов's «Роботы зари» above an essay titled «Азимов, роботы и мы».
+  **Names** (authors, series; search, typeahead and the SPA's authors/series filter use the same order,
+  `search::name_rank` / `nameRank`): the first word (an author's last name) *is* a query word (as typed or by phonetic
+  key) > the first word starts with one > another word is one > another word starts with one (the SPA filter adds
+  infix matches last); ties by works, then the whole query as a prefix of the name. The 400 most-booked candidates
+  are ranked in memory.
 * **Typos.** When a search finds fewer than 3 matches (or no author/series), each word of ≥ 4 letters that is neither the prefix of a
   vocabulary word nor (by its key) of a word's key is replaced by the closest vocabulary word (optimal string alignment,
-  ≤ 1 edit up to 7 letters, ≤ 2 from 8, in the word's own script and in Latin-key space, then by frequency). A 64-bit
+  ≤ 1 edit up to 7 letters, ≤ 2 from 8, in the word's own script and in Latin-key space; among equally close words one
+  of the query's own script first — `азимв` → `азимов`, not the Latin `asimov` of the same key — then by frequency). A 64-bit
   character-set signature and the length pre-filter candidates. When the corrected query finds more (or finds
   authors/series the query did not), its results are returned (`corrected`, "Showing results for … · Search instead
   for …", `exact=1` skips the correction); otherwise it is only offered (`didYouMean`). The vocabulary is held in memory per
@@ -240,6 +254,20 @@ The edition list shows each edition's own title when it differs from the row's t
 every library once at start. Unit tests with the real titles: `catalog/src/works.rs`, `catalog/src/text.rs`; an import
 test over the gen-inpx "showcase" books (`import/tests/catalog.rs`).
 
+### Counts: one model
+
+Every count shown next to a list counts **works** — the rows of the list with editions grouped (`group=1`, the
+default): the authors / series name lists and search hits (`book_count`, recomputed after the work ids are final),
+the genre tree (`genre_count`; a top-level genre counts a work once), the author summary (`count`, per series,
+"Outside series", languages, genres, anthologies), the grouped list `total` and search facets with `group=1` (a facet
+value counts the works it would leave, so it equals the results after choosing it). A work is placed by its **best
+copy** (the row shown): its series, its number of authors (anthology = ≥ 4) — the summary groups with the same known
+covers as the list. Deleted books are never counted (they are listed only with `deleted=1`). Where the number of
+files differs it is labelled as files (`AuthorSummary.files`, the header shows "862 books · 976 files"). With
+grouping switched off lists count files (their rows). With "Hide anthologies" the SPA subtracts the summary's
+per-series `anthologies`, so header, list and sidebar still agree. In an author's list works outside any series come
+last (the server orders grouped rows by their best copy; the SPA puts the "Outside series" group last).
+
 ### Start page
 
 `GET …/home` (`server/src/find.rs`, catalog `home.rs`): the user's history (`book_history`: latest time per book),
@@ -249,7 +277,10 @@ than 3 first authors only the books sharing an author with the user's books ther
 one done that are not done; finished and dismissed series are dropped; ordered by latest activity. **New from authors**:
 live books dated ≥ since (previous visit, or the chosen window) by followed authors, in followed series, or by the
 authors of books done, rated ≥ 4 or shelved (not anthologies, not "Автор неизвестен"), minus works the user has,
-grouped, newest first. **Empty state**: the best library-rated works of the 30 days before the newest book.
+grouped, newest first. **Well-rated new arrivals** (`picks`, always, not only for a new user — it used to vanish once
+one book was sent): the best library-rated works of the 30 days before the newest book, without the user's works
+(done, shelved) and without the works the sections above show; while that window has fewer than 12 works rated ≥ 4
+it widens to 90 days, a year, then the whole catalog.
 
 ## Application database (`app.db`)
 
@@ -370,8 +401,17 @@ Three sources per book, all exposed on `Book`:
   the server is listening 0.2 s after start). Book lists read it per row. For rating sorts and filters a dense array
   indexed by book id (6 bytes/book, 3.3 MB for 551k books) is built per catalog version during the catalog warm-up
   (≈ 0.5 s for 150k found ratings) and updated in place as lookups arrive.
-* **Worker** (`ExtRatings::run`, one task): one request at a time, at least 1 s apart (`Limiter`); HTTP 429/5xx or
-  network errors pause all requests 30 s, doubling up to 1 h, reset by a success. Priorities: (1) books the user
+* **HTTP client** (`ReqwestGet`): 10 s connect / 20 s total timeout, kept-alive connections (TCP keepalive, idle
+  pool 90 s), the User-Agent above, rustls with web PKI and system roots, and the proxy of `HTTPS_PROXY` /
+  `HTTP_PROXY` / `ALL_PROXY` (with `NO_PROXY`; logged at start without credentials). Errors keep the whole cause
+  chain and a kind: `DNS error: …`, `connection error: … Connection refused`, `TLS error: …`, `proxy error: …`,
+  `timeout error: …`, `HTTP 429 (too many requests), Retry-After 90 s`, `HTTP 503 (server error)`, each with the
+  pause it caused ("…; pausing 60 s") — shown as the last error in Settings → Server.
+* **Worker** (`ExtRatings::run`, one task): one request at a time, at least 1 s apart (`Limiter`); after a failure all
+  requests pause, doubling with each consecutive failure, reset by a success: 429 from 60 s (at least `Retry-After`) up
+  to 1 h, 5xx from 30 s up to 30 min, timeouts from 15 s up to 15 min, DNS / connection / TLS / proxy errors from 30 s
+  up to 1 h. **Hit rate**: besides ISBN and the title searches above, a title with a subtitle is also searched by its
+  main title, and author names also match by the phonetic key (`Азимов` = `Asimov`, `Толстой` = `Tolstoy`). Priorities: (1) books the user
   opened (detail), shelved, rated or sent — `Priority::User`; (2) books of the author/series pages the user browses
   (first 300 of a page) — `Priority::Browse`; (3) a sweep over every library by book id, skipping fresh rows; after a
   full pass it restarts a day later (which picks up refreshes). Queues are bounded (2 000 / 10 000, oldest dropped),
@@ -497,10 +537,27 @@ the `openidconnect` crate with `reqwest` + rustls (web PKI and system roots, `SS
   refused), `exp` with 60 s leeway, `iat` not more than 60 s in the future nor older than 10 minutes, `nonce`, and
   `at_hash` when present. Userinfo is fetched (and its `sub` must match) when the ID token lacks `groups` while
   `FREELIB_OIDC_ADMIN_GROUP` is set, or lacks all of `preferred_username`, `email`, `name`.
-* **Accounts**: found by (issuer, `sub`) in `user_identity`, never by name or e-mail. A new identity creates a reader
-  (with `FREELIB_OIDC_AUTO_CREATE`) named after `preferred_username`, else `email`, else `name`, made unique with
-  ` (2)`, ` (3)`… — a provider user called `admin` becomes `admin (2)`, never the local admin. The admin group sets
-  the role at every sign-in. Linking (`POST /auth/oidc/link`, a same-origin JSON request, so CSRF-protected) stores the
+* **Accounts**: found by (issuer, `sub`) in `user_identity`. A **first** sign-in of an identity:
+  1. **Verified e-mail**: when the provider says `email_verified: true` (ID token, or userinfo for the same e-mail) and
+     the e-mail equals — case-insensitively — the e-mail an administrator stored for exactly one account
+     (`user.email`, Settings → Users) that has no identity from this provider yet, the identity is linked to it.
+  2. **Taken user name**: when the name it asks for (`preferred_username`, else `email`, else `name`) belongs to an
+     account, nothing is created and nothing is linked by the name alone (that would be an account takeover). The
+     sign-in is parked as a *pending link* (server memory, 10 minutes, single use, HttpOnly `freelib_sso_link`
+     cookie, path `/api/v1`) and the browser goes to `/login?ssoLink=1`: "An account 'kwull' already exists. Sign in
+     with its password to link single sign-on." A successful `POST /login` **as that account** in the same browser
+     links the identity (`ssoLinked: true`); signing in as anybody else links nothing. With
+     `FREELIB_OIDC_AUTO_CREATE` on, the page also offers "Create a separate account instead"
+     (`POST /auth/oidc/pending/create` → `kwull (2)`, logged with the reason).
+  3. Otherwise a reader is created (with `FREELIB_OIDC_AUTO_CREATE`), or the sign-in is refused (`not_linked`).
+  The admin group sets the role at every sign-in.
+* **Merging duplicates** (`POST /users/:id/merge {into}`, Settings → Users → "Merge into…", administrators, with a
+  confirmation): moves the single sign-on identity and all data of the duplicate — shelves, ratings (the target's own
+  rating of a book wins), history, devices and device order, follows, dismissed series, jobs (stored and in memory),
+  hand-off links, API tokens and their audit, authorized apps (OAuth grants), mail counters, a stored e-mail the
+  target lacks — to the target in one transaction and deletes the duplicate (its sessions end). The target becomes an
+  administrator when the duplicate was one. Refused (409) when both have an identity from the same provider. Logged
+  as an audit line (`target: audit`, admin, both accounts, what moved). Linking (`POST /auth/oidc/link`, a same-origin JSON request, so CSRF-protected) stores the
   user id in the pending sign-in; the callback links only when the browser is still signed in as that user.
 * **Sessions**: the existing `session` table and cookie; every sign-in (password or SSO) and every link issues a new
   session id and invalidates the one the browser sent (session fixation). Failed callbacks count against the login
@@ -652,6 +709,22 @@ warm cache, milliseconds:
 | Grouped new arrivals, 30 days / all 552k books | 11.1 / 153.7 | 12.6 / 156.3 | |
 | Grouped biggest top-level genre | 47.6 | 49.3 | |
 | Start page: continue series (300 books read) / new from authors (30 days) | 22.3 / 20.9 | 34.4 / 28.5 | |
+
+Phonetic keys, name ranking and counts in works (schema 6), same 600k library and machine, before → after
+(`bench`, same queries on both builds; this machine is slower than the one above):
+
+| Query | p50 ms | p95 ms | max ms |
+|---|---|---|---|
+| Search kind=all, 25 queries | 26.4 → 31.1 | 87.0 → 90.1 | 93.7 → 90.6 |
+| Search, all 41 queries (grouped) | 22.5 → 23.8 | 98.5 → 100.0 | 138.7 → 165.1 |
+| Latin spellings / author + title (`asimov`, `azimoff`, `asimov osnovanie`, `азимоф роботы`, `dostojewski`…) | 4.3 → 10.7 | 17.3 → 14.3 | 17.4 → 15.2 |
+| Typeahead (kind=all, 5 books, grouped), same 8 queries | 2.3 → 4.7 | 9.7 → 13.5 | 10.7 → 14.4 |
+| Search kind=authors, same 8 queries | 0.21 → 0.24 | 1.3 → 2.4 | 2.8 → 2.5 |
+| Author summary, top author (≈ 3,750 works / 5,300 files) | 101 → 89 | 106 → 92 | |
+
+The SPA's author filter (client side, measured in Node over 176k names): ≈ 30 ms per one-word keystroke
+(was 8–20 ms with the plain substring match), ≈ 60 ms for two words; the names' phonetic keys take ≈ 0.3 s once
+per list, in 5 000-row slices after it arrives (memoized per word).
 
 Search p95 stays well under the 300 ms target. Reproduce: `gen-inpx --books 600000 --out bench-data/synthetic-600k.inpx`,
 then `bench --inpx bench-data/synthetic-600k.inpx`.

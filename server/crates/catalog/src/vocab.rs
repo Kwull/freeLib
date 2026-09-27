@@ -150,15 +150,20 @@ impl Vocab {
             return None;
         }
         let (t_sig, k_sig) = (char_sig(token), key.as_deref().map(char_sig).unwrap_or(0));
-        let mut best: Option<(usize, u32, usize)> = None; // (distance, freq, entry)
+        // (distance, in the word's own script, freq, entry): closest first; among equals a word
+        // of the query's own script (`азимв` → `азимов`, not the Latin `asimov` of the same
+        // phonetic key), then the most frequent
+        let mut best: Option<(usize, bool, u32, usize)> = None;
         for (i, e) in self.entries.iter().enumerate() {
             let cap = best.map(|b| b.0).unwrap_or(usize::MAX);
             let mut d: Option<usize> = None;
+            let mut own = false;
             if max_w > 0
                 && (e.w_chars as usize).abs_diff(t_chars) <= max_w
                 && ((e.w_sig ^ t_sig).count_ones() as usize) <= 2 * max_w
             {
                 d = edit_distance(token, self.word(i), max_w.min(cap));
+                own = d.is_some();
             }
             if let Some(k) = key.as_deref()
                 && max_k > 0
@@ -167,6 +172,9 @@ impl Vocab {
                 && ((e.k_sig ^ k_sig).count_ones() as usize) <= 2 * max_k
                 && let Some(dk) = edit_distance(k, self.key(i), max_k.min(cap))
             {
+                if d.is_none_or(|x| dk < x) {
+                    own = false;
+                }
                 d = Some(d.map_or(dk, |x| x.min(dk)));
             }
             let Some(d) = d else { continue };
@@ -175,12 +183,14 @@ impl Vocab {
             }
             let better = match best {
                 None => true,
-                Some((bd, bf, _)) => d < bd || (d == bd && e.freq > bf),
+                Some((bd, bown, bf, _)) => {
+                    d < bd || (d == bd && own && !bown) || (d == bd && own == bown && e.freq > bf)
+                }
             };
             if better {
-                best = Some((d, e.freq, i));
+                best = Some((d, own, e.freq, i));
             }
         }
-        best.map(|(d, _, i)| (self.word(i).to_string(), d))
+        best.map(|(d, _, _, i)| (self.word(i).to_string(), d))
     }
 }

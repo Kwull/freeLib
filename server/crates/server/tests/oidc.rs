@@ -45,6 +45,7 @@ struct Knobs {
     sub: String,
     preferred_username: Option<String>,
     email: Option<String>,
+    email_verified: Option<bool>,
     groups: Option<Value>,
     /// Put `groups` into the userinfo response only.
     groups_in_userinfo: bool,
@@ -64,6 +65,7 @@ impl Default for Knobs {
             sub: "sub-alice".into(),
             preferred_username: Some("alice".into()),
             email: Some("alice@example.org".into()),
+            email_verified: None,
             groups: None,
             groups_in_userinfo: false,
             aud: None,
@@ -224,6 +226,9 @@ async fn token(State(f): State<F>, Form(p): Form<HashMap<String, String>>) -> Re
     }
     if let Some(e) = &k.email {
         c["email"] = json!(e);
+    }
+    if let Some(v) = k.email_verified {
+        c["email_verified"] = json!(v);
     }
     if let Some(g) = &k.groups
         && !k.groups_in_userinfo
@@ -492,8 +497,19 @@ async fn sign_in_creates_reader_and_reuses_account() {
     assert_eq!(freelib_server::db::count_users(&c).unwrap(), 1);
 }
 
+/// A local account with a password (created by the admin).
+async fn local_user(app: &TestApp, name: &str, pw: &str, email: Option<&str>) -> i64 {
+    let mut body = json!({"username": name, "password": pw, "role": "reader"});
+    if let Some(e) = email {
+        body["email"] = json!(e);
+    }
+    let r = app.post("/api/v1/users", &body).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    r.json()["id"].as_i64().unwrap()
+}
+
 #[tokio::test]
-async fn username_is_deduplicated_never_merged() {
+async fn taken_username_asks_for_a_link_never_merged_by_name() {
     let f = start_fake().await;
     let app = app_with(&f, |_, cfg| cfg.admin_password = Some("secret".into())).await;
     f.set(|k| {
@@ -503,9 +519,283 @@ async fn username_is_deduplicated_never_merged() {
     let mut b = Browser::default();
     let r = sso(&app, &mut b, "/").await;
     assert_eq!(r.status, StatusCode::SEE_OTHER);
+    // no account, no session: the login page asks for the password of "admin"
+    assert_eq!(r.header("location"), "/login?ssoLink=1");
+    assert!(cookie_of(&r, "freelib_session").is_none());
+    let lc = cookie_of(&r, "freelib_sso_link").expect("pending link cookie");
+    assert!(
+        lc.contains("HttpOnly") && lc.contains("Path=/api/v1"),
+        "{lc}"
+    );
+    assert!(whoami(&app, &mut b).await.is_null());
+    let p = b.get(&app, "/api/v1/auth/oidc/pending").await.json();
+    assert_eq!(p["username"], "admin");
+    assert_eq!(p["canLink"], true);
+    assert_eq!(p["canCreate"], true);
+    // a wrong password links nothing
+    let r = b
+        .send(
+            &app,
+            Method::POST,
+            "/api/v1/login",
+            Some(&json!({"username": "admin", "password": "guess"})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    {
+        let c = app.state.db.lock();
+        assert_eq!(freelib_server::db::count_users(&c).unwrap(), 1);
+        assert!(
+            freelib_server::db::identity_user(&c, &f.base, "sub-mallory")
+                .unwrap()
+                .is_none()
+        );
+    }
+    // the user chooses a separate account instead: created knowingly, a reader
+    let r = b
+        .send(&app, Method::POST, "/api/v1/auth/oidc/pending/create", None)
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["user"]["username"], "Admin (2)");
+    assert!(
+        !b.cookies.contains_key("freelib_sso_link"),
+        "pending link cleared"
+    );
     let u = whoami(&app, &mut b).await;
     assert_eq!(u["username"], "Admin (2)");
     assert_eq!(u["role"], "reader");
+    // the pending link was used up
+    let r = b.get(&app, "/api/v1/auth/oidc/pending").await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn taken_username_links_after_the_password() {
+    let f = start_fake().await;
+    let mut app = app_with(&f, |o, cfg| {
+        cfg.admin_password = Some("secret".into());
+        o.auto_create = false;
+    })
+    .await;
+    app.login("admin", "secret").await;
+    let kwull = local_user(&app, "kwull", "kwullpass", None).await;
+    f.set(|k| {
+        k.preferred_username = Some("kwull".into());
+        k.sub = "sub-kwull".into();
+        k.email = Some("k@example.org".into());
+    });
+    let mut b = Browser::default();
+    let r = sso(&app, &mut b, "/l/1/authors").await;
+    assert_eq!(r.header("location"), "/login?ssoLink=1");
+    let p = b.get(&app, "/api/v1/auth/oidc/pending").await.json();
+    assert_eq!(p["username"], "kwull");
+    assert_eq!(p["canCreate"], false, "auto-creation is off");
+    let r = b
+        .send(&app, Method::POST, "/api/v1/auth/oidc/pending/create", None)
+        .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    // signing in as somebody else does not link (and keeps the pending link)
+    let r = b
+        .send(
+            &app,
+            Method::POST,
+            "/api/v1/login",
+            Some(&json!({"username": "admin", "password": "secret"})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["ssoLinked"], false);
+    // kwull's password links it
+    let r = b
+        .send(
+            &app,
+            Method::POST,
+            "/api/v1/login",
+            Some(&json!({"username": "kwull", "password": "kwullpass"})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["ssoLinked"], true);
+    assert!(cookie_of(&r, "freelib_session").is_some());
+    assert!(!b.cookies.contains_key("freelib_sso_link"));
+    assert_eq!(whoami(&app, &mut b).await["id"], kwull);
+    // from now on single sign-on is kwull, no duplicate
+    let mut other = Browser::default();
+    let r = sso(&app, &mut other, "/").await;
+    assert_eq!(r.header("location"), "/");
+    assert_eq!(whoami(&app, &mut other).await["id"], kwull);
+    let c = app.state.db.lock();
+    assert_eq!(freelib_server::db::count_users(&c).unwrap(), 2);
+}
+
+#[tokio::test]
+async fn verified_email_of_an_account_links_it() {
+    let f = start_fake().await;
+    let mut app = app_with(&f, |_, cfg| cfg.admin_password = Some("secret".into())).await;
+    app.login("admin", "secret").await;
+    let carol = local_user(&app, "carol", "carolpass", Some("Carol@Example.org")).await;
+    let users = app.get("/api/v1/users").await.json();
+    assert!(
+        users
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["username"] == "carol" && u["email"] == "Carol@Example.org")
+    );
+    // an unverified e-mail is not enough (and another name): a new account
+    f.set(|k| {
+        k.sub = "sub-x".into();
+        k.preferred_username = Some("cc".into());
+        k.email = Some("carol@example.org".into());
+        k.email_verified = Some(false);
+    });
+    let mut b = Browser::default();
+    sso(&app, &mut b, "/").await;
+    assert_eq!(whoami(&app, &mut b).await["username"], "cc");
+    // verified and equal (case-insensitive): linked to carol
+    f.set(|k| {
+        k.sub = "sub-carol".into();
+        k.preferred_username = Some("carol.w".into());
+        k.email_verified = Some(true);
+    });
+    let mut b = Browser::default();
+    let r = sso(&app, &mut b, "/").await;
+    assert_eq!(r.header("location"), "/");
+    assert_eq!(whoami(&app, &mut b).await["id"], carol);
+    // carol now has an identity from this provider: another verified sign-in with her
+    // e-mail does not take it over, it creates its own account
+    f.set(|k| {
+        k.sub = "sub-carol-2".into();
+        k.preferred_username = Some("carol2".into());
+    });
+    let mut b = Browser::default();
+    sso(&app, &mut b, "/").await;
+    assert_eq!(whoami(&app, &mut b).await["username"], "carol2");
+}
+
+#[tokio::test]
+async fn admin_merges_a_duplicate_account() {
+    let f = start_fake().await;
+    let mut app = app_with(&f, |_, cfg| cfg.admin_password = Some("secret".into())).await;
+    app.login("admin", "secret").await;
+    let kwull = local_user(&app, "kwull", "kwullpass", None).await;
+    // the duplicate, as older versions created it: "kwull (2)" with the SSO identity
+    f.set(|k| {
+        k.preferred_username = Some("kwull".into());
+        k.sub = "sub-kwull".into();
+    });
+    let mut dup = Browser::default();
+    sso(&app, &mut dup, "/").await;
+    let r = dup
+        .send(&app, Method::POST, "/api/v1/auth/oidc/pending/create", None)
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let dup_id = r.json()["user"]["id"].as_i64().unwrap();
+    assert_eq!(whoami(&app, &mut dup).await["username"], "kwull (2)");
+    // the duplicate has data: a shelf, a rating, a follow-worthy history row, an API token
+    let r = dup
+        .send(
+            &app,
+            Method::POST,
+            "/api/v1/shelves",
+            Some(&json!({"name": "Dup shelf", "color": "#ff0000"})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let r = dup
+        .send(
+            &app,
+            Method::POST,
+            "/api/v1/me/tokens",
+            Some(&json!({"name": "dup token", "scopes": ["read"]})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    {
+        let c = app.state.db.lock();
+        c.execute(
+            "INSERT INTO rating(user_id, library_id, book_key, rating) VALUES (?1, 1, 'lib:1', 5)",
+            [dup_id],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO book_history(user_id, library_id, book_key, action, at) VALUES (?1, 1, 'lib:1', 'send', 't')",
+            [dup_id],
+        )
+        .unwrap();
+    }
+    // only an administrator can merge
+    let r = dup
+        .send(
+            &app,
+            Method::POST,
+            &format!("/api/v1/users/{dup_id}/merge"),
+            Some(&json!({"into": kwull})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let r = app
+        .post(
+            &format!("/api/v1/users/{dup_id}/merge"),
+            &json!({"into": dup_id}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let r = app
+        .post(
+            &format!("/api/v1/users/{dup_id}/merge"),
+            &json!({"into": kwull}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let v = r.json();
+    assert_eq!(v["user"]["username"], "kwull");
+    assert_eq!(v["moved"]["identities"], 1);
+    assert_eq!(v["moved"]["shelves"], 1);
+    assert_eq!(v["moved"]["ratings"], 1);
+    assert_eq!(v["moved"]["history"], 1);
+    assert_eq!(v["moved"]["tokens"], 1);
+    // the duplicate is gone and its session with it
+    assert!(whoami(&app, &mut dup).await.is_null());
+    let users = app.get("/api/v1/users").await.json();
+    let names: Vec<&str> = users
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["username"].as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&"kwull (2)"), "{names:?}");
+    let row = users
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["username"] == "kwull")
+        .unwrap();
+    assert!(row["sso"].is_object(), "{row}");
+    // single sign-on is kwull now, with the moved data
+    let mut b = Browser::default();
+    sso(&app, &mut b, "/").await;
+    assert_eq!(whoami(&app, &mut b).await["id"], kwull);
+    let shelves = b.get(&app, "/api/v1/shelves").await.json();
+    assert!(
+        shelves
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "Dup shelf"),
+        "{shelves}"
+    );
+    let tokens = b.get(&app, "/api/v1/me/tokens").await.json();
+    assert!(tokens.to_string().contains("dup token"), "{tokens}");
+    let c = app.state.db.lock();
+    let rated: i64 = c
+        .query_row(
+            "SELECT count(*) FROM rating WHERE user_id=?1",
+            [kwull],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(rated, 1);
 }
 
 #[tokio::test]

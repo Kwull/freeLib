@@ -2,6 +2,7 @@
   import VirtualList from './VirtualList.svelte';
   import Icon from './Icon.svelte';
   import { normalize } from '../utils/normalize';
+  import { latinKey, nameRank, wordsOf } from '../utils/phonetic';
   import { t } from '../i18n';
   import {
     SCRIPT_LABEL, letterAt, scriptOf, scriptsByCount, stripLetters, type Script,
@@ -48,14 +49,93 @@
     normalizedFor = rows;
   });
 
+  // The phonetic keys of each name's words that differ from the word (` asimov aisek`), so a
+  // Latin spelling finds a Cyrillic name (`asimov`, `azimoff` → Азимов). Computed in slices
+  // after the list arrives (memoized per word: first names and patronymics repeat); until then
+  // the filter matches the text only.
+  let hayRows: string[] = [];
+  let hayFor: unknown = null;
+  let keysVersion = $state(0);
+  $effect(() => {
+    const r = rows;
+    const out: string[] = new Array(r.length);
+    const memo = new Map<string, string | null>();
+    const key = (w: string) => {
+      let k = memo.get(w);
+      if (k === undefined) {
+        k = latinKey(w);
+        if (k === w) k = null;
+        memo.set(w, k);
+      }
+      return k;
+    };
+    let i = 0;
+    let cancelled = false;
+    const step = () => {
+      if (cancelled) return;
+      const norm = normalizedFor === r ? normalizedRows : null;
+      const end = Math.min(r.length, i + 5000);
+      for (; i < end; i++) {
+        const n = norm?.[i] ?? normalize(r[i][1]);
+        let h = '';
+        for (const w of wordsOf(n)) {
+          const k = key(w);
+          if (k) h += ` ${k}`;
+        }
+        out[i] = h;
+      }
+      if (i < r.length) setTimeout(step, 0);
+      else {
+        hayRows = out;
+        hayFor = r;
+        keysVersion++;
+      }
+    };
+    const timer = setTimeout(step, 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  });
+
+  /** Rows matching the filter, best first (like the server's search): the last name is the
+   *  query word, then starts with it, then another word is / starts with it, then an infix
+   *  match; more books first among equals. Every query word must match the start of a word
+   *  (as typed or by its phonetic key), or the whole query must occur in the name. */
   const filtered = $derived.by(() => {
+    keysVersion;
     const q = normalize(query);
     if (!q) return rows;
     const norm = normalizedFor === rows ? normalizedRows : rows.map((r) => normalize(r[1]));
+    const hay = hayFor === rows ? hayRows : null;
     const start = performance.now();
-    const out: typeof rows = [];
+    const tokens = wordsOf(q);
+    const needles = tokens.map((t) => {
+      const k = [...t].length >= 3 ? latinKey(t) : null;
+      return { t: ` ${t}`, k: hay && k ? ` ${k}` : null };
+    });
+    const hits: { i: number; words: boolean }[] = [];
+    const one = needles.length === 1 ? needles[0] : null;
     for (let i = 0; i < rows.length; i++) {
-      if (norm[i].includes(q)) out.push(rows[i]);
+      const n = norm[i];
+      const infix = n.includes(q);
+      let words: boolean;
+      if (one) {
+        // one word: a word start implies an infix match, so most rows cost one or two scans
+        words = infix ? n.startsWith(q) || n.includes(one.t) : !!(one.k && hay && hay[i].includes(one.k));
+      } else {
+        words = needles.length > 0;
+        for (const nd of needles) {
+          if (!(n.startsWith(nd.t.slice(1)) || n.includes(nd.t)) && !(nd.k && hay && hay[i].includes(nd.k))) { words = false; break; }
+        }
+      }
+      if (words || infix) hits.push({ i, words });
+    }
+    // ranking every hit of a one-letter filter is not worth it: those stay in list order
+    let out: typeof rows;
+    if (hits.length <= 20000) {
+      const ranked = hits.map((h) => ({ ...h, rank: h.words ? nameRank(norm[h.i], tokens) : 4 }));
+      ranked.sort((a, b) => a.rank - b.rank || rows[b.i][2] - rows[a.i][2] || a.i - b.i);
+      out = ranked.map((h) => rows[h.i]);
+    } else {
+      out = hits.map((h) => rows[h.i]);
     }
     if (import.meta.env.DEV) {
       const ms = performance.now() - start;

@@ -104,6 +104,7 @@
           crumb: `${title} / ${letterOf(normalize(current[1]))}`,
           name: current[1],
           booksCount: summary?.id === id ? summary.count : current[2],
+          filesCount: kind === 'authors' && summary?.id === id ? summary.files : undefined,
           seriesCount: kind === 'authors' && summary?.id === id ? summary.series.length : undefined,
           anthologies: kind === 'authors' && summary?.id === id ? summary.anthologies : undefined,
           coauthors: kind === 'authors' && summary?.id === id ? summary.coauthors : undefined,

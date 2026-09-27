@@ -15,7 +15,7 @@ use crate::catalog::{BookFilter, Catalog, CountSel, Result, load_books};
 use crate::genres::genres;
 use crate::model::*;
 use crate::normalize::search_tokens;
-use crate::text::{latin_key, stem};
+use crate::text::{latin_key, stem, words};
 
 /// What to search for (`kind` query parameter).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -58,6 +58,8 @@ pub(crate) const FLAG_DELETED: u8 = 2;
 /// The title names a volume (`Книга 9`, `Том 1`): an omnibus or a part, not the best copy of
 /// a work that also has plain copies.
 pub(crate) const FLAG_VOLUME: u8 = 4;
+/// The book's work has other editions (grouped facets only deduplicate those).
+pub(crate) const FLAG_SHARED: u8 = 8;
 
 /// Compact per-book attributes, indexed by book id.
 pub struct BookAttrs {
@@ -158,6 +160,22 @@ impl BookAttrs {
                     0
                 }
                 | if volume { FLAG_VOLUME } else { 0 };
+        }
+        // works with several editions
+        {
+            let mut seen = vec![false; n];
+            for i in 0..n {
+                let w = a.work[i] as usize;
+                if a.flags[i] & FLAG_EXISTS != 0 && w != 0 && w != i && w < n {
+                    seen[w] = true;
+                }
+            }
+            for (i, root) in seen.iter().enumerate() {
+                let w = a.work[i] as usize;
+                if a.flags[i] & FLAG_EXISTS != 0 && ((w != 0 && w != i) || *root) {
+                    a.flags[i] |= FLAG_SHARED;
+                }
+            }
         }
         // Genres in CSR form; the reverse index yields rows ordered by book_id.
         let mut st = conn.prepare(
@@ -395,6 +413,81 @@ fn alternatives(t: &str) -> Vec<String> {
     }
     v
 }
+
+/// How well a name matches the query words, best first (the order of authors and series in
+/// search results, the typeahead and the SPA's name filter):
+///
+/// * 0: the first word (an author's last name, a series' first word) *is* a query word, as
+///   typed or by its phonetic key (`asimov` → `Азимов`);
+/// * 1: the first word starts with a query word (`азимов` → `Азимова`);
+/// * 2: another word is a query word;
+/// * 3: another word starts with a query word (or matched only by word form).
+///
+/// `name` is normalized (a sort key); `tokens` are the normalized query words.
+pub fn name_rank(name: &str, tokens: &[String]) -> u8 {
+    let toks: Vec<(&str, Option<String>)> =
+        tokens.iter().map(|t| (t.as_str(), latin_key(t))).collect();
+    let mut best = 3u8;
+    for (j, w) in words(name).enumerate() {
+        let wk = latin_key(w);
+        for (t, k) in &toks {
+            let whole = w == *t || (k.is_some() && wk == *k);
+            let prefix = w.starts_with(t)
+                || (t.chars().count() >= 3
+                    && matches!((k, &wk), (Some(k), Some(wk)) if wk.starts_with(k.as_str())));
+            let r = match (j == 0, whole, prefix) {
+                (true, true, _) => 0,
+                (true, false, true) => 1,
+                (false, true, _) => 2,
+                _ => 3,
+            };
+            best = best.min(r);
+        }
+        if best == 0 {
+            break;
+        }
+    }
+    best
+}
+
+/// Candidates fetched for [`name_rank`] ordering (by book count); 20 are returned.
+const NAME_CANDIDATES: i64 = 400;
+
+/// Books of the authors matching one query word, for the author + title boost; `None` when
+/// the word matches too many authors or books to be telling.
+fn author_word_books(
+    conn: &rusqlite::Connection,
+    t: &str,
+) -> Result<Option<std::collections::HashSet<i64>>> {
+    const MAX_AUTHORS: usize = 500;
+    const MAX_BOOKS: usize = 50_000;
+    let expr = alternatives(t).join(" OR ");
+    let authors: Vec<i64> = {
+        let mut st =
+            conn.prepare_cached("SELECT rowid FROM author_fts WHERE author_fts MATCH ?1 LIMIT ?2")?;
+        st.query_map(rusqlite::params![expr, MAX_AUTHORS as i64 + 1], |r| {
+            r.get(0)
+        })?
+        .collect::<rusqlite::Result<_>>()?
+    };
+    if authors.is_empty() || authors.len() > MAX_AUTHORS {
+        return Ok(None);
+    }
+    let mut st = conn
+        .prepare_cached("SELECT book_id FROM book_author WHERE author_id IN rarray(?1) LIMIT ?2")?;
+    let books: std::collections::HashSet<i64> = st
+        .query_map(
+            rusqlite::params![crate::catalog::id_array(authors), MAX_BOOKS as i64 + 1],
+            |r| r.get(0),
+        )?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok((books.len() <= MAX_BOOKS).then_some(books))
+}
+
+/// Boost (in tiers) of a book whose author matches one query word while another word matches
+/// its title (`азимов роботы` → Азимов's «Роботы зари» before an essay titled «Азимов и
+/// роботы»): above a title phrase match.
+const AUTHOR_TITLE_BOOST: f64 = 1.5;
 
 /// Relevance tiers are added to bm25 (lower = better) in steps of this size.
 const TIER: f64 = 1000.0;
@@ -634,40 +727,80 @@ impl Catalog {
         let any = p.broad.as_deref().unwrap_or(&p.strict);
         if matches!(sq.kind, SearchKind::All | SearchKind::Authors) {
             let mut st = conn.prepare_cached(
-                "SELECT a.id, a.name, a.book_count FROM author a \
+                "SELECT a.id, a.name, a.book_count, a.sort_key, \
+                 a.id IN (SELECT rowid FROM author_fts WHERE author_fts MATCH ?2) FROM author a \
                  WHERE a.id IN (SELECT rowid FROM author_fts WHERE author_fts MATCH ?1) \
-                 ORDER BY substr(a.sort_key, 1, length(?3)) = ?3 DESC, \
-                 a.id IN (SELECT rowid FROM author_fts WHERE author_fts MATCH ?2) DESC, \
-                 a.book_count DESC, a.sort_key LIMIT 20",
+                 AND a.book_count > 0 \
+                 ORDER BY substr(a.sort_key, 1, length(?3)) = ?3 DESC, a.book_count DESC, a.sort_key \
+                 LIMIT ?4",
             )?;
-            res.authors = st
-                .query_map([any, &p.strict, &p.phrase_key], |r| {
-                    Ok(NameCount {
-                        id: r.get(0)?,
-                        name: r.get(1)?,
-                        count: r.get(2)?,
-                    })
-                })?
+            let rows: Vec<(NameCount, String, bool)> = st
+                .query_map(
+                    rusqlite::params![any, &p.strict, &p.phrase_key, NAME_CANDIDATES],
+                    |r| {
+                        Ok((
+                            NameCount {
+                                id: r.get(0)?,
+                                name: r.get(1)?,
+                                count: r.get(2)?,
+                            },
+                            r.get(3)?,
+                            r.get(4)?,
+                        ))
+                    },
+                )?
                 .collect::<rusqlite::Result<_>>()?;
+            let mut ranked: Vec<(u8, NameCount, String, bool)> = rows
+                .into_iter()
+                .map(|(n, key, strict)| (name_rank(&key, &p.tokens), n, key, strict))
+                .collect();
+            ranked.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then(b.1.count.cmp(&a.1.count))
+                    .then(b.3.cmp(&a.3))
+                    .then(a.2.cmp(&b.2))
+                    .then(a.1.id.cmp(&b.1.id))
+            });
+            res.authors = ranked.into_iter().take(20).map(|x| x.1).collect();
         }
         if matches!(sq.kind, SearchKind::All | SearchKind::Series) {
             let mut st = conn.prepare_cached(
-                "SELECT s.id, s.name, s.book_count, s.authors FROM series s \
+                "SELECT s.id, s.name, s.book_count, s.authors, s.sort_key, \
+                 s.id IN (SELECT rowid FROM series_fts WHERE series_fts MATCH ?2) FROM series s \
                  WHERE s.id IN (SELECT rowid FROM series_fts WHERE series_fts MATCH ?1) \
-                 ORDER BY substr(s.sort_key, 1, length(?3)) = ?3 DESC, \
-                 s.id IN (SELECT rowid FROM series_fts WHERE series_fts MATCH ?2) DESC, \
-                 s.book_count DESC, s.sort_key LIMIT 20",
+                 AND s.book_count > 0 \
+                 ORDER BY substr(s.sort_key, 1, length(?3)) = ?3 DESC, s.book_count DESC, s.sort_key \
+                 LIMIT ?4",
             )?;
-            res.series = st
-                .query_map([any, &p.strict, &p.phrase_key], |r| {
-                    Ok(SeriesHit {
-                        id: r.get(0)?,
-                        name: r.get(1)?,
-                        count: r.get(2)?,
-                        authors: r.get(3)?,
-                    })
-                })?
+            let rows: Vec<(SeriesHit, String, bool)> = st
+                .query_map(
+                    rusqlite::params![any, &p.strict, &p.phrase_key, NAME_CANDIDATES],
+                    |r| {
+                        Ok((
+                            SeriesHit {
+                                id: r.get(0)?,
+                                name: r.get(1)?,
+                                count: r.get(2)?,
+                                authors: r.get(3)?,
+                            },
+                            r.get(4)?,
+                            r.get(5)?,
+                        ))
+                    },
+                )?
                 .collect::<rusqlite::Result<_>>()?;
+            let mut ranked: Vec<(u8, SeriesHit, String, bool)> = rows
+                .into_iter()
+                .map(|(n, key, strict)| (name_rank(&key, &p.tokens), n, key, strict))
+                .collect();
+            ranked.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then(b.1.count.cmp(&a.1.count))
+                    .then(b.3.cmp(&a.3))
+                    .then(a.2.cmp(&b.2))
+                    .then(a.1.id.cmp(&b.1.id))
+            });
+            res.series = ranked.into_iter().take(20).map(|x| x.1).collect();
         }
         if matches!(sq.kind, SearchKind::All | SearchKind::Books) {
             let attrs = self.attrs()?;
@@ -684,14 +817,32 @@ impl Catalog {
                 None => None,
             };
             let phrase = Self::fts_ids(conn, "book_fts", &p.phrase)?;
+            // several words: books whose author matches one word and whose title another
+            let by_author: Vec<Option<std::collections::HashSet<i64>>> = if p.tokens.len() >= 2 {
+                p.tokens
+                    .iter()
+                    .map(|t| author_word_books(conn, t))
+                    .collect::<Result<_>>()?
+            } else {
+                Vec::new()
+            };
             for (id, score) in hits.iter_mut() {
-                let tier = if phrase.contains(id) {
+                let mut tier = if phrase.contains(id) {
                     3.0
                 } else if strict.as_ref().is_none_or(|s| s.contains(id)) {
                     2.0
                 } else {
                     1.0
                 };
+                if !by_author.is_empty() {
+                    let author_words = by_author
+                        .iter()
+                        .filter(|b| b.as_ref().is_some_and(|b| b.contains(id)))
+                        .count();
+                    if author_words > 0 && author_words < p.tokens.len() {
+                        tier += AUTHOR_TITLE_BOOST;
+                    }
+                }
                 *score -= tier * TIER;
             }
             let hits: Vec<(i64, f64)> = if sq.rating.has_filter() {
@@ -739,7 +890,9 @@ impl Catalog {
     }
 }
 
-/// Apply filters; count disjunctive facets (each facet ignores its own filter).
+/// Apply filters; count disjunctive facets (each facet ignores its own filter). With
+/// `sq.group` a facet value counts works (distinct work ids), so a facet count is the number
+/// of rows that choosing it leaves.
 fn filter_and_facet(
     a: &BookAttrs,
     hits: &[(i64, f64)],
@@ -777,6 +930,20 @@ fn filter_and_facet(
     let mut g_counts: HashMap<u16, i64> = HashMap::new();
     let mut l_counts = vec![0i64; a.langs.len()];
     let mut e_counts = vec![0i64; a.exts.len()];
+    // with editions grouped a facet counts works (the rows it would leave), like `total`
+    let mut seen: std::collections::HashSet<(u8, u16, u32)> = std::collections::HashSet::new();
+    let mut first = |kind: u8, v: u16, i: usize| -> bool {
+        !sq.group
+            || a.flags[i] & FLAG_SHARED == 0
+            || seen.insert((
+                kind,
+                v,
+                match a.work[i] {
+                    0 => i as u32,
+                    w => w,
+                },
+            ))
+    };
     for &(id, score) in hits {
         let i = id as usize;
         if i >= a.flags.len() || a.flags[i] & FLAG_EXISTS == 0 {
@@ -795,13 +962,15 @@ fn filter_and_facet(
         let e_ok = ext_ok[a.ext[i] as usize];
         if l_ok && e_ok {
             for g in bg {
-                *g_counts.entry(*g).or_default() += 1;
+                if first(0, *g, i) {
+                    *g_counts.entry(*g).or_default() += 1;
+                }
             }
         }
-        if g_ok && e_ok {
+        if g_ok && e_ok && first(1, a.lang[i], i) {
             l_counts[a.lang[i] as usize] += 1;
         }
-        if g_ok && l_ok {
+        if g_ok && l_ok && first(2, a.ext[i], i) {
             e_counts[a.ext[i] as usize] += 1;
         }
         if g_ok && l_ok && e_ok {

@@ -80,12 +80,25 @@ pub async fn login(
         })
         .await?;
     tracing::info!(user = %user.username, "login");
-    let mut r = Json(json!({ "user": user })).into_response();
+    // a first single sign-on waiting for this account's password: link it now
+    let linked = {
+        let (st2, h2, uid) = (st.clone(), headers.clone(), user.id);
+        tokio::task::spawn_blocking(move || crate::api::oidc::finish_pending_link(&st2, &h2, uid))
+            .await
+            .unwrap_or(false)
+    };
+    let mut r = Json(json!({ "user": user, "ssoLinked": linked })).into_response();
     set_header(
         &mut r,
         header::SET_COOKIE,
         &auth::session_cookie(&token, st.secure_cookies(&headers)),
     );
+    if linked {
+        let clear = crate::api::oidc::link_cookie("", 0, st.secure_cookies(&headers));
+        if let Ok(v) = axum::http::HeaderValue::from_str(&clear) {
+            r.headers_mut().append(header::SET_COOKIE, v);
+        }
+    }
     set_header(&mut r, header::CACHE_CONTROL, "no-store");
     Ok(r)
 }

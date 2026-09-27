@@ -38,7 +38,10 @@
   type Header = {
     crumb: string;
     name: string;
+    /** works (list rows with editions grouped) */
     booksCount: number;
+    /** live files, shown when they differ from the works */
+    filesCount?: number;
     seriesCount?: number;
     anthologies?: number;
     /** top co-authors of an author (see AuthorSummary) */
@@ -308,6 +311,9 @@
       if (!bySeries.has(key)) { bySeries.set(key, []); order.push(key); }
       bySeries.get(key)!.push(b);
     }
+    // books outside any series always come last
+    const none = order.indexOf('_none');
+    if (none >= 0) order.push(...order.splice(none, 1));
     return order.map((key) => {
       const list = bySeries.get(key)!;
       const s = key === '_none' ? null : list[0].series!;
@@ -663,7 +669,8 @@
         {#if header.follow}<FollowButton {lib} kind={header.follow.kind} id={header.follow.id} />{/if}
       </div>
       <div class="counts">
-        <span>{tn('browse.booksCount', header.booksCount)}</span>
+        <span data-testid="header-count" title={t('browse.countsHint')}>{tn('browse.booksCount', header.booksCount)}</span>
+        {#if header.filesCount && header.filesCount !== header.booksCount}<span data-testid="header-files">· {tn('browse.filesCount', header.filesCount)}</span>{/if}
         {#if header.seriesCount}<span>· {tn('browse.seriesCount', header.seriesCount)}</span>{/if}
         {#if header.anthologies}<span>· {tn('browse.inAnthologies', header.anthologies)}</span>{/if}
         {#if scope.kind === 'series' && onSendSeries}

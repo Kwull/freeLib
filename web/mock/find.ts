@@ -2,6 +2,7 @@
 // tolerance in search, editions of one work, the start page and follows (docs/web/API.md).
 // Simplified versions of freelib_catalog::{text, vocab, works, home}.
 import { normalize } from './normalize';
+import { phoneticKey } from '../src/lib/utils/phonetic';
 import type { MockBook, MockLibrary } from './gen';
 
 // ---------------------------------------------------------------- user state
@@ -37,14 +38,9 @@ const TR: Record<string, string> = {
   к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'kh', ц: 'ts', ч: 'ch',
   ш: 'sh', щ: 'shch', ъ: '', ь: '', ы: 'y', э: 'e', ю: 'yu', я: 'ya',
 };
-/** Latin key of a normalized word (the server's `word_key`, slightly simplified). */
+/** Latin key of a normalized word: the server's coarse phonetic key (shared code). */
 export function latinKey(w: string): string {
-  let s = [...w].map((c) => TR[c] ?? c).join('').replace(/[^a-z0-9]/g, '');
-  s = s.replace(/tch/g, 'ch').replace(/kh/g, 'h').replace(/ks/g, 'x').replace(/tz|ts|tc/g, 'c')
-    .replace(/j/g, 'y').replace(/iy|ii|yi/g, 'y');
-  if (s.startsWith('ye')) s = 'e' + s.slice(2);
-  s = s.replace(/([aeiou])y([aeiou])/g, '$1$2').replace(/([^aeiou])y([aeiou])/g, '$1i$2').replace(/([aeiou])y$/, '$1i');
-  return s;
+  return phoneticKey(w);
 }
 /** A crude word-form stem (the server uses Snowball Russian / English). */
 export function stem(w: string): string {
@@ -131,10 +127,13 @@ export function correct(lib: MockLibrary, q: string): string | null {
     const k = latinKey(t);
     for (const w of v.keys()) if (w.startsWith(t) || (k.length >= 3 && latinKey(w).startsWith(k))) return t;
     const max = t.length <= 7 ? 1 : 2;
-    let best: [string, number, number] | null = null;
+    // closest first; among equals a word of the query's own script, then the most frequent
+    let best: [string, number, number, boolean] | null = null;
     for (const [w, n] of v) {
-      const d = Math.min(lev(t, w, max), lev(k, latinKey(w), max));
-      if (d <= max && (!best || d < best[1] || (d === best[1] && n > best[2]))) best = [w, d, n];
+      const dw = lev(t, w, max);
+      const d = Math.min(dw, lev(k, latinKey(w), max));
+      const own = dw === d;
+      if (d <= max && (!best || d < best[1] || (d === best[1] && own && !best[3]) || (d === best[1] && own === best[3] && n > best[2]))) best = [w, d, n, own];
     }
     if (!best) return t;
     changed = true;
@@ -322,11 +321,18 @@ export function homeOf(lib: MockLibrary, opts: { days: number | null; ratings: M
     return { g, reason };
   });
   const empty = done.size === 0 && f.authors.size === 0 && f.series.size === 0;
+  // like the server: always there, without the user's works and those shown above; the
+  // window widens (90 days, a year, everything) while it has fewer than 12 well-rated works
+  const shownWorks = new Set(doneWorks);
+  for (const s of continueSeries) for (const g of s.next) shownWorks.add(workKey(g.best));
+  for (const n of newBooks) shownWorks.add(workKey(n.g.best));
+  const star = (b: MockBook) => (b.id * 2654435761 >>> 0) % 6;
   let picks: Grouped[] = [];
-  if (empty || (!continueSeries.length && !newBooks.length)) {
-    const recent = lib.books.filter((b) => !b.deleted && b.date >= daysAgo(30, newest));
-    const star = (b: MockBook) => (b.id * 2654435761 >>> 0) % 6;
-    picks = groupBooks(recent.sort((a, b) => star(b) - star(a) || (a.date < b.date ? 1 : -1))).slice(0, 12);
+  for (const days of [30, 90, 365, 1e6]) {
+    const recent = lib.books.filter((b) => !b.deleted && b.date >= daysAgo(days, newest) && !shownWorks.has(workKey(b)));
+    picks = groupBooks(recent.sort((a, b) => star(b) - star(a) || (a.date < b.date ? 1 : -1)));
+    if (picks.filter((g) => star(g.best) >= 4).length >= 12) break;
   }
+  picks = picks.slice(0, 12);
   return { empty, continueSeries, newBooks, newTotal: groups.length, since, picks, following: { authors: f.authors.size, series: f.series.size } };
 }

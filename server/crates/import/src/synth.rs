@@ -1604,6 +1604,207 @@ fn showcase_books() -> Vec<GenBook> {
         .collect()
 }
 
+/// Fixed books for search and count checks (lib ids 200..): names near «Азимов» that a naive
+/// match ranks above him (Асимова Мария, Агаев Рамин Назимович), a Бережной essay about
+/// Азимов and robots, Latin «Asimov's …» titles, Азимов's robot novels, and his books in the
+/// series «FANTASTIKAS PASAULĖ» and «Fondation» (other languages sort around "Outside
+/// series"), plus a work with one edition in a series and its best copy outside it.
+fn search_showcase_books() -> Vec<GenBook> {
+    let author = |last: &str, first: &str, middle: &str| Author {
+        last: last.into(),
+        first: first.into(),
+        middle: middle.into(),
+    };
+    let asimov = || famous_author(ASIMOV);
+    // (authors, title, series, serno, lang, genre, size, stars)
+    type Row = (
+        Vec<Author>,
+        &'static str,
+        &'static str,
+        Option<usize>,
+        &'static str,
+        &'static str,
+        usize,
+        usize,
+    );
+    let rows: Vec<Row> = vec![
+        (
+            vec![author("Асимова", "Мария", "")],
+            "Сказки для маленьких",
+            "",
+            None,
+            "ru",
+            "child_tale",
+            120_000,
+            0,
+        ),
+        (
+            vec![author("Асимова", "Мария", "")],
+            "Сказки старого леса",
+            "",
+            None,
+            "ru",
+            "child_tale",
+            140_000,
+            3,
+        ),
+        (
+            vec![author("Агаев", "Рамин", "Назимович")],
+            "Беседы о звёздах",
+            "",
+            None,
+            "ru",
+            "sci_cosmos",
+            220_000,
+            0,
+        ),
+        (
+            vec![author("Агаев", "Рамин", "Назимович")],
+            "Небо над Баку",
+            "",
+            None,
+            "ru",
+            "prose_contemporary",
+            310_000,
+            0,
+        ),
+        (
+            vec![author("Бережной", "Сергей", "Валентинович")],
+            "Азимов, роботы и мы",
+            "",
+            None,
+            "ru",
+            "nonf_criticism",
+            90_000,
+            5,
+        ),
+        (
+            vec![author("Dozois", "Gardner", "")],
+            "Asimov's Science Fiction, 1998 No 01",
+            "Asimov's Science Fiction",
+            Some(1),
+            "en",
+            "sf",
+            400_000,
+            0,
+        ),
+        (
+            vec![author("Dozois", "Gardner", "")],
+            "Asimov's Mysteries",
+            "",
+            None,
+            "en",
+            "sf",
+            380_000,
+            0,
+        ),
+        (
+            vec![asimov()],
+            "Роботы зари",
+            "Роботы",
+            Some(3),
+            "ru",
+            "sf",
+            610_000,
+            5,
+        ),
+        (
+            vec![asimov()],
+            "Стальные пещеры",
+            "Роботы",
+            Some(1),
+            "ru",
+            "sf",
+            520_000,
+            5,
+        ),
+        (
+            vec![asimov()],
+            "Обнажённое солнце",
+            "Роботы",
+            Some(2),
+            "ru",
+            "sf",
+            480_000,
+            4,
+        ),
+        (vec![asimov()], "Я, робот", "", None, "ru", "sf", 450_000, 5),
+        (
+            vec![asimov()],
+            "Pamatas",
+            "FANTASTIKAS PASAULĖ",
+            Some(12),
+            "lt",
+            "sf",
+            330_000,
+            0,
+        ),
+        (
+            vec![asimov()],
+            "Fondation",
+            "Fondation",
+            Some(1),
+            "fr",
+            "sf",
+            350_000,
+            0,
+        ),
+        (
+            vec![asimov()],
+            "Fondation et Empire",
+            "Fondation",
+            Some(2),
+            "fr",
+            "sf",
+            360_000,
+            0,
+        ),
+        // one work, two editions: a small one in a publisher series, the best copy outside
+        (
+            vec![asimov()],
+            "Сами боги",
+            "Мир фантастики",
+            Some(7),
+            "ru",
+            "sf",
+            150_000,
+            0,
+        ),
+        (
+            vec![asimov()],
+            "Сами боги",
+            "",
+            None,
+            "ru",
+            "sf",
+            700_000,
+            4,
+        ),
+    ];
+    rows.into_iter()
+        .enumerate()
+        .map(
+            |(j, (authors, title, series, serno, lang, genre, size, stars))| GenBook {
+                authors,
+                genres: vec![genre.to_string()],
+                title: title.to_string(),
+                series: series.to_string(),
+                serno,
+                lib_id: 200 + j,
+                deleted: false,
+                ext: "fb2",
+                date: format!("2019-0{}-1{}", 1 + j % 9, j % 10),
+                lang,
+                stars,
+                keywords: String::new(),
+                cover: j % 2 == 1,
+                size,
+                publish: None,
+            },
+        )
+        .collect()
+}
+
 /// Generate `out` (an `.inpx`) and, optionally, the archives.
 pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
     let n = opts.books;
@@ -1617,7 +1818,9 @@ pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
     let parts = n.div_ceil(per);
     // the last part also carries the showcase books
     let showcase = if opts.showcase {
-        showcase_books()
+        let mut v = showcase_books();
+        v.extend(search_showcase_books());
+        v
     } else {
         Vec::new()
     };

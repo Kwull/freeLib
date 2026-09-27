@@ -17,6 +17,7 @@
   import { isIOS } from '../utils/platform';
   import { showToast } from '../stores/toast.svelte';
   import { shelvesState } from '../stores/shelves.svelte';
+  import { getPref } from '../stores/prefs.svelte';
   import {
     PANE_LIMITS, paneWidth, setPaneWidth, detailsCollapsed, setDetailsCollapsed,
   } from '../stores/layout.svelte';
@@ -59,6 +60,17 @@
     return () => { cancelled = true; };
   });
   $effect(() => { summary?.id; allSeries = false; });
+  // the author's list hides anthologies: the series counts here follow it, so they match
+  // the list's group counts (both count works)
+  const hideAnth = $derived(getPref<boolean>('hideAnthologies', false));
+  const seriesShown = $derived(
+    (summary?.series ?? [])
+      .map((s) => ({ ...s, count: hideAnth ? s.count - s.anthologies : s.count }))
+      .filter((s) => s.count > 0),
+  );
+  const withoutSeriesShown = $derived(
+    summary ? summary.withoutSeries - (hideAnth ? summary.withoutSeriesAnthologies : 0) : 0,
+  );
 
   async function copyText(text: string) {
     try {
@@ -326,6 +338,7 @@
           <p class="stats">
             {[
               tn('browse.booksCount', summary.count),
+              summary.files !== summary.count ? tn('browse.filesCount', summary.files) : '',
               summary.series.length ? tn('browse.seriesCount', summary.series.length) : '',
               summary.anthologies ? tn('browse.inAnthologies', summary.anthologies) : '',
             ].filter(Boolean).join(' · ')}
@@ -353,19 +366,19 @@
               {/each}
             </ul>
           {/if}
-          {#if summary.series.length}
+          {#if seriesShown.length}
             <h4>{t('details.seriesList')}</h4>
-            <ul class="plain">
-              {#each allSeries ? summary.series : summary.series.slice(0, SERIES_SHOWN) as s (s.id)}
+            <ul class="plain" data-testid="summary-series">
+              {#each allSeries ? seriesShown : seriesShown.slice(0, SERIES_SHOWN) as s (s.id)}
                 <li><a href="/l/{lib}/series/{s.id}" data-link title={s.name}>{s.name}</a><span class="n">{s.count}</span></li>
               {/each}
-              {#if summary.withoutSeries}
-                <li class="muted"><span>{t('books.outsideSeries')}</span><span class="n">{summary.withoutSeries}</span></li>
+              {#if withoutSeriesShown}
+                <li class="muted" data-testid="summary-outside"><span>{t('books.outsideSeries')}</span><span class="n">{withoutSeriesShown}</span></li>
               {/if}
             </ul>
-            {#if summary.series.length > SERIES_SHOWN}
+            {#if seriesShown.length > SERIES_SHOWN}
               <button type="button" class="link-btn" onclick={() => (allSeries = !allSeries)}>
-                {allSeries ? t('details.fewerSeries') : t('details.allSeries', { count: summary.series.length })}
+                {allSeries ? t('details.fewerSeries') : t('details.allSeries', { count: seriesShown.length })}
               </button>
             {/if}
           {/if}

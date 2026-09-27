@@ -1,0 +1,466 @@
+{
+ "comment": "phonetic_key (key of the normalized input) and name_rank (normalized name, normalized query words); shared by server/crates/catalog/tests/phonetic_vectors.rs and web/tests-unit/phonetic.test.ts",
+ "keys": [
+  {
+   "input": "asimov",
+   "key": "asimov"
+  },
+  {
+   "input": "azimov",
+   "key": "asimov"
+  },
+  {
+   "input": "asimow",
+   "key": "asimov"
+  },
+  {
+   "input": "azimoff",
+   "key": "asimov"
+  },
+  {
+   "input": "Азимов",
+   "key": "asimov"
+  },
+  {
+   "input": "азимоф",
+   "key": "asimov"
+  },
+  {
+   "input": "Asimoff",
+   "key": "asimov"
+  },
+  {
+   "input": "Асимова",
+   "key": "asimova"
+  },
+  {
+   "input": "Asimov's",
+   "key": "asimovs"
+  },
+  {
+   "input": "Yuri",
+   "key": "iuri"
+  },
+  {
+   "input": "Юрий",
+   "key": "iuri"
+  },
+  {
+   "input": "Jurij",
+   "key": "iuri"
+  },
+  {
+   "input": "Yuriy",
+   "key": "iuri"
+  },
+  {
+   "input": "Majakowski",
+   "key": "maiakovski"
+  },
+  {
+   "input": "Маяковский",
+   "key": "maiakovski"
+  },
+  {
+   "input": "Mayakovsky",
+   "key": "maiakovski"
+  },
+  {
+   "input": "Dostoyevsky",
+   "key": "dostoevski"
+  },
+  {
+   "input": "Достоевский",
+   "key": "dostoevski"
+  },
+  {
+   "input": "Dostojewski",
+   "key": "dostoevski"
+  },
+  {
+   "input": "Andreyev",
+   "key": "andrev"
+  },
+  {
+   "input": "Андреев",
+   "key": "andrev"
+  },
+  {
+   "input": "Andrejew",
+   "key": "andrev"
+  },
+  {
+   "input": "Yevgeny",
+   "key": "evgeni"
+  },
+  {
+   "input": "Евгений",
+   "key": "evgeni"
+  },
+  {
+   "input": "Jewgeni",
+   "key": "evgeni"
+  },
+  {
+   "input": "Semyonov",
+   "key": "semenov"
+  },
+  {
+   "input": "Семёнов",
+   "key": "semenov"
+  },
+  {
+   "input": "Artjom",
+   "key": "artem"
+  },
+  {
+   "input": "Артём",
+   "key": "artem"
+  },
+  {
+   "input": "Fyodor",
+   "key": "fedor"
+  },
+  {
+   "input": "Фёдор",
+   "key": "fedor"
+  },
+  {
+   "input": "Tolstoj",
+   "key": "tolstoi"
+  },
+  {
+   "input": "Толстой",
+   "key": "tolstoi"
+  },
+  {
+   "input": "Tolstoy",
+   "key": "tolstoi"
+  },
+  {
+   "input": "Tolstoi",
+   "key": "tolstoi"
+  },
+  {
+   "input": "Толстая",
+   "key": "tolstaia"
+  },
+  {
+   "input": "Mikhail",
+   "key": "mihail"
+  },
+  {
+   "input": "Михаил",
+   "key": "mihail"
+  },
+  {
+   "input": "Maxim",
+   "key": "maxim"
+  },
+  {
+   "input": "Максим",
+   "key": "maxim"
+  },
+  {
+   "input": "Aleksandr",
+   "key": "alexandr"
+  },
+  {
+   "input": "Alexandr",
+   "key": "alexandr"
+  },
+  {
+   "input": "Strugatsky",
+   "key": "strugacki"
+  },
+  {
+   "input": "Стругацкий",
+   "key": "strugacki"
+  },
+  {
+   "input": "Strugatzki",
+   "key": "strugacki"
+  },
+  {
+   "input": "Strugacki",
+   "key": "strugacki"
+  },
+  {
+   "input": "стругацкие",
+   "key": "strugacke"
+  },
+  {
+   "input": "Chekhov",
+   "key": "qehov"
+  },
+  {
+   "input": "Чехов",
+   "key": "qehov"
+  },
+  {
+   "input": "Tchekhov",
+   "key": "qehov"
+  },
+  {
+   "input": "Tschechow",
+   "key": "qeqov"
+  },
+  {
+   "input": "Shukshin",
+   "key": "wukwin"
+  },
+  {
+   "input": "Шукшин",
+   "key": "wukwin"
+  },
+  {
+   "input": "Schukschin",
+   "key": "wukwin"
+  },
+  {
+   "input": "Zhukov",
+   "key": "wukov"
+  },
+  {
+   "input": "Жуков",
+   "key": "wukov"
+  },
+  {
+   "input": "Щукин",
+   "key": "wukin"
+  },
+  {
+   "input": "Tsvetaeva",
+   "key": "cvetaeva"
+  },
+  {
+   "input": "Цветаева",
+   "key": "cvetaeva"
+  },
+  {
+   "input": "Kassil",
+   "key": "kasil"
+  },
+  {
+   "input": "Кассиль",
+   "key": "kasil"
+  },
+  {
+   "input": "Turgenieff",
+   "key": "turgenev"
+  },
+  {
+   "input": "Тургенев",
+   "key": "turgenev"
+  },
+  {
+   "input": "Philipp",
+   "key": "filip"
+  },
+  {
+   "input": "Филип",
+   "key": "filip"
+  },
+  {
+   "input": "Yakov",
+   "key": "iakov"
+  },
+  {
+   "input": "Яков",
+   "key": "iakov"
+  },
+  {
+   "input": "Jakov",
+   "key": "iakov"
+  },
+  {
+   "input": "Yulia",
+   "key": "iulia"
+  },
+  {
+   "input": "Юлия",
+   "key": "iulia"
+  },
+  {
+   "input": "Julia",
+   "key": "iulia"
+  },
+  {
+   "input": "Gorky",
+   "key": "gorki"
+  },
+  {
+   "input": "Горький",
+   "key": "gorki"
+  },
+  {
+   "input": "Gorkij",
+   "key": "gorki"
+  },
+  {
+   "input": "Агаев",
+   "key": "agaev"
+  },
+  {
+   "input": "Назимович",
+   "key": "nasimoviq"
+  },
+  {
+   "input": "Бережной",
+   "key": "berewnoi"
+  },
+  {
+   "input": "Основание",
+   "key": "osnovane"
+  },
+  {
+   "input": "osnovanie",
+   "key": "osnovane"
+  },
+  {
+   "input": "Fondation",
+   "key": "fondation"
+  },
+  {
+   "input": "FANTASTIKAS",
+   "key": "fantastikas"
+  },
+  {
+   "input": "PASAULĖ",
+   "key": "pasaule"
+  },
+  {
+   "input": "Čapek",
+   "key": "capek"
+  },
+  {
+   "input": "Łem",
+   "key": "lem"
+  },
+  {
+   "input": "Ёжик",
+   "key": "ewik"
+  },
+  {
+   "input": "їжак",
+   "key": "iwak"
+  },
+  {
+   "input": "Євген",
+   "key": "evgen"
+  },
+  {
+   "input": "Ґалаган",
+   "key": "galagan"
+  },
+  {
+   "input": "Ivanov",
+   "key": "ivanov"
+  },
+  {
+   "input": "Иваненко",
+   "key": "ivanenko"
+  },
+  {
+   "input": "Маркс",
+   "key": "marx"
+  },
+  {
+   "input": "Маркес",
+   "key": "markes"
+  },
+  {
+   "input": "1984",
+   "key": "1984"
+  },
+  {
+   "input": "x",
+   "key": "x"
+  },
+  {
+   "input": "ab",
+   "key": "ab"
+  },
+  {
+   "input": "Шехов",
+   "key": "wehov"
+  }
+ ],
+ "ranks": [
+  {
+   "name": "Азимов Айзек",
+   "query": "азимов",
+   "rank": 0
+  },
+  {
+   "name": "Агаев Рамин Назимович",
+   "query": "азимов",
+   "rank": 3
+  },
+  {
+   "name": "Асимова Мария",
+   "query": "asimov",
+   "rank": 1
+  },
+  {
+   "name": "Азимов Айзек",
+   "query": "asimov",
+   "rank": 0
+  },
+  {
+   "name": "Азимов Айзек",
+   "query": "азимоф",
+   "rank": 0
+  },
+  {
+   "name": "Asimov Isaac",
+   "query": "asimov",
+   "rank": 0
+  },
+  {
+   "name": "Айзек Азимов",
+   "query": "азимов",
+   "rank": 2
+  },
+  {
+   "name": "Азимова Мария",
+   "query": "азимов",
+   "rank": 1
+  },
+  {
+   "name": "Стругацкий Аркадий Натанович",
+   "query": "strugatsky",
+   "rank": 0
+  },
+  {
+   "name": "Стругацкий Аркадий Натанович",
+   "query": "аркадий",
+   "rank": 2
+  },
+  {
+   "name": "Стругацкий Аркадий Натанович",
+   "query": "арк",
+   "rank": 3
+  },
+  {
+   "name": "Бережной Сергей",
+   "query": "азимов",
+   "rank": 3
+  },
+  {
+   "name": "Академия Азимов",
+   "query": "азимов",
+   "rank": 2
+  },
+  {
+   "name": "Fondation",
+   "query": "fond",
+   "rank": 1
+  },
+  {
+   "name": "FANTASTIKAS PASAULĖ",
+   "query": "pasaule",
+   "rank": 2
+  }
+ ]
+}

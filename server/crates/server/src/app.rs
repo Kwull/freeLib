@@ -67,6 +67,9 @@ pub async fn init(cfg: Config) -> anyhow::Result<AppState> {
         ),
         None => None,
     };
+    if let Some(p) = crate::extrating::openlibrary::env_proxy() {
+        tracing::info!("Open Library requests go through the proxy {p} (HTTPS_PROXY / HTTP_PROXY)");
+    }
     let http: std::sync::Arc<dyn crate::extrating::openlibrary::HttpGet> = std::sync::Arc::new(
         crate::extrating::openlibrary::ReqwestGet::new(&crate::extrating::openlibrary::user_agent(
             cfg.contact_email.as_deref(),
