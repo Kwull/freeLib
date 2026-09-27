@@ -22,6 +22,11 @@ All presets use: cover generated when missing, annotation page, a new file per c
 of contents at the end (readers open at the "bodymatter" landmark, so it does not delay the
 first page), no drop caps, no transliteration.
 
+The Server folder device starts without a folder (Settings → Devices shows "no folder"). Until
+an administrator sets one (a sub-folder of `FREELIB_EXPORT_DIR`), the send dialog shows it as
+unavailable to readers, administrators type a folder for the export, and the server refuses an
+export without one (400 "… has no folder set").
+
 **Upgrades.** Seeded devices carry a preset version. When a newer server ships better
 defaults, they are applied at startup to every seeded device whose *conversion options* were
 never changed through the API (`device.customized = 0`). Renaming a device or setting its

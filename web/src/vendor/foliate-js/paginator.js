@@ -218,6 +218,7 @@ class View {
     #vertical = false
     #rtl = false
     #column = true
+    #destroyed = false
     #size
     #layout = {}
     constructor({ container, onExpand }) {
@@ -364,6 +365,7 @@ class View {
         }
     }
     expand() {
+        if (this.#destroyed || !this.document) return // freeLib patch: late font/resize callbacks
         const { documentElement } = this.document
         if (this.#column) {
             const side = this.#vertical ? 'height' : 'width'
@@ -420,7 +422,9 @@ class View {
         return this.#overlayer
     }
     destroy() {
-        if (this.document) this.#observer.unobserve(this.document.body)
+        // freeLib patch: disconnect (not just unobserve the body) and ignore late callbacks
+        this.#destroyed = true
+        this.#observer.disconnect()
     }
 }
 
@@ -947,6 +951,8 @@ export class Paginator extends HTMLElement {
         await this.#scrollToPage(newPage + 1, reason)
     }
     #getVisibleRange() {
+        // freeLib patch: late callbacks (resize, fonts, animations) after destroy()
+        if (!this.#view) return null
         if (this.scrolled) return getVisibleRange(this.#view.document,
             this.start + this.#margin, this.end - this.#margin, this.#getRectMapper())
         const size = this.#rtl ? -this.size : this.size
@@ -954,6 +960,7 @@ export class Paginator extends HTMLElement {
             this.start - size, this.end - size, this.#getRectMapper())
     }
     #afterScroll(reason) {
+        if (!this.#view) return // freeLib patch: destroyed
         const range = this.#getVisibleRange()
         this.#lastVisibleRange = range
         // don't set new anchor if relocation was to scroll to anchor
@@ -1113,18 +1120,22 @@ export class Paginator extends HTMLElement {
         } else $style.textContent = styles
 
         // NOTE: needs `requestAnimationFrame` in Chromium
-        requestAnimationFrame(() =>
-            this.#background.style.background = getBackground(this.#view.document))
+        // freeLib patch: `?.` — the view may be destroyed before these run
+        requestAnimationFrame(() => {
+            if (this.#view) this.#background.style.background = getBackground(this.#view.document)
+        })
 
         // needed because the resize observer doesn't work in Firefox
-        this.#view?.document?.fonts?.ready?.then(() => this.#view.expand())
+        this.#view?.document?.fonts?.ready?.then(() => this.#view?.expand())
     }
     focusView() {
         this.#view.document.defaultView.focus()
     }
     destroy() {
-        this.#observer.unobserve(this)
-        this.#view.destroy()
+        // freeLib patch: the observer watches #container (not `this`): disconnect it, or a
+        // resize after leaving the reader renders a destroyed view ("reading 'document'")
+        this.#observer.disconnect()
+        this.#view?.destroy()
         this.#view = null
         this.sections[this.#index]?.unload?.()
         this.#mediaQuery.removeEventListener('change', this.#mediaQueryListener)

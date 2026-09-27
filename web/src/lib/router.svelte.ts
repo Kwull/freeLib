@@ -15,6 +15,16 @@ export function navigate(to: string, opts?: { replace?: boolean }) {
   window.dispatchEvent(new Event('freelib:navigate'));
 }
 
+/** A new query string for the current page (filters, sort): a history entry of its own, but
+ *  open menus and panels stay open (unlike `navigate`). `search` is '' or starts with '?'. */
+export function setSearch(search: string, opts?: { replace?: boolean }) {
+  if (search === location.search) return;
+  const url = `${location.pathname}${search}${location.hash}`;
+  if (opts?.replace) history.replaceState({}, '', url);
+  else history.pushState({}, '', url);
+  routerState.search = search;
+}
+
 window.addEventListener('popstate', () => {
   routerState.path = location.pathname;
   routerState.search = location.search;
@@ -67,6 +77,7 @@ export function parseRoute(path: string, search: string): Route {
     if (rest === 'genres') return { name: 'genres', lib, id: segs[3] ? Number(segs[3]) : null };
     if (rest === 'shelves' && segs[3]) return { name: 'shelf', lib, id: Number(segs[3]) };
     if (rest === 'shelves') return { name: 'shelvesIndex', lib };
+    // facet filters and the sort are in the query too (utils/searchQuery.ts, read by SearchPage)
     if (rest === 'search') return { name: 'search', lib, q: q.get('q') ?? '', exact: q.get('exact') === '1' };
     if (rest === 'book' && segs[3]) return { name: 'book', lib, id: Number(segs[3]) };
     if (rest === 'read' && segs[3]) return { name: 'read', lib, id: Number(segs[3]) };

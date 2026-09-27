@@ -21,5 +21,9 @@
 <style>
   .body { padding: 16px 24px 0; }
   .footer { display: flex; justify-content: flex-end; padding: 16px 24px; }
+  @media (max-width: 560px) {
+    .body { padding: 12px 12px 0; }
+    .footer { padding: 12px; }
+  }
   .secondary { height: 38px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 14px; }
 </style>

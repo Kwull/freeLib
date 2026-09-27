@@ -738,6 +738,9 @@ export function installMockApi(server: Connect.Server) {
             new RegExp('^' + p.toLowerCase().split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$').test(to));
           if (!ok) return fail(res, 403, 'forbidden', `${to} is not an allowed recipient`);
         }
+        if (device.kind === 'folder' && !String(body.target || device.target || '').trim()) {
+          return fail(res, 400, 'bad_request', `the device "${device.name}" has no folder set; choose one in Settings → Devices`);
+        }
         const kind = device.kind === 'email' ? 'send' : device.kind === 'folder' ? 'export' : 'download';
         // "send whole series": the series' live books in reading order (like the server)
         const lib = catalog(Number(body.library) || 1);

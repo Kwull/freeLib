@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, errorText } from '../api/client';
-  import type { AuthorSummary, BookDetail } from '../api/types';
+  import { ApiError, type AuthorSummary, type BookDetail } from '../api/types';
   import Icon from './Icon.svelte';
   import CoverThumb from './CoverThumb.svelte';
   import Rating from './Rating.svelte';
@@ -14,7 +14,9 @@
   import { defaultDevice, devicesState, deviceVerb, deviceCaption, appleBooksDevice, openInBooks } from '../stores/devices.svelte';
   import PhoneDialog from './PhoneDialog.svelte';
   import { dismissable } from '../utils/dismiss';
+  import { popover } from '../utils/popover';
   import { isIOS } from '../utils/platform';
+  import { linkifyHtml } from '../utils/linkifyHtml';
   import { showToast } from '../stores/toast.svelte';
   import { shelvesState } from '../stores/shelves.svelte';
   import {
@@ -34,6 +36,7 @@
   let detail = $state<BookDetail | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  let notFound = $state(false);
   let downloadMenuOpen = $state(false);
   let allAuthors = $state(false);
   let allSeries = $state(false);
@@ -48,13 +51,19 @@
     allAuthors = false;
     downloadMenuOpen = false;
     deviceMenuOpen = false;
+    notFound = false;
     if (bookId === null) { detail = null; error = null; return; }
     let cancelled = false;
     loading = true;
     error = null;
     api.book(lib, bookId)
       .then((d) => { if (!cancelled) detail = d; })
-      .catch((e) => { if (!cancelled) { detail = null; error = errorText(e); } })
+      .catch((e) => {
+        if (cancelled) return;
+        detail = null;
+        notFound = e instanceof ApiError && e.status === 404;
+        error = errorText(e);
+      })
       .finally(() => { if (!cancelled) loading = false; });
     return () => { cancelled = true; };
   });
@@ -146,8 +155,12 @@
         </button>
       {/if}
       {#if bookId !== null && !detail}
-        <div class="empty">
-          {#if error}
+        <div class="empty" data-testid={notFound ? 'book-not-found' : undefined}>
+          {#if notFound}
+            <p class="nf-title">{t('notFound.book')}</p>
+            <p>{t('notFound.bookText')}</p>
+            {#if standalone}<a href="/l/{lib}/home" data-link class="nf-link">{t('notFound.toLibrary')}</a>{/if}
+          {:else if error}
             <p>{t('common.error')}: {error}</p>
           {:else}
             <div class="sk-cover"></div><div class="sk-line"></div><div class="sk-line short"></div>
@@ -186,7 +199,7 @@
                   <Icon name="chevronDown" size={14} />
                 </button>
                 {#if deviceMenuOpen}
-                  <div class="dl-menu dev-menu" role="menu" aria-label={t('details.otherDevice')} use:dismissable={{ onClose: () => (deviceMenuOpen = false), trigger: () => deviceBtn }}>
+                  <div class="dl-menu dev-menu" role="menu" aria-label={t('details.otherDevice')} use:dismissable={{ onClose: () => (deviceMenuOpen = false), trigger: () => deviceBtn }} use:popover={{ anchor: () => deviceBtn?.parentElement, placement: 'bottom-start' }}>
                     {#each devicesState.items as d (d.id)}
                       <button type="button" role="menuitem" onclick={() => { deviceMenuOpen = false; onSend([detail!.id], d.id); }}>
                         <span class="verb">{t(`device.action.${deviceVerb(d)}`)}</span><span class="muted">{deviceCaption(d)}</span>
@@ -207,7 +220,7 @@
                   <Icon name="chevronDown" size={14} />
                 </button>
                 {#if deviceMenuOpen}
-                  <div class="dl-menu dev-menu" role="menu" aria-label={t('details.otherDevice')} use:dismissable={{ onClose: () => (deviceMenuOpen = false), trigger: () => deviceBtn }}>
+                  <div class="dl-menu dev-menu" role="menu" aria-label={t('details.otherDevice')} use:dismissable={{ onClose: () => (deviceMenuOpen = false), trigger: () => deviceBtn }} use:popover={{ anchor: () => deviceBtn?.parentElement, placement: 'bottom-start' }}>
                     {#each devicesState.items as d (d.id)}
                       <button type="button" role="menuitem" onclick={() => { deviceMenuOpen = false; onSend([detail!.id], d.id); }}>
                         <span class="verb">{t(`device.action.${deviceVerb(d)}`)}</span><span class="muted">{deviceCaption(d)}</span>
@@ -224,7 +237,7 @@
               <Icon name="download" size={16} /><Icon name="chevronDown" size={14} />
             </button>
             {#if downloadMenuOpen}
-              <div class="dl-menu" role="menu" aria-label={t('details.downloadAs')} use:dismissable={{ onClose: () => (downloadMenuOpen = false), trigger: () => downloadBtn }}>
+              <div class="dl-menu" role="menu" aria-label={t('details.downloadAs')} use:dismissable={{ onClose: () => (downloadMenuOpen = false), trigger: () => downloadBtn }} use:popover={{ anchor: () => downloadBtn, placement: 'bottom-end' }} data-testid="download-menu">
                 {#each detail.formats as f (f)}
                   <a href={api.fileUrl(lib, detail.id, f)} data-link={false} role="menuitem" onclick={() => (downloadMenuOpen = false)}>{f === 'original' ? `${t('details.original')} (${detail.ext})` : f}</a>
                 {/each}
@@ -257,8 +270,9 @@
         {#if detail.annotation}
           <div class="section">
             <h3>{t('details.annotation')}</h3>
-            <!-- Server sends sanitized HTML limited to <p><em><strong><br>. -->
-            <div class="annotation">{@html detail.annotation}</div>
+            <!-- Server sends sanitized HTML limited to <p><em><strong><br>; plain-text http(s)
+                 URLs in it become links (utils/linkify.ts: DOM-built anchors, no markup injected). -->
+            <div class="annotation" data-testid="annotation">{@html linkifyHtml(detail.annotation)}</div>
           </div>
         {/if}
 
@@ -402,6 +416,8 @@
   .collapse { position: absolute; top: 8px; right: 8px; z-index: 2; }
   .empty { flex-grow: 1; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; padding: 24px; text-align: center; }
   .empty p { margin: 0; }
+  .empty .nf-title { font-family: var(--font-display); font-size: 18px; color: var(--ink); }
+  .nf-link { margin-top: 6px; }
   .sk-cover { width: 112px; height: 168px; border-radius: 4px; background: var(--surface-hover); }
   .sk-line { width: 70%; height: 12px; border-radius: 6px; background: var(--surface-hover); }
   .sk-line.short { width: 40%; }
@@ -451,7 +467,8 @@
   .chip.small { height: 22px; }
   .section { padding: 18px 24px 0; }
   h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
-  .annotation { margin: 0; font-family: var(--font-display); font-size: 14px; line-height: 1.55; color: var(--ink); }
+  .annotation { margin: 0; font-family: var(--font-display); font-size: 14px; line-height: 1.55; color: var(--ink); overflow-wrap: anywhere; }
+  .annotation :global(a) { color: var(--accent); overflow-wrap: anywhere; word-break: break-word; }
   .annotation :global(p) { margin: 0 0 .6em; }
   .meta-list { margin: 18px 24px 24px; padding-top: 14px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 96px minmax(0,1fr); row-gap: 8px; font-size: 13px; }
   .meta-list dt { color: var(--muted); }

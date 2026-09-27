@@ -20,10 +20,11 @@
   import { formatSize, formatDate } from '../utils/format';
   import { normalize } from '../utils/normalize';
   import { dismissable } from '../utils/dismiss';
+  import { popover } from '../utils/popover';
   import { t, tn, i18nState } from '../i18n';
   import { getPref, setPref } from '../stores/prefs.svelte';
   import { myRatings } from '../stores/myRatings.svelte';
-  import { COL_LIMITS, colWidth, setColWidth, type ColKey } from '../stores/layout.svelte';
+  import { COL_LIMITS, colWidth, setColWidth, setDetailsCollapsed, type ColKey } from '../stores/layout.svelte';
   import {
     isSelected, selectedCount, toggle, toggleMany, clear as clearSelection, selectedIds,
   } from '../stores/selection.svelte';
@@ -101,6 +102,10 @@
     new Set<string>(getPref<string[]>(colsPrefKey, scope.kind === 'author' ? [] : ['author'])),
   );
   const hasRatingCol = $derived(RATING_COLS.some((k) => extraColumns.has(k)));
+  /** the user's own column choice for this kind of list (null: never changed, defaults) */
+  const storedColumns = $derived(getPref<string[] | null>(colsPrefKey, null));
+  /** a column the user turned on in the Columns menu (not one of the defaults) */
+  const chosen = (c: OptCol) => (c === 'size' || c === 'added' ? extraColumns.has(c) : !!storedColumns?.includes(c));
   /** Size and Added are on by default, except when rating columns are on (the table then
    *  fits beside the details pane); an explicit choice in the Columns menu wins. */
   function colShown(c: OptCol): boolean {
@@ -159,6 +164,24 @@
   let collapseInitFor = '';
   let lastClickedIndex = -1;
   let listRef = $state<{ reveal: (i: number) => void; resetX: () => void; scrollLeft: () => number } | undefined>();
+  let mobileListRef = $state<{ reveal: (i: number) => void } | undefined>();
+  let tableScroll = $state<HTMLDivElement | undefined>();
+  let mobileWrap = $state<HTMLDivElement | undefined>();
+  let tableWrap = $state<HTMLDivElement | undefined>();
+  /** the table's width, for dropping columns that do not fit */
+  let tableWidth = $state(0);
+  $effect(() => {
+    const el = tableWrap;
+    if (!el) return;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => (tableWidth = el.clientWidth));
+    });
+    tableWidth = el.clientWidth;
+    ro.observe(el);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  });
   // horizontal scroll of a wide table: the header follows the rows
   let headWrap = $state<HTMLDivElement | undefined>();
   let scrolledX = $state(false);
@@ -419,53 +442,178 @@
       onPick(book.id);
     }
     lastClickedIndex = flatIndex;
+    activeKey = keyOf(flatRows[flatIndex]);
   }
 
-  // Keyboard: ↑/↓ move the current book, Space ticks it, ←/→ fold/unfold its series group.
-  function tableKeydown(e: KeyboardEvent) {
-    if ((e.target as HTMLElement).closest('input, button:not(.title-btn), [role=separator]')) return;
-    const rows = flatRows;
-    let cur = rows.findIndex((fr) => fr.kind === 'row' && fr.row.book.id === selectedBookId);
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      const d = e.key === 'ArrowDown' ? 1 : -1;
-      let i = cur < 0 ? (d > 0 ? -1 : rows.length) : cur;
-      do { i += d; } while (i >= 0 && i < rows.length && rows[i].kind !== 'row');
-      if (i >= 0 && i < rows.length) {
-        const fr = rows[i];
-        if (fr.kind === 'row') { onPick(fr.row.book.id); lastClickedIndex = i; }
-        listRef?.reveal(i);
-      }
-    } else if (e.key === ' ' && cur >= 0) {
-      e.preventDefault();
-      const fr = rows[cur];
-      if (fr.kind === 'row') toggle(lib, fr.row.book.id);
-    } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && showGroupHeads && cur >= 0) {
-      const fr = rows[cur];
-      if (fr.kind !== 'row') return;
-      e.preventDefault();
-      if (e.key === 'ArrowLeft') { const s = new Set(collapsed); s.add(fr.groupKey); collapsed = s; }
+  // ---- keyboard: the ARIA grid pattern over the flat rows ---------------------------
+  // ↑/↓ move the current row (group headers and edition rows included), Home/End/PgUp/PgDn
+  // jump, Enter opens (the details pane, reopened if folded; the book page on phones), Space
+  // ticks the checkbox, ←/→ fold/unfold a series group or a work's editions. The current row
+  // is kept by identity (not index), so folding a group above it does not move it.
+  let activeKey = $state<string | null>(null);
+  const keyOf = (fr: FlatRow | undefined): string | null =>
+    !fr ? null : fr.kind === 'group' ? `g:${fr.group.key}` : fr.kind === 'row' ? `r:${fr.row.book.id}` : `e:${fr.of}:${fr.ed.id}`;
+  const activeIndex = $derived.by(() => {
+    if (activeKey !== null) {
+      const i = flatRows.findIndex((fr) => keyOf(fr) === activeKey);
+      if (i >= 0) return i;
     }
+    return selectedBookId === null ? -1
+      : flatRows.findIndex((fr) => (fr.kind === 'row' && fr.row.book.id === selectedBookId) || (fr.kind === 'edition' && fr.ed.id === selectedBookId));
+  });
+  // a book picked elsewhere (search, deep link, the details pane) becomes the current row
+  $effect(() => {
+    const id = selectedBookId;
+    untrack(() => {
+      const cur = flatRows[activeIndex];
+      const curId = cur?.kind === 'row' ? cur.row.book.id : cur?.kind === 'edition' ? cur.ed.id : null;
+      if (id !== null && curId !== id) activeKey = null;
+    });
+  });
+  const rowDomId = (i: number) => `books-${lib}-row-${i}`;
+
+  function moveTo(i: number) {
+    const rows = flatRows;
+    if (!rows.length) return;
+    i = Math.max(0, Math.min(rows.length - 1, i));
+    const fr = rows[i];
+    activeKey = keyOf(fr);
+    lastClickedIndex = i;
+    // the current book follows (details pane); a group header only takes the cursor, and on
+    // phones picking a book opens its page, so there the cursor moves alone
+    if (!isMobile) {
+      if (fr.kind === 'row') onPick(fr.row.book.id);
+      else if (fr.kind === 'edition') onPick(fr.ed.id);
+    }
+    listRef?.reveal(i);
+    mobileListRef?.reveal(i);
+  }
+  function openRow(fr: FlatRow) {
+    if (fr.kind === 'group') { toggleCollapse(fr.group.key); return; }
+    const id = fr.kind === 'row' ? fr.row.book.id : fr.ed.id;
+    if (!isMobile) setDetailsCollapsed(false);
+    onPick(id);
+  }
+  function pageRows(): number {
+    const h = (isMobile ? mobileWrap : tableScroll)?.clientHeight ?? 400;
+    return Math.max(1, Math.floor(h / (isMobile ? 64 : ROW_H)) - 1);
+  }
+  function revealActive() {
+    tick().then(() => { if (activeIndex >= 0) { listRef?.reveal(activeIndex); mobileListRef?.reveal(activeIndex); } });
+  }
+
+  function tableKeydown(e: KeyboardEvent) {
+    const target = e.target as HTMLElement;
+    // typing in the find box, the sort select and the column splitters keep their keys
+    if (target.closest('input:not([type=checkbox]), select, [role=separator]')) return;
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const rows = flatRows;
+    const cur = activeIndex;
+    const fr = cur >= 0 ? rows[cur] : undefined;
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); moveTo(cur < 0 ? 0 : cur + 1); return;
+      case 'ArrowUp': e.preventDefault(); moveTo(cur < 0 ? 0 : cur - 1); return;
+      case 'Home': e.preventDefault(); moveTo(0); return;
+      case 'End': e.preventDefault(); moveTo(rows.length - 1); return;
+      case 'PageDown': e.preventDefault(); moveTo(Math.max(0, cur) + pageRows()); return;
+      case 'PageUp': e.preventDefault(); moveTo(Math.max(0, cur) - pageRows()); return;
+    }
+    if (!fr) return;
+    // a focused checkbox, link or button (other than a title) handles Space / Enter itself
+    const own = target.closest('input[type=checkbox], a, button:not(.title-btn)');
+    if (e.key === 'Enter') {
+      if (own) return;
+      e.preventDefault();
+      openRow(fr);
+    } else if (e.key === ' ') {
+      if (own) return;
+      e.preventDefault();
+      if (fr.kind === 'row') toggle(lib, fr.row.book.id);
+      else if (fr.kind === 'edition') toggle(lib, fr.ed.id);
+      else toggleGroup(fr.group.rows.map((r) => r.book.id));
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const open = e.key === 'ArrowRight';
+      e.preventDefault();
+      if (fr.kind === 'group') {
+        const isOpen = !effectiveCollapsed.has(fr.group.key);
+        if (open !== isOpen) toggleCollapse(fr.group.key);
+        else if (open && rows[cur + 1]) moveTo(cur + 1);
+      } else if (fr.kind === 'row') {
+        const id = fr.row.book.id;
+        if (open) {
+          if (fr.row.book.editions && !openEditions.has(id)) toggleEditions(id);
+        } else if (openEditions.has(id)) {
+          toggleEditions(id);
+        } else if (showGroupHeads) {
+          // up to the series header, folded
+          const s2 = new Set(collapsed); s2.add(fr.groupKey); collapsed = s2;
+          activeKey = `g:${fr.groupKey}`;
+          revealActive();
+        }
+      } else if (!open) {
+        // an edition: back to its work, the editions folded
+        const parent = fr.of;
+        toggleEditions(parent);
+        activeKey = `r:${parent}`;
+        if (!isMobile) onPick(parent);
+        revealActive();
+      }
+    }
+  }
+
+  /** A cover in the grid: the current book with its details shown, like a table row (the
+   *  details pane reopens if it was folded away; on phones onPick opens the book page). */
+  function pickCard(b: Book) {
+    if (!isMobile) setDetailsCollapsed(false);
+    activeKey = `r:${b.id}`;
+    onPick(b.id);
   }
 
   // ---- columns ---------------------------------------------------------------------
   let liveCols = $state<Partial<Record<ColKey, number>>>({});
   const showNum = $derived(fullScope);
   type Col = ColKey | 'title';
+  /** the rating column a rating sort is about: shown while sorting by it */
+  const sortCol = $derived<OptCol | null>(
+    sort === 'myRating' ? 'rating' : sort === 'libRating' ? 'libRating' : sort === 'extRating' ? 'extRating' : null,
+  );
+  /** columns asked for (the Columns menu, defaults, the sorted-by rating — that one right
+   *  after the title, so a rating sort always shows its column without scrolling sideways) */
+  const wantedCols = $derived.by(() => {
+    const cols = OPT_COLUMNS.filter((k) => (colShown(k) || k === sortCol) && k !== sortCol);
+    return sortCol ? [sortCol, ...cols] : cols;
+  });
+  /** below this width the table scrolls sideways instead of squeezing the title */
+  const w = (k: ColKey) => liveCols[k] ?? colWidth(k);
+  const TITLE_MIN = 220;
+  const widthOf = (cols: Col[]) =>
+    32 + TITLE_MIN + cols.filter((c) => c !== 'title').reduce((n, c) => n + w(c as ColKey), 0) + 8 * cols.length + 28;
+  /** A narrow pane drops the default columns it has no room for (least useful first) so the
+   *  title keeps its minimum width. Columns the user chose in the Columns menu stay (a wide
+   *  table scrolls sideways, checkbox and title fixed), and so does the sorted-by column. */
+  const DROP_ORDER: OptCol[] = ['language', 'format', 'genre', 'size', 'added', 'extRating', 'libRating', 'rating', 'series', 'author'];
+  const autoHidden = $derived.by(() => {
+    const hidden = new Set<OptCol>();
+    if (!tableWidth) return hidden;
+    const room = tableWidth - 16; // the rows' scrollbar gutter
+    const base: Col[] = showNum ? ['num', 'title'] : ['title'];
+    const shown = () => [...base, ...wantedCols.filter((c) => !hidden.has(c))];
+    for (const c of DROP_ORDER) {
+      if (widthOf(shown()) <= room) break;
+      if (c === sortCol || chosen(c) || !wantedCols.includes(c)) continue;
+      hidden.add(c);
+    }
+    return hidden;
+  });
   const columns = $derived.by<Col[]>(() => {
     const c: Col[] = [];
     if (showNum) c.push('num');
     c.push('title');
-    for (const k of ['author', 'series', 'genre', 'language', 'format', 'size', 'added', 'rating', 'libRating', 'extRating'] as const) if (colShown(k)) c.push(k);
+    for (const k of wantedCols) if (!autoHidden.has(k)) c.push(k);
     return c;
   });
   const titleIndex = $derived(columns.indexOf('title'));
-  /** below this width the table scrolls sideways instead of squeezing the title */
-  const w = (k: ColKey) => liveCols[k] ?? colWidth(k);
-  const TITLE_MIN = 220;
-  const tableMinWidth = $derived(
-    32 + TITLE_MIN + columns.filter((c) => c !== 'title').reduce((n, c) => n + w(c as ColKey), 0) + 8 * columns.length + 28,
-  );
+  const tableMinWidth = $derived(widthOf(columns));
   /** left offsets of the sticky checkbox, # and Title cells (row padding 16, gaps 8) */
   const stickyNum = 16 + 32 + 8;
   const stickyTitle = $derived(showNum ? stickyNum + w('num') + 8 : stickyNum);
@@ -481,7 +629,8 @@
 
   function toggleColumn(c: OptCol) {
     const s = new Set(extraColumns);
-    const on = colShown(c);
+    // a default column dropped for lack of room: ticking it asks for it (it then stays)
+    const on = colShown(c) && !autoHidden.has(c);
     s.delete(c); s.delete(`!${c}`);
     if (c === 'size' || c === 'added') s.add(on ? `!${c}` : c);
     else if (!on) s.add(c);
@@ -558,7 +707,7 @@
 
 {#snippet filterMenu(phone: boolean)}
   <div class="col-menu" class:phone-menu={phone} role="menu" aria-label={t('books.filter')} data-testid="filter-menu"
-    use:dismissable={{ onClose: () => (filterMenuOpen = false), trigger: () => filterBtn }}>
+    use:dismissable={{ onClose: () => (filterMenuOpen = false), trigger: () => filterBtn }} use:popover={{ anchor: () => filterBtn, placement: phone ? 'bottom-end' : 'bottom-start' }}>
     <label class="menu-check"><input type="checkbox" bind:checked={showDeleted} />{t('books.showDeleted')}</label>
     <label class="menu-check" title={t('editions.groupHint')}><input type="checkbox" data-testid="group-editions" checked={groupEditions} onchange={() => setPref('groupEditions', !groupEditions)} />{t('editions.group')}</label>
     {#if availableLangs.length > 1 || langFilter}
@@ -596,30 +745,33 @@
 {/snippet}
 
 {#snippet card(b: Book)}
-  <button type="button" class="cover-card" class:selected={b.id === selectedBookId} onclick={() => onPick(b.id)} title={b.title}>
-    <div class="cover-wrap">
-      <CoverThumb {lib} bookId={b.id} title={b.title} width={140} height={200} />
-      {#if isSelected(lib, b.id)}
-        <span class="check-badge"><Icon name="check" size={14} /></span>
-      {/if}
-      <input
-        type="checkbox"
-        class="grid-check"
-        aria-label={t('books.select', { title: b.title })}
-        checked={isSelected(lib, b.id)}
-        onclick={(e) => e.stopPropagation()}
-        onchange={() => toggle(lib, b.id)}
-      />
-    </div>
-    <span class="cover-title">{#if grouped && b.serno}<span class="cover-no">#{b.serno}</span> {/if}{b.title}</span>
-    {#if b.kidsAge !== null && b.kidsAge !== undefined || b.extRating || b.editions}
-      <span class="cover-rate">
-        {#if b.editions}<span class="tag ed-count" title={t('editions.toggleHint')}>{tn('editions.count', b.editions.count)}</span>{/if}
-        <KidsBadge age={b.kidsAge} />{#if b.extRating}<ExtRating value={b.extRating} />{/if}
+  <!-- a click on the card (cover, title) makes it the current book and shows its details, like
+       a table row; the checkbox (a sibling, not nested in the button) ticks it for batch -->
+  <div class="cover-card" class:selected={b.id === selectedBookId} class:checked={isSelected(lib, b.id)} data-testid="cover-card">
+    <button type="button" class="card-open" aria-current={b.id === selectedBookId ? 'true' : undefined} onclick={() => pickCard(b)} title={b.title}>
+      <span class="cover-wrap">
+        <CoverThumb {lib} bookId={b.id} title={b.title} width={140} height={200} />
       </span>
+      <span class="cover-title">{#if grouped && b.serno}<span class="cover-no">#{b.serno}</span> {/if}{b.title}</span>
+      {#if b.kidsAge !== null && b.kidsAge !== undefined || b.extRating || b.editions}
+        <span class="cover-rate">
+          {#if b.editions}<span class="tag ed-count" title={t('editions.toggleHint')}>{tn('editions.count', b.editions.count)}</span>{/if}
+          <KidsBadge age={b.kidsAge} />{#if b.extRating}<ExtRating value={b.extRating} />{/if}
+        </span>
+      {/if}
+      {#if scope.kind !== 'author'}<span class="cover-sub">{authorsShort(b)}</span>{/if}
+    </button>
+    {#if isSelected(lib, b.id)}
+      <span class="check-badge" aria-hidden="true"><Icon name="check" size={14} /></span>
     {/if}
-    {#if scope.kind !== 'author'}<span class="cover-sub">{authorsShort(b)}</span>{/if}
-  </button>
+    <input
+      type="checkbox"
+      class="grid-check"
+      aria-label={t('books.select', { title: b.title })}
+      checked={isSelected(lib, b.id)}
+      onchange={() => toggle(lib, b.id)}
+    />
+  </div>
 {/snippet}
 
 {#snippet colHead(c: Col, i: number)}
@@ -749,11 +901,12 @@
         </button>
         {#if columnMenuOpen}
           <div class="col-menu" role="menu" aria-label={t('books.columns')} data-testid="columns-menu"
-            use:dismissable={{ onClose: () => (columnMenuOpen = false), trigger: () => columnBtn }}>
+            use:dismissable={{ onClose: () => (columnMenuOpen = false), trigger: () => columnBtn }} use:popover={{ anchor: () => columnBtn, placement: 'bottom-end' }}>
             {#each OPT_COLUMNS as c (c)}
-              <label>
-                <input type="checkbox" checked={colShown(c)} onchange={() => toggleColumn(c)} />
+              <label class:dim={autoHidden.has(c)} title={autoHidden.has(c) ? t('books.colNoRoom') : c === sortCol && !colShown(c) ? t('books.colSorted') : undefined}>
+                <input type="checkbox" checked={(colShown(c) && !autoHidden.has(c)) || c === sortCol} disabled={c === sortCol} onchange={() => toggleColumn(c)} />
                 {t(`books.col.${c}`)}
+                {#if autoHidden.has(c)}<span class="col-note">{t('books.colNoRoomShort')}</span>{:else if c === sortCol}<span class="col-note">{t('books.colSortedShort')}</span>{/if}
               </label>
             {/each}
           </div>
@@ -789,18 +942,21 @@
       {/if}
     </div>
   {:else if isMobile}
-    <div class="mobile-list">
-      <VirtualList items={flatRows} itemHeight={64} overscan={6} onRangeChange={onRowRangeChange}>
-        {#snippet row(fr)}
+    <!-- keyboard (↑/↓, Enter, Space, ←/→): tableKeydown, as in the table -->
+    <div class="mobile-list" bind:this={mobileWrap} role="grid" tabindex="-1" aria-label={t('books.list')}
+      aria-activedescendant={activeIndex >= 0 ? rowDomId(activeIndex) : undefined} onkeydown={tableKeydown}>
+      <VirtualList bind:this={mobileListRef} items={flatRows} itemHeight={64} overscan={6} onRangeChange={onRowRangeChange}>
+        {#snippet row(fr, fi)}
           {#if fr.kind === 'group'}
-            <button type="button" class="m-group" aria-expanded={!effectiveCollapsed.has(fr.group.key)} onclick={() => toggleCollapse(fr.group.key)}>
+            <button type="button" class="m-group" id={rowDomId(fi)} class:cursor={fi === activeIndex} aria-expanded={!effectiveCollapsed.has(fr.group.key)} onclick={() => { activeKey = keyOf(fr); toggleCollapse(fr.group.key); }}>
               <span class="chev" class:open={!effectiveCollapsed.has(fr.group.key)}><Icon name="chevronRight" size={14} /></span>
               <span class="gname">{fr.group.name}</span><span class="gcount">{fr.group.count}</span>
             </button>
           {:else if fr.kind === 'edition'}
             {@const e = fr.ed}
-            <div class="m-row m-edition" role="row" tabindex="0" data-testid="edition-row" class:checked={isSelected(lib, e.id)}
-              onclick={() => onPick(e.id)} onkeydown={(ev) => { if (ev.key === 'Enter') onPick(e.id); }}>
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <div class="m-row m-edition" role="row" tabindex="-1" id={rowDomId(fi)} data-testid="edition-row" class:checked={isSelected(lib, e.id)} class:cursor={fi === activeIndex}
+              onclick={() => { activeKey = keyOf(fr); onPick(e.id); }}>
               <span class="ed-mark"><Icon name="layers" size={14} /></span>
               <div class="m-info">
                 {#if differentTitle(e, fr.ofTitle)}<span class="m-ed-title" data-testid="edition-title">{e.title}</span>{/if}
@@ -811,14 +967,16 @@
             </div>
           {:else}
             {@const r = fr.row}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div
               class="m-row"
               role="row"
-              tabindex="0"
+              tabindex={fi === Math.max(0, activeIndex) ? 0 : -1}
+              id={rowDomId(fi)}
               class:checked={isSelected(lib, r.book.id)}
               class:deleted={r.book.deleted}
-              onclick={() => onPick(r.book.id)}
-              onkeydown={(e) => { if (e.key === 'Enter') onPick(r.book.id); }}
+              class:cursor={fi === activeIndex}
+              onclick={() => { activeKey = keyOf(fr); onPick(r.book.id); }}
             >
               <CoverThumb {lib} bookId={r.book.id} title={r.book.title} width={36} height={52} />
               <div class="m-info">
@@ -838,7 +996,7 @@
       </VirtualList>
     </div>
   {:else if view === 'table'}
-    <div class="table-wrap" class:scrolled-x={scrolledX} style="--sticky-num: {stickyNum}px; --sticky-title: {stickyTitle}px">
+    <div class="table-wrap" bind:this={tableWrap} class:scrolled-x={scrolledX} style="--sticky-num: {stickyNum}px; --sticky-title: {stickyTitle}px">
       <div class="head-wrap" bind:this={headWrap}>
         <div class="brow head" role="row" style="grid-template-columns: {gridColumns}; min-width: {tableMinWidth}px">
           <span class="cell-check"><input type="checkbox" aria-label={t('books.selectAll')} checked={allChecked} onchange={toggleAll} /></span>
@@ -846,12 +1004,14 @@
         </div>
       </div>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <div class="scroll" tabindex="0" role="grid" aria-label={t('books.list')} onkeydown={tableKeydown}>
+      <div class="scroll" bind:this={tableScroll} tabindex="0" role="grid" aria-label={t('books.list')} data-testid="books-grid"
+        aria-activedescendant={activeIndex >= 0 ? rowDomId(activeIndex) : undefined} onkeydown={tableKeydown}>
         <VirtualList bind:this={listRef} items={flatRows} itemHeight={ROW_H} onRangeChange={onRowRangeChange} scrollX {onScrollX}>
           {#snippet row(fr, fi)}
             {#if fr.kind === 'group'}
               {@const open = !effectiveCollapsed.has(fr.group.key)}
-              <div class="group-head" role="row">
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <div class="group-head" role="row" tabindex="-1" id={rowDomId(fi)} class:cursor={fi === activeIndex} aria-expanded={open} data-testid="group-row" onclick={() => (activeKey = keyOf(fr))}>
                 <input
                   type="checkbox"
                   aria-label={t('books.selectGroup', { name: fr.group.name })}
@@ -870,9 +1030,9 @@
             {:else if fr.kind === 'edition'}
               {@const e = fr.ed}
               <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <div class="brow edition-row" role="row" tabindex="-1" data-testid="edition-row"
-                class:selected={e.id === selectedBookId} class:checked={isSelected(lib, e.id)} class:deleted={e.deleted}
-                style="grid-template-columns: {gridColumns}; min-width: {tableMinWidth}px" onclick={() => onPick(e.id)}>
+              <div class="brow edition-row" role="row" tabindex="-1" data-testid="edition-row" id={rowDomId(fi)}
+                class:selected={e.id === selectedBookId} class:checked={isSelected(lib, e.id)} class:deleted={e.deleted} class:cursor={fi === activeIndex}
+                style="grid-template-columns: {gridColumns}; min-width: {tableMinWidth}px" onclick={() => { activeKey = keyOf(fr); lastClickedIndex = fi; onPick(e.id); }}>
                 <span class="cell-check"><input type="checkbox" aria-label={t('books.select', { title: e.title })} checked={isSelected(lib, e.id)}
                   onclick={(ev) => ev.stopPropagation()} onchange={() => toggle(lib, e.id)} /></span>
                 {#each columns as c (c)}
@@ -896,6 +1056,10 @@
                 class="brow"
                 role="row"
                 tabindex="-1"
+                id={rowDomId(fi)}
+                data-testid="book-row"
+                aria-selected={b.id === selectedBookId}
+                class:cursor={fi === activeIndex}
                 class:selected={b.id === selectedBookId}
                 class:checked={isSelected(lib, b.id)}
                 class:deleted={b.deleted}
@@ -1041,6 +1205,11 @@
   .col-chooser .col-menu { left: auto; right: 0; }
   .col-menu label { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 6px; border-radius: 4px; }
   .col-menu label:hover { background: var(--surface-hover); }
+  .col-menu label.dim { color: var(--muted); }
+  .col-note { margin-left: auto; padding-left: 10px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  /* the keyboard cursor (ARIA grid): a ring on the current row while the list has focus */
+  .scroll:focus-within .cursor, .mobile-list:focus-within .cursor { box-shadow: inset 0 0 0 2px var(--focus); }
+  .mobile-list { outline: none; }
   .menu-check { border-bottom: 1px solid var(--line-soft); padding-bottom: 8px !important; margin-bottom: 4px; }
   .menu-group-title { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 6px 6px 2px; }
   .view-toggle { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
@@ -1131,12 +1300,13 @@
   .cover-no { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: .3em; }
   .ed-count { color: var(--accent-soft-ink); background: var(--accent-soft); }
   .grid-sentinel { grid-column: 1 / -1; height: 24px; text-align: center; font-size: 12px; color: var(--muted); }
-  .cover-card { all: unset; display: flex; flex-direction: column; gap: 4px; cursor: pointer; min-width: 0; }
-  .cover-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }
-  .cover-wrap { position: relative; margin-bottom: 4px; }
+  .cover-card { position: relative; min-width: 0; }
+  .card-open { all: unset; box-sizing: border-box; width: 100%; display: flex; flex-direction: column; gap: 4px; cursor: pointer; min-width: 0; }
+  .card-open:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; border-radius: 4px; }
+  .cover-wrap { position: relative; margin-bottom: 4px; display: block; }
   .cover-wrap :global(.cover) { width: 100% !important; aspect-ratio: 2/3; height: auto !important; }
   .cover-card.selected .cover-wrap :global(.cover) { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .check-badge { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 11px; background: #FFF; display: flex; align-items: center; justify-content: center; color: var(--accent); }
+  .check-badge { position: absolute; top: 8px; right: 8px; pointer-events: none; width: 22px; height: 22px; border-radius: 11px; background: #FFF; display: flex; align-items: center; justify-content: center; color: var(--accent); }
   .grid-check { position: absolute; top: 8px; left: 8px; width: 16px; height: 16px; }
   .cover-title { font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
   .cover-rate { display: flex; align-items: center; gap: 6px; }

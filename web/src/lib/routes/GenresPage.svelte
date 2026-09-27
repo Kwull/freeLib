@@ -6,6 +6,7 @@
   import SendDialog from '../components/SendDialog.svelte';
   import ShelfDialog from '../components/ShelfDialog.svelte';
   import Splitter from '../components/Splitter.svelte';
+  import NotFoundCard from '../components/NotFoundCard.svelte';
   import { navigate } from '../router.svelte';
   import { t, i18nState } from '../i18n';
   import { PANE_LIMITS, paneWidth, setPaneWidth } from '../stores/layout.svelte';
@@ -13,13 +14,14 @@
   let { lib, id }: { lib: number; id: number | null } = $props();
 
   let genres = $state<Genre[]>([]);
+  let genresLoaded = $state(false);
   let selectedBookId = $state<number | null>(null);
   let send = $state<{ ids: number[]; device?: number } | null>(null);
   let liveWidth = $state<number | null>(null);
   const treeWidth = $derived(liveWidth ?? paneWidth('list'));
   let shelfIds = $state<number[] | null>(null);
 
-  $effect(() => { const lang = i18nState.lang; api.genres(lib, lang).then((g) => (genres = g)).catch(() => {}); });
+  $effect(() => { const lang = i18nState.lang; api.genres(lib, lang).then((g) => { genres = g; genresLoaded = true; }).catch(() => {}); });
   $effect(() => { selectedBookId = null; });
 
   let genreQuery = $state('');
@@ -55,6 +57,34 @@
       : undefined,
   );
 
+  function treeKeydown(e: KeyboardEvent) {
+    const cur = (e.target as HTMLElement).closest<HTMLAnchorElement>('a.row');
+    if (!cur || e.altKey || e.ctrlKey || e.metaKey) return;
+    const rows = [...(e.currentTarget as HTMLElement).querySelectorAll<HTMLAnchorElement>('a.row')];
+    const i = rows.indexOf(cur);
+    let to: number | null = null;
+    if (e.key === 'ArrowDown') to = i + 1;
+    else if (e.key === 'ArrowUp') to = i - 1;
+    else if (e.key === 'Home') to = 0;
+    else if (e.key === 'End') to = rows.length - 1;
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      const pid = Number(cur.dataset.parent);
+      const want = e.key === 'ArrowRight';
+      if (pid) {
+        e.preventDefault();
+        if (isOpen(pid) !== want) toggleOpen(pid);
+        else if (want) to = i + 1;
+      } else if (!want) {
+        // a sub-genre: up to its group
+        e.preventDefault();
+        for (let j = i - 1; j >= 0; j--) if (rows[j].dataset.parent) { rows[j].focus(); break; }
+      }
+    }
+    if (to === null) return;
+    e.preventDefault();
+    rows[Math.max(0, Math.min(rows.length - 1, to))]?.focus();
+  }
+
   function pickBook(bid: number) {
     selectedBookId = bid;
     if (window.innerWidth < 900) navigate(`/l/${lib}/book/${bid}`);
@@ -70,7 +100,8 @@
       </label>
       <label class="hide-empty"><input type="checkbox" bind:checked={hideEmpty} />{t('genres.hideEmpty')}</label>
     </div>
-    <div class="scroll">
+    <!-- ↑/↓/Home/End move between the genres, ←/→ fold/unfold a group, Enter opens -->
+    <div class="scroll" role="presentation" onkeydown={treeKeydown}>
       {#each top as g (g.id)}
         {@const kids = childrenOf(g.id)}
         {#if !filtering || kids.length || matches(g)}
@@ -78,7 +109,7 @@
             <button type="button" class="exp" aria-label={g.name} aria-expanded={isOpen(g.id)} onclick={() => toggleOpen(g.id)}>
               <span class="chev" class:open={isOpen(g.id)}>›</span>
             </button>
-            <a href="/l/{lib}/genres/{g.id}" data-link class="row parent" class:active={g.id === id} class:zero={g.count === 0}>{g.name}<span class="n">{g.count}</span></a>
+            <a href="/l/{lib}/genres/{g.id}" data-link data-parent={g.id} class="row parent" class:active={g.id === id} class:zero={g.count === 0}>{g.name}<span class="n">{g.count}</span></a>
           </div>
           {#if isOpen(g.id)}
             {#each kids as c (c.id)}
@@ -112,6 +143,8 @@
       onCounts={(c) => (liveBooksCount = c.books)}
     />
     <DetailsPane {lib} bookId={selectedBookId} onSend={(ids, device) => (send = { ids, device })} onAddShelf={(ids) => (shelfIds = ids)} />
+  {:else if id !== null && genresLoaded}
+    <NotFoundCard {lib} title={t('notFound.genre')} back="/l/{lib}/genres" />
   {:else}
     <div class="placeholder">{t('genres.pick')}</div>
   {/if}
@@ -140,6 +173,7 @@
   .row.child { padding-left: 32px; font-size: 13px; color: var(--muted-2); }
   .row:hover { background: var(--surface-hover); text-decoration: none; }
   .row.active { background: var(--accent-soft); color: var(--accent-soft-ink); font-weight: 500; }
+  .row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
   .n { color: var(--muted); font-size: 12px; }
   .placeholder { flex-grow: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); background: var(--surface); }
   @media (max-width: 900px) {

@@ -1,30 +1,61 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import Icon from './Icon.svelte';
+  import { recentPopupTrigger } from '../utils/dismiss';
 
   let {
     open, titleId, title, onClose, width = 640, children,
   }: { open: boolean; titleId: string; title: string; onClose: () => void; width?: number; children: Snippet } = $props();
 
   let dialogEl: HTMLDivElement | undefined = $state();
-  let lastFocused: HTMLElement | null = null;
 
+  const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  function focusables(): HTMLElement[] {
+    if (!dialogEl) return [];
+    return [...dialogEl.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0);
+  }
+
+  // Focus moves into the dialog when it opens, stays inside while it is open (Tab wraps, focus
+  // that escapes is pulled back) and returns to the opener when it closes — also when the
+  // dialog is closed by unmounting its owner ({#if …}<Dialog open={true}>). An opener that is
+  // gone (a menu item of a closed menu) hands over to that menu's trigger.
   $effect(() => {
-    if (open) {
-      lastFocused = document.activeElement as HTMLElement;
-      queueMicrotask(() => dialogEl?.querySelector<HTMLElement>('[autofocus], button, input, a[href]')?.focus());
-    } else {
-      lastFocused?.focus();
-    }
+    if (!open) return;
+    let opener = document.activeElement as HTMLElement | null;
+    if (!opener || opener === document.body || !opener.isConnected) opener = recentPopupTrigger();
+    queueMicrotask(() => {
+      if (!dialogEl) return;
+      const first = dialogEl.querySelector<HTMLElement>('[autofocus]:not([disabled])') ?? focusables()[0] ?? dialogEl;
+      first.focus();
+    });
+    const keepInside = (e: FocusEvent) => {
+      const to = e.target as Node | null;
+      if (!dialogEl || !to || dialogEl.contains(to)) return;
+      // another top-layer popup (a menu) opened from inside the dialog is fine
+      if ((to as HTMLElement).closest?.('[data-fl-popover]')) return;
+      (focusables()[0] ?? dialogEl).focus();
+    };
+    document.addEventListener('focusin', keepInside);
+    return () => {
+      document.removeEventListener('focusin', keepInside);
+      const back = opener && opener.isConnected ? opener : recentPopupTrigger();
+      // after the dialog's DOM is gone
+      queueMicrotask(() => {
+        const target = back && back.isConnected ? back : null;
+        if (target && (document.activeElement === document.body || !document.activeElement || !document.activeElement.isConnected || dialogEl?.contains(document.activeElement))) {
+          target.focus();
+        }
+      });
+    };
   });
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
     if (e.key === 'Tab' && dialogEl) {
-      const focusables = dialogEl.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
-      if (focusables.length === 0) return;
-      const first = focusables[0], last = focusables[focusables.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      const list = focusables();
+      if (list.length === 0) { e.preventDefault(); return; }
+      const first = list[0], last = list[list.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === dialogEl)) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
   }

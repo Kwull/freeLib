@@ -424,7 +424,7 @@
               {#if er.queued}· {t('settings.server.extQueued', { n: er.queued })}{/if}
             </p>
             {#if er.pausedFor}<p class="warn small">{t('settings.server.extPaused', { s: er.pausedFor })}</p>{/if}
-            {#if er.lastError}<p class="muted small">{t('settings.server.extLastError')}: {er.lastError}</p>{/if}
+            {#if er.lastError}<p class="muted small last-error" data-testid="ext-last-error">{t('settings.server.extLastError')}: {er.lastError}</p>{/if}
             {#if !er.contactSet}<p class="muted small">{t('settings.server.extContact')}</p>{/if}
           {/if}
         </section>
@@ -515,7 +515,9 @@
   .tabs button { text-align: left; height: 38px; padding: 0 12px; border: none; border-radius: 8px; background: transparent; font-size: 14px; color: var(--muted-2); }
   .tabs button:hover { background: var(--surface-hover); }
   .tabs button.active { background: var(--accent-soft); color: var(--accent-soft-ink); font-weight: 500; }
-  .panel { flex-grow: 1; padding: 24px 32px; max-width: 640px; display: flex; flex-direction: column; gap: 16px; }
+  .panel { flex-grow: 1; min-width: 0; padding: 24px 32px; max-width: 640px; display: flex; flex-direction: column; gap: 16px; }
+  /* long error texts (URLs, stack-like messages) wrap instead of widening the panel */
+  .last-error { overflow-wrap: anywhere; white-space: pre-wrap; }
   h2 { margin: 0 0 8px; font-family: var(--font-display); font-size: 22px; }
   .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted-2); max-width: 320px; }
   .field.full { max-width: none; grid-column: span 2; }

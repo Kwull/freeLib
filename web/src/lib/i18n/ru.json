@@ -694,5 +694,22 @@
   "settings.mail.maxMailMb": "Предел размера письма (МБ)",
   "settings.mail.limitsHint": "Amazon принимает до 25 вложений и 50 МБ на письмо; уменьшите размер, если ваш почтовый сервис разрешает меньше (Gmail: 25 МБ).",
   "settings.mail.retries": "Автоматических повторов",
-  "settings.mail.retryDelay": "Первый повтор через (с)"
+  "settings.mail.retryDelay": "Первый повтор через (с)",
+  "notFound.book": "Книга не найдена",
+  "notFound.bookText": "Возможно, её удалили из библиотеки, или ссылка неверна.",
+  "notFound.author": "Автор не найден",
+  "notFound.series": "Серия не найдена",
+  "notFound.genre": "Жанр не найден",
+  "notFound.shelf": "Полка не найдена",
+  "notFound.text": "Возможно, её удалили, или ссылка неверна.",
+  "notFound.toLibrary": "На главную",
+  "notFound.toList": "К списку",
+  "send.noFolderHint": "{names}: папка не задана, пока отправить туда нельзя.",
+  "send.devicesSettings": "Настройки → Устройства",
+  "send.folderPlaceholder": "подпапка папки экспорта",
+  "send.needFolder": "Укажите папку для экспорта.",
+  "books.colNoRoom": "Скрыт: не хватает места",
+  "books.colNoRoomShort": "нет места",
+  "books.colSorted": "Показан, пока список отсортирован по нему",
+  "books.colSortedShort": "сортировка"
 }

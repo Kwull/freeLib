@@ -14,6 +14,7 @@
   import HandoffPanel from './HandoffPanel.svelte';
   import { openInBooks } from '../stores/devices.svelte';
   import { isIOS } from '../utils/platform';
+  import { sessionState } from '../stores/session.svelte';
 
   let { lib, bookIds, open, onClose, device: initialDevice, seriesIds = [] }: {
     lib: number; bookIds: number[]; open: boolean; onClose: () => void;
@@ -24,6 +25,10 @@
   } = $props();
 
   const ios = isIOS();
+  const admin = $derived(sessionState.openMode || sessionState.user?.role === 'admin');
+  /** a server folder device without a folder: admins type one here, readers cannot use it */
+  const noFolder = (d: Device) => d.kind === 'folder' && !(d.target ?? '').trim();
+  const unavailable = (d: Device) => noFolder(d) && !admin;
   let phone = $state(false);
   let seriesNames = $state<string[]>([]);
 
@@ -49,7 +54,11 @@
     } else {
       Promise.all(bookIds.slice(0, 30).map((id) => api.book(lib, id))).then((list) => { books = list; }).catch(() => {});
     }
-    if (devicesState.items.length && deviceId === null) deviceId = initialDevice ?? defaultDevice()?.id ?? devicesState.items[0].id;
+    if (devicesState.items.length && deviceId === null) {
+      const usable = devicesState.items.filter((d) => !unavailable(d));
+      const want = [initialDevice, defaultDevice()?.id].find((id) => id !== undefined && usable.some((d) => d.id === id));
+      deviceId = want ?? usable[0]?.id ?? null;
+    }
   });
 
   $effect(() => {
@@ -65,6 +74,8 @@
 
   const device = $derived(devicesState.items.find((d) => d.id === deviceId) ?? null);
   const needsAddress = $derived(device?.kind === 'email' && !target.trim());
+  const needsFolder = $derived(device?.kind === 'folder' && !target.trim());
+  const missingFolderDevices = $derived(devicesState.items.filter(unavailable));
   const isSeries = $derived(seriesIds.length > 0);
   const titleLine = $derived(
     isSeries
@@ -142,11 +153,16 @@
   <fieldset class="devices">
     <legend>{t('send.device')}</legend>
     {#each devicesState.items as d (d.id)}
+      {@const off = unavailable(d)}
       <button
         type="button"
         aria-pressed={d.id === deviceId}
         class="device-card"
         class:on={d.id === deviceId}
+        class:off
+        disabled={off}
+        aria-describedby={off ? 'send-no-folder' : undefined}
+        data-testid="device-card"
         onclick={() => (deviceId = d.id)}
       >
         <span class="row">
@@ -154,16 +170,24 @@
           {#if d.id === deviceId}<Icon name="check" size={18} />{/if}
         </span>
         <span class="how">{d.kind === 'email' ? t('send.how.email') : d.kind === 'folder' ? t('send.how.folder') : t('send.how.download')}</span>
+        {#if off}<span class="how warn">{t('settings.devices.noFolder')}</span>{/if}
         <span class="fmt">{d.format.toUpperCase()}</span>
       </button>
     {/each}
   </fieldset>
+  {#if missingFolderDevices.length}
+    <div class="note no-folder" id="send-no-folder" data-testid="send-no-folder">
+      <Icon name="alert" size={16} />
+      <span>{t('send.noFolderHint', { names: missingFolderDevices.map((d) => `«${d.name}»`).join(', ') })}
+        <a href="/settings/devices" data-link>{t('send.devicesSettings')}</a></span>
+    </div>
+  {/if}
 
   {#if device}
     <div class="options">
       {#if device.kind !== 'download'}
         <label>{destLabel(device)}
-          <input type="text" bind:value={target} placeholder={device.kind === 'email' ? 'name@kindle.com' : ''} />
+          <input type="text" bind:value={target} placeholder={device.kind === 'email' ? 'name@kindle.com' : t('send.folderPlaceholder')} />
         </label>
       {/if}
       <label class:wide={device.kind === 'download'}>{t('send.fileName')}
@@ -191,10 +215,10 @@
     {#if single && !ios}
       <button type="button" class="secondary" data-testid="send-dialog-phone" aria-pressed={phone} onclick={() => (phone = !phone)}><Icon name="phone" size={16} />{t('phone.action')}</button>
     {/if}
-    <span class="bg-note" class:warn={needsAddress}>{needsAddress ? t('send.needAddress') : t('send.background')}</span>
-    <button type="button" class="secondary" onclick={onClose}>{t('send.cancel')}</button>
+    <span class="bg-note" class:warn={needsAddress || needsFolder}>{needsAddress ? t('send.needAddress') : needsFolder ? t('send.needFolder') : t('send.background')}</span>
+    <button type="button" class="secondary cancel" onclick={onClose}>{t('send.cancel')}</button>
     <!-- svelte-ignore a11y_autofocus -->
-    <button type="button" class="primary" autofocus disabled={!device || sending || needsAddress} onclick={submit}>{actionLabel(device)}</button>
+    <button type="button" class="primary" data-testid="send-submit" autofocus disabled={!device || sending || needsAddress || needsFolder} onclick={submit}>{actionLabel(device)}</button>
   </div>
 </Dialog>
 
@@ -235,6 +259,21 @@
   button.secondary[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); }
   button.secondary { gap: 6px; }
   .footer button { white-space: nowrap; flex-shrink: 0; }
+  /* narrow screens: the main action gets a full-width row of its own, then "Send to my phone"
+     and Cancel share the next row (each on its own when they don't fit) */
+  @media (max-width: 560px) {
+    .footer { flex-wrap: wrap; padding: 12px 16px; gap: 8px; }
+    .footer .bg-note { flex-basis: 100%; order: 0; }
+    .footer .bg-note:not(.warn) { display: none; }
+    .footer button.primary { order: 1; flex: 1 1 100%; justify-content: center; min-width: 0; }
+    .footer button.secondary { order: 2; flex: 1 1 auto; justify-content: center; min-width: 0; }
+    .footer button { white-space: normal; text-align: center; }
+  }
+  .device-card.off { opacity: .6; cursor: not-allowed; border-style: dashed; }
+  .how.warn { color: var(--amber); }
+  .no-folder { align-items: flex-start; color: var(--muted-2); }
+  .no-folder :global(svg) { flex-shrink: 0; color: var(--amber); margin-top: 1px; }
+  .no-folder a { color: var(--accent); }
   .bg-note.warn { color: var(--amber); }
   button.secondary { display: flex; align-items: center; height: 40px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 14px; }
   button.primary { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 500; }

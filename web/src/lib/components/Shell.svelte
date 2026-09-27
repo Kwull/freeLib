@@ -14,6 +14,7 @@
   import { shelvesState } from '../stores/shelves.svelte';
   import Splitter from './Splitter.svelte';
   import { dismissable } from '../utils/dismiss';
+  import { popover } from '../utils/popover';
   import { PANE_LIMITS, paneWidth, setPaneWidth } from '../stores/layout.svelte';
 
   let { children }: { children: Snippet } = $props();
@@ -57,7 +58,7 @@
           <Icon name="chevronDown" size={16} />
         </button>
         {#if libMenuOpen}
-          <div class="menu" role="menu" aria-label={t('nav.libraries')} use:dismissable={{ onClose: () => (libMenuOpen = false), trigger: () => libBtn }}>
+          <div class="menu" role="menu" aria-label={t('nav.libraries')} use:dismissable={{ onClose: () => (libMenuOpen = false), trigger: () => libBtn }} use:popover={{ anchor: () => libBtn, placement: 'bottom-start' }}>
             {#each librariesState.items as l (l.id)}
               <button
                 type="button"
@@ -81,7 +82,7 @@
         {(sessionState.user?.username ?? '?').charAt(0).toUpperCase()}
       </button>
       {#if accountMenuOpen}
-        <div class="menu" role="menu" aria-label={t('account.menu')} use:dismissable={{ onClose: () => (accountMenuOpen = false), trigger: () => accountBtn }}>
+        <div class="menu" role="menu" aria-label={t('account.menu')} use:dismissable={{ onClose: () => (accountMenuOpen = false), trigger: () => accountBtn }} use:popover={{ anchor: () => accountBtn, placement: 'bottom-end' }}>
           <div class="menu-section">{t('account.theme')}</div>
           <div class="seg">
             <button type="button" class:on={themeState.value === 'light'} onclick={() => setTheme('light')}>{t('theme.light')}</button>

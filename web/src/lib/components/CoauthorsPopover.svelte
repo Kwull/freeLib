@@ -9,6 +9,7 @@
   import { t, tn } from '../i18n';
 
   import { dismissable } from '../utils/dismiss';
+  import { popover } from '../utils/popover';
 
   let { lib, authorId, onClose, trigger }: { lib: number; authorId: number; onClose: () => void; trigger?: HTMLElement } = $props();
 
@@ -41,7 +42,7 @@
 </script>
 
 <div class="pop" role="dialog" tabindex="-1" aria-label={t('authors.coauthorsTitle')}
-  use:dismissable={{ onClose, trigger: () => trigger }}>
+  use:dismissable={{ onClose, trigger: () => trigger }} use:popover={{ anchor: () => trigger, placement: 'bottom-start' }}>
   <div class="top">
     <label class="box">
       <Icon name="search" size={14} />

@@ -650,5 +650,22 @@
   "settings.mail.maxMailMb": "E-mail size limit (MB)",
   "settings.mail.limitsHint": "Amazon accepts up to 25 attachments and 50 MB per e-mail; lower the size if your mail provider allows less (Gmail: 25 MB).",
   "settings.mail.retries": "Automatic retries",
-  "settings.mail.retryDelay": "First retry after (s)"
+  "settings.mail.retryDelay": "First retry after (s)",
+  "notFound.book": "Book not found",
+  "notFound.bookText": "It may have been removed from the library, or the link is wrong.",
+  "notFound.author": "Author not found",
+  "notFound.series": "Series not found",
+  "notFound.genre": "Genre not found",
+  "notFound.shelf": "Shelf not found",
+  "notFound.text": "It may have been removed, or the link is wrong.",
+  "notFound.toLibrary": "To the start page",
+  "notFound.toList": "To the list",
+  "send.noFolderHint": "{names}: no folder is set, so it cannot be used for now.",
+  "send.devicesSettings": "Settings → Devices",
+  "send.folderPlaceholder": "a sub-folder of the export folder",
+  "send.needFolder": "Enter a folder for this export.",
+  "books.colNoRoom": "Hidden: not enough room in this pane",
+  "books.colNoRoomShort": "no room",
+  "books.colSorted": "Shown while the list is sorted by it",
+  "books.colSortedShort": "sorted"
 }

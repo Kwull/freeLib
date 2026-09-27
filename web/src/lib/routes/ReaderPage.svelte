@@ -5,15 +5,18 @@
   // once this component mounts, so the reader's weight never touches the main
   // bundle.
   import { dismissable } from '../utils/dismiss';
-  import { api } from '../api/client';
-  import type { BookDetail } from '../api/types';
+  import { api, errorText } from '../api/client';
+  import { ApiError, type BookDetail } from '../api/types';
   import Icon from '../components/Icon.svelte';
+  import StateCard from '../components/StateCard.svelte';
   import { navigate } from '../router.svelte';
   import { t } from '../i18n';
 
   let { lib, id }: { lib: number; id: number } = $props();
   let detail = $state<BookDetail | null>(null);
   let error = $state<string | null>(null);
+  /** the book does not exist (a bad or stale link) */
+  let notFound = $state(false);
 
   type TocItem = { label: string; href: string; subitems?: TocItem[] };
   type FoliateView = HTMLElement & {
@@ -83,17 +86,60 @@
   $effect(() => { fontSize; theme; applyStyles(); savePrefs(); });
 
   $effect(() => {
-    api.book(lib, id).then((d) => (detail = d));
+    const [l, b] = [lib, id];
+    let cancelled = false;
+    detail = null; error = null; notFound = false; ready = false;
+    api.book(l, b)
+      .then((d) => { if (!cancelled) detail = d; })
+      .catch((e) => {
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 404) notFound = true;
+        else error = errorText(e);
+      });
+    return () => { cancelled = true; };
   });
+
+  // Reading position: the CFI of the page start, from foliate's `relocate` events. While the
+  // layout changes (the table of contents opens or closes, the window resizes) foliate
+  // re-paginates and may land a page early; the position from before the change is held and
+  // restored once the layout settles.
+  let cfi: string | null = null;
+  /** the page shown now (tests read it from the DOM) */
+  let shownCfi = $state<string | null>(null);
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  let holding = false;
+  function holdPosition() {
+    if (!view || !ready || !cfi) return;
+    holding = true;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(restorePosition, 250);
+  }
+  async function restorePosition() {
+    const v = view, at = cfi;
+    if (!v || !at) { holding = false; return; }
+    try { await v.goTo(at); } catch { /* the book is gone */ }
+    // the goTo's own relocate arrives before this resolves; later ones are the reader's again
+    holding = false;
+  }
 
   $effect(() => {
     if (!container || !detail) return;
     let cancelled = false;
+    let el: FoliateView | null = null;
+    const onRelocate = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      fraction = d?.fraction ?? 0;
+      currentHref = d?.tocItem?.href ?? null;
+      if (d?.cfi) shownCfi = d.cfi;
+      if (holding || !d?.cfi) return;
+      cfi = d.cfi;
+      try { localStorage.setItem(POS_KEY(), d.cfi); } catch { /* ignore */ }
+    };
     (async () => {
       try {
         await import('../../vendor/foliate-js/view.js');
         if (cancelled) return;
-        const el = document.createElement('foliate-view') as FoliateView;
+        el = document.createElement('foliate-view') as FoliateView;
         container!.appendChild(el);
         view = el;
         const fileUrl = api.fileUrl(lib, id, 'epub', { inline: true });
@@ -104,28 +150,39 @@
         toc = el.book.toc ?? [];
         let saved: string | undefined;
         try { saved = localStorage.getItem(POS_KEY()) ?? undefined; } catch { /* ignore */ }
+        cfi = saved ?? null;
+        el.addEventListener('relocate', onRelocate);
         await el.init({ lastLocation: saved, showTextStart: !saved });
-        el.addEventListener('relocate', (e: Event) => {
-          const detailEv = (e as CustomEvent).detail;
-          fraction = detailEv?.fraction ?? 0;
-          currentHref = detailEv?.tocItem?.href ?? null;
-          const cfi = detailEv?.cfi;
-          if (cfi) {
-            try { localStorage.setItem(POS_KEY(), cfi); } catch { /* ignore */ }
-          }
-        });
+        if (cancelled) return;
         ready = true;
       } catch (err) {
+        if (cancelled) return;
         console.error(err);
-        error = String(err instanceof Error ? err.message : err);
+        error = errorText(err);
       }
     })();
     return () => {
+      // leaving the reader (or another book): stop listening, stop pending restores, tear down
+      // foliate (its resize observers and late callbacks, see the vendored paginator patch)
       cancelled = true;
-      view?.close?.();
+      clearTimeout(holdTimer);
+      holding = false;
+      ready = false;
+      if (el) {
+        el.removeEventListener('relocate', onRelocate);
+        try { el.close?.(); } catch { /* half-opened */ }
+        el.remove();
+      }
       view = null;
     };
   });
+
+  // the table of contents changes the text column's width
+  function setToc(open: boolean) {
+    if (open === tocOpen) return;
+    holdPosition();
+    tocOpen = open;
+  }
 
   function prevPage() { view?.goLeft(); }
   function nextPage() { view?.goRight(); }
@@ -133,7 +190,7 @@
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'ArrowLeft') { e.preventDefault(); prevPage(); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); nextPage(); }
-    else if (e.key === 'Escape') { tocOpen = false; }
+    else if (e.key === 'Escape') { setToc(false); }
   }
 
   function onSliderInput(e: Event) {
@@ -143,8 +200,11 @@
   }
 
   function goToTocItem(href: string) {
-    view?.goTo(href);
     tocOpen = false;
+    // the new place wins over a held one
+    clearTimeout(holdTimer);
+    holding = false;
+    view?.goTo(href);
   }
 
   // Swipe on touch: a horizontal drag past a small threshold turns a page.
@@ -162,14 +222,26 @@
   const flatToc = $derived(renderTocItems(toc));
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} onresize={holdPosition} />
 
-<div class="reader" data-theme={theme}>
+{#if notFound || (error && !detail)}
+  <div class="reader-state">
+    <StateCard tone={notFound ? 'info' : 'error'} icon={notFound ? 'read' : 'alert'} testid="reader-not-found"
+      title={notFound ? t('notFound.book') : t('common.error')} text={notFound ? t('notFound.bookText') : undefined} detail={notFound ? null : error}>
+      {#snippet actions()}
+        <button type="button" onclick={() => (history.length > 1 ? history.back() : navigate(`/l/${lib}/home`))}><Icon name="chevronLeft" size={16} />{t('common.back')}</button>
+        <a class="primary" href="/l/{lib}/home" data-link>{t('notFound.toLibrary')}</a>
+      {/snippet}
+    </StateCard>
+  </div>
+{:else}
+
+<div class="reader" data-theme={theme} data-cfi={shownCfi} data-ready={ready}>
   <header>
     <button type="button" aria-label={t('common.back')} onclick={() => navigate(`/l/${lib}/book/${id}`)}>
       <Icon name="chevronLeft" size={18} />
     </button>
-    <button type="button" class="toc-btn" bind:this={tocBtn} aria-label={t('reader.toc')} aria-expanded={tocOpen} onclick={() => (tocOpen = !tocOpen)}>
+    <button type="button" class="toc-btn" bind:this={tocBtn} aria-label={t('reader.toc')} aria-expanded={tocOpen} onclick={() => setToc(!tocOpen)}>
       <Icon name="genres" size={18} />
     </button>
     <span class="title">{detail?.title ?? t('common.loading')}</span>
@@ -189,7 +261,7 @@
 
   <div class="body">
     {#if tocOpen}
-      <aside class="toc-drawer" aria-label={t('reader.toc')} use:dismissable={{ onClose: () => (tocOpen = false), trigger: () => tocBtn }}>
+      <aside class="toc-drawer" aria-label={t('reader.toc')} use:dismissable={{ onClose: () => setToc(false), trigger: () => tocBtn }}>
         <nav>
           {#each flatToc as { item, depth } (item.href + item.label)}
             <button
@@ -241,8 +313,10 @@
     <span class="pct">{Math.round(fraction * 100)}%</span>
   </footer>
 </div>
+{/if}
 
 <style>
+  .reader-state { display: flex; flex-grow: 1; min-height: 0; }
   .reader { display: flex; flex-direction: column; flex-grow: 1; min-height: 0; background: var(--surface); }
   header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
   header button { height: 36px; border: none; background: transparent; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--ink); font-size: 13px; padding: 0 8px; }

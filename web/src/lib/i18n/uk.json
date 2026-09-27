@@ -694,5 +694,22 @@
   "settings.mail.maxMailMb": "Межа розміру листа (МБ)",
   "settings.mail.limitsHint": "Amazon приймає до 25 вкладень і 50 МБ на лист; зменште розмір, якщо ваш поштовий сервіс дозволяє менше (Gmail: 25 МБ).",
   "settings.mail.retries": "Автоматичних повторів",
-  "settings.mail.retryDelay": "Перший повтор через (с)"
+  "settings.mail.retryDelay": "Перший повтор через (с)",
+  "notFound.book": "Книгу не знайдено",
+  "notFound.bookText": "Можливо, її видалили з бібліотеки, або посилання хибне.",
+  "notFound.author": "Автора не знайдено",
+  "notFound.series": "Серію не знайдено",
+  "notFound.genre": "Жанр не знайдено",
+  "notFound.shelf": "Полицю не знайдено",
+  "notFound.text": "Можливо, її видалили, або посилання хибне.",
+  "notFound.toLibrary": "На головну",
+  "notFound.toList": "До списку",
+  "send.noFolderHint": "{names}: теку не задано, поки що надіслати туди не можна.",
+  "send.devicesSettings": "Налаштування → Пристрої",
+  "send.folderPlaceholder": "підтека теки експорту",
+  "send.needFolder": "Вкажіть теку для експорту.",
+  "books.colNoRoom": "Приховано: бракує місця",
+  "books.colNoRoomShort": "немає місця",
+  "books.colSorted": "Показано, поки список відсортовано за ним",
+  "books.colSortedShort": "сортування"
 }
