@@ -471,6 +471,8 @@ test('book list: arrows move over rows, group headers and editions; Home/End, Sp
   await work.click();
   await page.keyboard.press('ArrowRight');
   await expect(work.getByTestId('editions-toggle')).toHaveAttribute('aria-expanded', 'true');
+  // the editions load on demand
+  await expect(page.getByTestId('edition-row').first()).toBeVisible();
   await page.keyboard.press('ArrowDown');
   expect((await current())!.kind).toBe('edition-row');
   await page.keyboard.press('ArrowLeft');
@@ -578,9 +580,9 @@ test.describe('phone letter strip', () => {
   });
 });
 
-// ---- 21. folder devices without a folder -------------------------------------------------
+// ---- 21. folder devices: an empty folder is the export root -------------------------------
 
-test('a folder device without a folder: unavailable for readers, a folder is needed for admins', async ({ page }) => {
+test('a folder device without a folder is labelled as the export root, and can be used', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.route('**/api/v1/devices', async (route) => {
     if (route.request().method() !== 'GET') return route.continue();
@@ -589,31 +591,28 @@ test('a folder device without a folder: unavailable for readers, a folder is nee
     for (const d of list) if (d.kind === 'folder') d.target = null;
     await route.fulfill({ response: res, json: list });
   });
-  // an administrator (the mock's open mode): the card can be picked, but a folder is required
   await openHound(page);
   await page.getByRole('checkbox', { name: 'Select The Hound of the Baskervilles' }).check();
   await page.getByTestId('selection-send').click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByRole('button', { name: /Server folder/ }).click();
-  await expect(dialog.getByTestId('send-submit')).toBeDisabled();
-  await expect(dialog.locator('.bg-note')).toContainText('Enter a folder');
-  await dialog.getByPlaceholder('a sub-folder of the export folder').fill('incoming');
+  const card = dialog.getByRole('button', { name: /Server folder/ });
+  await expect(card).toBeEnabled();
+  await expect(card.getByTestId('device-folder')).toHaveText('Export folder (root)');
+  await card.click();
+  await expect(dialog.getByPlaceholder('Export folder (root)')).toHaveValue('');
   await expect(dialog.getByTestId('send-submit')).toBeEnabled();
   await page.keyboard.press('Escape');
+  await page.getByRole('checkbox', { name: 'Select The Hound of the Baskervilles' }).uncheck();
 
-  // a reader: the device is shown as unavailable, with a way to the device settings
-  await page.route('**/api/v1/session', (route) => route.fulfill({
-    json: { user: { id: 2, username: 'reader', role: 'reader' }, openMode: false, auth: { password: true, oidc: null } },
-  }));
-  await page.reload();
-  await expect(page.getByText('The Hound of the Baskervilles').first()).toBeVisible({ timeout: 15000 });
-  await page.getByRole('checkbox', { name: 'Select The Hound of the Baskervilles' }).check();
-  await page.getByTestId('selection-send').click();
-  const card = dialog.getByRole('button', { name: /Server folder/ });
-  await expect(card).toBeDisabled();
-  await expect(card).toContainText('no folder');
-  const hint = dialog.getByTestId('send-no-folder');
-  await expect(hint).toContainText('«Server folder»');
-  await hint.getByRole('link', { name: 'Settings → Devices' }).click();
-  await expect(page).toHaveURL(/\/settings\/devices$/);
+  // Settings → Devices: the same label, not a warning
+  await page.goto('/settings/devices');
+  const row = page.locator('.device-row', { hasText: 'Server folder' });
+  await expect(row.getByTestId('device-folder')).toHaveText('Export folder (root)');
+});
+
+test('a folder device with a sub-folder shows it', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/settings/devices');
+  // the mock's Server folder has the sub-folder "incoming"
+  await expect(page.locator('.device-row', { hasText: 'Server folder' })).toContainText('incoming');
 });

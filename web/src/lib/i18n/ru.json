@@ -373,7 +373,6 @@
   "settings.devices.kind.download": "Скачивание",
   "settings.devices.kind.folder": "Папка на сервере",
   "settings.devices.noAddress": "адрес не задан — укажете при отправке",
-  "settings.devices.noFolder": "папка не задана",
   "settings.devices.sharedShort": "Общее",
   "settings.devices.deleteConfirm": "Удалить устройство «{name}»?",
   "settings.users.deleteConfirm": "Удалить пользователя «{name}»? Его полки, оценки и задания тоже будут удалены.",
@@ -704,12 +703,9 @@
   "notFound.text": "Возможно, её удалили, или ссылка неверна.",
   "notFound.toLibrary": "На главную",
   "notFound.toList": "К списку",
-  "send.noFolderHint": "{names}: папка не задана, пока отправить туда нельзя.",
-  "send.devicesSettings": "Настройки → Устройства",
-  "send.folderPlaceholder": "подпапка папки экспорта",
-  "send.needFolder": "Укажите папку для экспорта.",
   "books.colNoRoom": "Скрыт: не хватает места",
   "books.colNoRoomShort": "нет места",
   "books.colSorted": "Показан, пока список отсортирован по нему",
-  "books.colSortedShort": "сортировка"
+  "books.colSortedShort": "сортировка",
+  "device.exportRoot": "Папка экспорта (корень)"
 }

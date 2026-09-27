@@ -391,31 +391,6 @@ async fn users_jobs_and_folders() {
     let folder = find("Server folder");
     let original = find("Original");
     let ids = fb2_ids(&app, lib, 200).await;
-    // the preset has no folder yet: a clear 400, not an export into the export root
-    let r = app
-        .post(
-            "/api/v1/send",
-            &json!({"library": lib, "books": [ids[0]], "device": folder}),
-        )
-        .await;
-    assert_eq!(r.status, StatusCode::BAD_REQUEST);
-    assert!(r.text().contains("no folder set"), "{}", r.text());
-    // an administrator sets one
-    let reader_cookie = app.cookie.clone();
-    app.cookie = admin_cookie.clone();
-    let mut dev = devices
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|d| d["name"] == "Server folder")
-        .unwrap()
-        .clone();
-    dev["target"] = json!("shared");
-    let r = app
-        .put(&format!("/api/v1/devices/{}", dev["id"]), &dev)
-        .await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
-    app.cookie = reader_cookie;
     // … nor pick another folder of a shared one
     let r = app
         .post(

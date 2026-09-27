@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test';
 import { pickFb2Book } from './helpers';
 
 // Against the real server: a bad reader link shows a not-found card (the API answers 404),
-// leaving the reader leaves no errors behind, and a folder device without a folder is refused
-// with a clear message.
+// leaving the reader leaves no errors behind, and a folder device without a folder exports
+// into the export folder itself.
 
 test('reader: a bad book id shows "Book not found", a real book cleans up when left', async ({ page, request }) => {
   const errors: string[] = [];
@@ -25,12 +25,12 @@ test('reader: a bad book id shows "Book not found", a real book cleans up when l
   expect(errors, errors.join('\n')).toEqual([]);
 });
 
-test('a folder device without a folder is refused with a clear error', async ({ request }) => {
+test('a folder device without a folder exports into the export root', async ({ request }) => {
   const devices = (await (await request.get('/api/v1/devices')).json()) as { id: number; kind: string; target: string | null }[];
   const folder = devices.find((d) => d.kind === 'folder' && !(d.target ?? '').trim());
   test.skip(!folder, 'no folder device without a folder');
   const book = await pickFb2Book(request);
   const r = await request.post('/api/v1/send', { data: { library: 1, books: [book.id], device: folder!.id } });
-  expect(r.status()).toBe(400);
-  expect((await r.json()).message).toContain('no folder set');
+  expect(r.status(), await r.text()).toBe(200);
+  expect((await r.json()).kind).toBe('export');
 });

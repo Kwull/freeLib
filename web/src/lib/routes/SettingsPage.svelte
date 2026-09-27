@@ -337,7 +337,7 @@
             <div class="dinfo">
               <span class="name">{d.name}</span>
               <span class="muted">
-                {kindLabel(d.kind)} · {d.format.toUpperCase()}{#if d.kind !== 'download'}{' · '}{#if d.target}<span class="target">{d.target}</span>{:else}<span class="warn">{d.kind === 'email' ? t('settings.devices.noAddress') : t('settings.devices.noFolder')}</span>{/if}{/if}
+                {kindLabel(d.kind)} · {d.format.toUpperCase()}{#if d.kind !== 'download'}{' · '}{#if d.target}<span class="target">{d.target}</span>{:else if d.kind === 'folder'}<span class="target" data-testid="device-folder">{t('device.exportRoot')}</span>{:else}<span class="warn">{t('settings.devices.noAddress')}</span>{/if}{/if}
               </span>
             </div>
             {#if i === 0}<span class="badge default-badge" title={t('settings.devices.defaultHint')}>{t('settings.devices.default')}</span>{/if}

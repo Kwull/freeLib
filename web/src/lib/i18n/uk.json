@@ -373,7 +373,6 @@
   "settings.devices.kind.download": "Завантаження",
   "settings.devices.kind.folder": "Тека на сервері",
   "settings.devices.noAddress": "адресу не задано — вкажете під час надсилання",
-  "settings.devices.noFolder": "теку не задано",
   "settings.devices.sharedShort": "Спільний",
   "settings.devices.deleteConfirm": "Видалити пристрій «{name}»?",
   "settings.users.deleteConfirm": "Видалити користувача «{name}»? Його полиці, оцінки та завдання теж буде видалено.",
@@ -704,12 +703,9 @@
   "notFound.text": "Можливо, її видалили, або посилання хибне.",
   "notFound.toLibrary": "На головну",
   "notFound.toList": "До списку",
-  "send.noFolderHint": "{names}: теку не задано, поки що надіслати туди не можна.",
-  "send.devicesSettings": "Налаштування → Пристрої",
-  "send.folderPlaceholder": "підтека теки експорту",
-  "send.needFolder": "Вкажіть теку для експорту.",
   "books.colNoRoom": "Приховано: бракує місця",
   "books.colNoRoomShort": "немає місця",
   "books.colSorted": "Показано, поки список відсортовано за ним",
-  "books.colSortedShort": "сортування"
+  "books.colSortedShort": "сортування",
+  "device.exportRoot": "Тека експорту (корінь)"
 }

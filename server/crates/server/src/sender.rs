@@ -236,15 +236,8 @@ pub async fn start(st: &AppState, user: &User, mut req: SendRequest) -> ApiResul
                     "only administrators can choose server folders",
                 ));
             }
-            // a folder device needs a folder: its own or (admins) one typed for this export
-            let Some(sub) = safe_subdir(target.as_deref().unwrap_or("")) else {
+            if safe_subdir(target.as_deref().unwrap_or("")).is_none() {
                 return Err(ApiError::bad_request("invalid target folder"));
-            };
-            if sub.as_os_str().is_empty() {
-                return Err(ApiError::bad_request(format!(
-                    "the device \"{}\" has no folder set; choose one in Settings → Devices",
-                    dev.name
-                )));
             }
         }
         "download" => {}
