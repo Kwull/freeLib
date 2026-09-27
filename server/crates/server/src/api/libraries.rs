@@ -126,6 +126,11 @@ pub async fn update(
         row.path = p;
         row.inpx = i;
     }
+    // import options only take effect in a catalog built with them: a change re-imports
+    let options_changed = b
+        .first_author_only
+        .is_some_and(|v| v != row.first_author_only)
+        || b.skip_deleted.is_some_and(|v| v != row.skip_deleted);
     if let Some(v) = b.first_author_only {
         row.first_author_only = v;
     }
@@ -135,8 +140,17 @@ pub async fn update(
     if let Some(v) = b.is_default {
         row.is_default = v;
     }
+    let has_inpx = row.inpx.is_some();
     st.db.run(move |c| db::update_library(c, &row)).await?;
     st.emit_library(id);
+    if options_changed && has_inpx {
+        match importer::start(&st, id, &u).await {
+            // an import already running keeps its options; the next one applies the new ones
+            Ok(_) => {}
+            Err(e) if e.status == StatusCode::CONFLICT => {}
+            Err(e) => return Err(e),
+        }
+    }
     Ok(Json(st.library_dto_async(id, u.id).await?))
 }
 

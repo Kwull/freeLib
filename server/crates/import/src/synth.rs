@@ -675,6 +675,8 @@ const CLASSIC: &[&str] = &["prose_classic", "foreign_prose"];
 
 /// Index of "Азимов Айзек" in [`FAMOUS`] (the prolific, anthology-heavy test case).
 pub const ASIMOV: usize = 0;
+/// Стругацкий Аркадий (Борис is the next entry).
+const STRUGATSKY_A: usize = 11;
 
 static FAMOUS: &[Famous] = &[
     Famous {
@@ -1805,6 +1807,88 @@ fn search_showcase_books() -> Vec<GenBook> {
         .collect()
 }
 
+/// Fixed books for the ranking of a generic one-word title (lib ids 300..): the Strugatskys'
+/// «Пикник на обочине» in several editions (one of them deleted), two anonymous 18+ books titled
+/// just «Пикник» (the exact title match that used to bury the famous novel) and a deleted
+/// anonymous one, plus a known author's own «Пикник».
+fn ranking_showcase_books() -> Vec<GenBook> {
+    let strugatsky = || vec![famous_author(STRUGATSKY_A), famous_author(STRUGATSKY_A + 1)];
+    let unknown = || {
+        vec![Author {
+            last: "Автор неизвестен".into(),
+            first: String::new(),
+            middle: String::new(),
+        }]
+    };
+    // (authors, title, genre, keywords, stars, deleted)
+    type Row = (
+        Vec<Author>,
+        &'static str,
+        &'static str,
+        &'static str,
+        usize,
+        bool,
+    );
+    let rows: Vec<Row> = vec![
+        (strugatsky(), "Пикник на обочине", "sf", "", 5, false),
+        (strugatsky(), "Пикник на обочине", "sf", "", 5, false),
+        (
+            strugatsky(),
+            "Пикник на обочине (другой перевод)",
+            "sf",
+            "",
+            4,
+            false,
+        ),
+        (
+            strugatsky(),
+            "Пикник на обочине [litres]",
+            "sf",
+            "",
+            0,
+            false,
+        ),
+        (strugatsky(), "Пикник на обочине", "sf", "", 0, true),
+        (unknown(), "Пикник", "love_erotica", "18+", 0, false),
+        (unknown(), "Пикник", "love_erotica", "эротика", 0, false),
+        (unknown(), "Пикник", "love_erotica", "", 0, true),
+        (
+            vec![Author {
+                last: "Заречная".into(),
+                first: "Ольга".into(),
+                middle: String::new(),
+            }],
+            "Пикник",
+            "prose_contemporary",
+            "",
+            0,
+            false,
+        ),
+    ];
+    rows.into_iter()
+        .enumerate()
+        .map(
+            |(j, (authors, title, genre, keywords, stars, deleted))| GenBook {
+                authors,
+                genres: vec![genre.to_string()],
+                title: title.to_string(),
+                series: String::new(),
+                serno: None,
+                lib_id: 300 + j,
+                deleted,
+                ext: "fb2",
+                date: format!("2021-0{}-1{}", 1 + j % 9, j % 10),
+                lang: "ru",
+                stars,
+                keywords: keywords.to_string(),
+                cover: j % 2 == 0,
+                size: 200_000 + j * 11_000,
+                publish: None,
+            },
+        )
+        .collect()
+}
+
 /// Generate `out` (an `.inpx`) and, optionally, the archives.
 pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
     let n = opts.books;
@@ -1820,6 +1904,7 @@ pub fn generate(out: &Path, opts: &GenOptions) -> io::Result<GenStats> {
     let showcase = if opts.showcase {
         let mut v = showcase_books();
         v.extend(search_showcase_books());
+        v.extend(ranking_showcase_books());
         v
     } else {
         Vec::new()
@@ -1936,6 +2021,8 @@ mod tests {
         }
         assert_eq!(FAMOUS[36].last, "Силверберг");
         assert_eq!(FAMOUS[11].partner.unwrap().0, 12);
+        assert_eq!(FAMOUS[STRUGATSKY_A].last, "Стругацкий");
+        assert_eq!(FAMOUS[STRUGATSKY_A + 1].first, "Борис");
     }
 
     #[test]

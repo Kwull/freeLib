@@ -104,6 +104,7 @@ async fn run(
                     || done % step == 0)
             {
                 st2.jobs.log(&jid, msg);
+                tracing::info!(lib = rt2.id, "import: {msg}");
             }
             rt2.set_status(LibraryStatus {
                 state: "importing".into(),
@@ -153,11 +154,10 @@ fn finish(
             rt.clear_lists();
             match reload {
                 Ok(cat) => {
+                    // the same numbers as the Libraries card and the Authors / Series pages
                     let mut msg = format!(
-                        "{} books, {} authors, {} series in {:.1} s",
-                        stats.live_books,
-                        stats.authors,
-                        stats.series,
+                        "{} in {:.1} s",
+                        stats.summary(),
                         stats.elapsed_ms as f64 / 1000.0
                     );
                     if !stats.missing_archives.is_empty() {
@@ -170,6 +170,7 @@ fn finish(
                         }
                     }
                     st.jobs.log(&job_id, &msg);
+                    tracing::info!(lib = rt.id, "import done: {msg}");
                     rt.set_status(LibraryStatus::default());
                     st.jobs.done(&job_id, &msg, None);
                     st.emit_library(rt.id);

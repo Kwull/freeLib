@@ -338,11 +338,11 @@ pub fn edit_distance(a: &str, b: &str, max: usize) -> Option<usize> {
     (prev[m] <= max).then_some(prev[m])
 }
 
-/// Typos tolerated in a word of `len` characters: none below 4, one up to 7, two from 8.
+/// Typos tolerated in a word of `len` characters: none below 4, one for 4–5, two from 6.
 pub fn max_typos(len: usize) -> usize {
     match len {
         0..=3 => 0,
-        4..=7 => 1,
+        4..=5 => 1,
         _ => 2,
     }
 }

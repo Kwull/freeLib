@@ -2,7 +2,9 @@
 // tolerance in search, editions of one work, the start page and follows (docs/web/API.md).
 // Simplified versions of freelib_catalog::{text, vocab, works, home}.
 import { normalize } from './normalize';
-import { phoneticKey } from '../src/lib/utils/phonetic';
+import { phoneticKey, translit as translitRaw } from '../src/lib/utils/phonetic';
+
+const translit = (w: string) => translitRaw(w).toLowerCase();
 import type { MockBook, MockLibrary } from './gen';
 
 // ---------------------------------------------------------------- user state
@@ -118,7 +120,17 @@ function vocab(lib: MockLibrary): Map<string, number> {
   }
   return v;
 }
-/** The query with unknown words replaced by the closest vocabulary word, or null. */
+/** Typos tolerated in a word of `n` letters: none below 4, one for 4–5, two from 6 (like the server). */
+function maxTypos(n: number): number {
+  return n < 4 ? 0 : n <= 5 ? 1 : 2;
+}
+const cyr = (w: string) => /[\u0400-\u04ff]/u.test(w);
+/**
+ * The query with unknown words replaced by the closest vocabulary word that is genuinely close
+ * (`Vocab::closest`): typos counted on the shorter word, the same first letter at 2 edits, the
+ * same script — or across scripts the same phonetic key, or close keys *and* transliterations.
+ * Nonsense such as «zzzqxw» is left alone; null when nothing changes.
+ */
 export function correct(lib: MockLibrary, q: string): string | null {
   const v = vocab(lib);
   let changed = false;
@@ -126,14 +138,25 @@ export function correct(lib: MockLibrary, q: string): string | null {
     if (t.length < 4) return t;
     const k = latinKey(t);
     for (const w of v.keys()) if (w.startsWith(t) || (k.length >= 3 && latinKey(w).startsWith(k))) return t;
-    const max = t.length <= 7 ? 1 : 2;
+    const tl = translit(t);
     // closest first; among equals a word of the query's own script, then the most frequent
     let best: [string, number, number, boolean] | null = null;
     for (const [w, n] of v) {
-      const dw = lev(t, w, max);
-      const d = Math.min(dw, lev(k, latinKey(w), max));
-      const own = dw === d;
-      if (d <= max && (!best || d < best[1] || (d === best[1] && own && !best[3]) || (d === best[1] && own === best[3] && n > best[2]))) best = [w, d, n, own];
+      const bound = maxTypos(Math.min(t.length, w.length));
+      if (bound === 0) continue;
+      let d = Infinity;
+      let own = false;
+      const dw = lev(t, w, bound);
+      if (dw <= bound && cyr(w) === cyr(t) && (dw < 2 || w[0] === t[0])) { d = dw; own = true; }
+      const wk = latinKey(w);
+      const kb = Math.min(bound, maxTypos(k.length), maxTypos(wk.length));
+      const dk = kb > 0 && k.length >= 2 ? lev(k, wk, kb) : Infinity;
+      if (dk <= kb && (dk < 2 || wk[0] === k[0]) && (dk === 0 || lev(tl, translit(w), bound) <= bound) && dk < d) {
+        d = dk;
+        own = false;
+      }
+      if (d === Infinity || (d === 0 && w === t)) continue;
+      if (!best || d < best[1] || (d === best[1] && own && !best[3]) || (d === best[1] && own === best[3] && n > best[2])) best = [w, d, n, own];
     }
     if (!best) return t;
     changed = true;

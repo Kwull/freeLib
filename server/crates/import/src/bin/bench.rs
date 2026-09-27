@@ -1,7 +1,7 @@
 //! Import + query benchmark on a synthetic (or real) INPX.
 //!
 //! ```text
-//! cargo run --release -p freelib-import --bin bench -- [--books 600000] [--inpx FILE] [--db FILE] [--lib-dir DIR] [--skip-import]
+//! cargo run --release -p freelib-import --bin bench -- [--books 600000] [--inpx FILE] [--db FILE] [--lib-dir DIR] [--skip-import] [--skip-deleted]
 //! ```
 //! Generates `bench-data/synthetic-<N>.inpx` when missing, imports it into `bench-data/bench_lib.db`
 //! and prints timings of the queries behind the ARCHITECTURE.md performance targets.
@@ -59,6 +59,7 @@ fn main() {
     let mut inpx: Option<PathBuf> = None;
     let mut db = PathBuf::from("bench-data/bench_lib.db");
     let mut skip_import = false;
+    let mut skip_deleted = false;
     let mut lib_dir: Option<PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -67,10 +68,11 @@ fn main() {
             "--inpx" => inpx = args.next().map(PathBuf::from),
             "--db" => db = args.next().map(PathBuf::from).expect("--db FILE"),
             "--skip-import" => skip_import = true,
+            "--skip-deleted" => skip_deleted = true,
             "--lib-dir" => lib_dir = args.next().map(PathBuf::from),
             _ => {
                 eprintln!(
-                    "usage: bench [--books N] [--inpx FILE] [--db FILE] [--lib-dir DIR] [--skip-import]"
+                    "usage: bench [--books N] [--inpx FILE] [--db FILE] [--lib-dir DIR] [--skip-import] [--skip-deleted]"
                 );
                 std::process::exit(2);
             }
@@ -103,6 +105,7 @@ fn main() {
             db_path: db.clone(),
             resolve_offsets: lib_dir.is_some(),
             library_dir: lib_dir.clone(),
+            skip_deleted,
             ..Default::default()
         };
         let cancel = AtomicBool::new(false);
@@ -118,12 +121,13 @@ fn main() {
         )
         .expect("import");
         println!(
-            "import: {:.1}s — {} books ({} live), {} authors, {} series",
+            "import: {:.1}s — {}; {} stored; catalog {} MB",
             t.elapsed().as_secs_f64(),
+            stats.summary(),
             stats.books,
-            stats.live_books,
-            stats.authors,
-            stats.series
+            std::fs::metadata(&db)
+                .map(|m| m.len() / 1_000_000)
+                .unwrap_or(0)
         );
         if lib_dir.is_some() {
             println!(
@@ -480,6 +484,32 @@ fn main() {
     s.report();
     ta.report();
     au.report();
+    // generic one-word titles (ranking by standing) and nonsense (no correction, no results)
+    let mut s = Series::new("search: generic titles (пикник, мир, дом) × 3");
+    let mut n = Series::new("search: nonsense (zzzqxw, qwrtpl, xqzvbnm) × 3");
+    for (series, qs) in [
+        (&mut s, ["пикник", "мир", "дом"]),
+        (&mut n, ["zzzqxw", "qwrtpl", "xqzvbnm"]),
+    ] {
+        for q in qs {
+            for _ in 0..3 {
+                let r = series.time(|| {
+                    cat.search(&SearchQuery {
+                        q: q.into(),
+                        limit: 200,
+                        group: true,
+                        ..Default::default()
+                    })
+                    .unwrap()
+                });
+                if q == "zzzqxw" && (r.corrected.is_some() || r.did_you_mean.is_some()) {
+                    eprintln!("  nonsense corrected: {q} → {:?}", r.corrected);
+                }
+            }
+        }
+    }
+    s.report();
+    n.report();
     let mut s = Series::new(&format!("author summary (top: {} works)", by_count[0].2));
     for _ in 0..3 {
         s.time(|| cat.author_summary(by_count[0].0).unwrap());

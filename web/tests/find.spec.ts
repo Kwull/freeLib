@@ -96,6 +96,13 @@ test('search: word forms, transliteration, typo correction and did-you-mean', as
   await expect(page.getByTestId('search-book')).toContainText('Записки на полях');
   await expect(page.getByTestId('search-corrected')).toHaveCount(0);
 
+  // nonsense is not "corrected" into some real word: nothing found
+  await page.goto('/l/1/search?q=zzzqxw');
+  await expect(page.getByText('Nothing found')).toBeVisible();
+  await expect(page.getByTestId('search-corrected')).toHaveCount(0);
+  await expect(page.getByTestId('did-you-mean')).toHaveCount(0);
+  await expect(page.getByTestId('search-book')).toHaveCount(0);
+
   // the typeahead shows the corrected results too
   await page.goto('/l/1/authors');
   await page.getByRole('combobox').fill('азимв');

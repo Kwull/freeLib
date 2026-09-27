@@ -1415,3 +1415,230 @@ fn showcase_search_and_counts() {
         }
     }
 }
+
+/// gen-inpx's ranking showcase: «пикник» puts the Strugatskys' «Пикник на обочине» (several
+/// editions, a famous author) in the top 3, above two anonymous 18+ books titled just «Пикник»
+/// (still listed), and nonsense is not "corrected" into real words.
+#[test]
+fn showcase_ranking_and_typos() {
+    let dir = tempfile::tempdir().unwrap();
+    let inpx = dir.path().join("lib.inpx");
+    generate(
+        &inpx,
+        &GenOptions {
+            showcase: true,
+            books: 3000,
+            per_archive: 1000,
+            seed: 11,
+            files_dir: None,
+            structure_info: true,
+        },
+    )
+    .unwrap();
+    let db = dir.path().join("lib_1.db");
+    import(&inpx, &db, None);
+    let cat = Catalog::open(&db).unwrap();
+    let search = |q: &str, group: bool| {
+        cat.search(&SearchQuery {
+            q: q.into(),
+            limit: 50,
+            group,
+            ..Default::default()
+        })
+        .unwrap()
+    };
+    for group in [true, false] {
+        let r = search("пикник", group);
+        let rows: Vec<(String, String)> = r
+            .books
+            .iter()
+            .map(|b| (b.title.clone(), b.authors[0].name.clone()))
+            .collect();
+        let pos = |f: &dyn Fn(&(String, String)) -> bool| rows.iter().position(f);
+        let roadside =
+            pos(&|(t, a)| t.starts_with("Пикник на обочине") && a.starts_with("Стругацкий"))
+                .expect("«Пикник на обочине» found");
+        assert!(roadside < 3, "group {group}: {rows:?}");
+        let anon: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, (t, a))| t == "Пикник" && a == "Автор неизвестен")
+            .map(|(i, _)| i)
+            .collect();
+        // 18+ is neither boosted nor hidden; the deleted one is not listed
+        assert_eq!(anon.len(), 2, "group {group}: {rows:?}");
+        assert!(anon.iter().all(|&i| i > roadside), "{rows:?}");
+        // an exact title by a known author stays above the anonymous ones
+        let own = pos(&|(t, a)| t == "Пикник" && a.starts_with("Заречная")).unwrap();
+        assert!(own < anon[0], "{rows:?}");
+        if group {
+            let b = &r.books[roadside];
+            assert!(b.editions.as_ref().is_some_and(|e| e.count >= 3), "{b:?}");
+            assert!(!b.deleted);
+        }
+    }
+    // a multi-word query: the title that starts with it first
+    let r = search("пикник на обочине", true);
+    assert!(r.books[0].title.starts_with("Пикник на обочине"));
+
+    // nonsense: nothing found, nothing "corrected"
+    for q in ["zzzqxw", "qxwzzv", "xqzvbnm", "йцукенгшщ", "ъъъъъ", "zzzz"] {
+        let r = search(q, true);
+        assert!(
+            r.corrected.is_none() && r.did_you_mean.is_none(),
+            "{q}: {r:?}"
+        );
+        assert_eq!(cat.correct(q).unwrap(), None, "{q}");
+    }
+    let r = search("zzzqxw", true);
+    assert!(r.books.is_empty() && r.authors.is_empty() && r.series.is_empty());
+    // short words are never corrected
+    for q in ["zqx", "ъйъ", "qq"] {
+        assert_eq!(cat.correct(q).unwrap(), None, "{q}");
+    }
+    // the good cases still work
+    assert_eq!(cat.correct("азимв").unwrap().as_deref(), Some("азимов"));
+    assert_eq!(cat.correct("пикнк").unwrap().as_deref(), Some("пикник"));
+    let r = search("azimv", true);
+    assert!(
+        r.corrected.as_deref() == Some("азимов") || r.did_you_mean.as_deref() == Some("азимов"),
+        "{:?} {:?}",
+        r.corrected,
+        r.did_you_mean
+    );
+    assert_eq!(search("asimov", true).authors[0].name, "Азимов Айзек");
+}
+
+/// `skip_deleted`: deleted records are always hidden; kept (false) they stay reachable by id /
+/// key, marked deleted, with their live editions; skipped (true) they are not stored at all.
+/// Either way the library counts agree: import stats = catalog stats = the name lists = the
+/// grouped lists, and the two settings give the same counts.
+#[test]
+fn deleted_books_hidden_or_skipped_and_counts_agree() {
+    let dir = tempfile::tempdir().unwrap();
+    let inpx = dir.path().join("lib.inpx");
+    generate(
+        &inpx,
+        &GenOptions {
+            showcase: true,
+            books: 4000,
+            per_archive: 1000,
+            seed: 23,
+            files_dir: None,
+            structure_info: true,
+        },
+    )
+    .unwrap();
+    let mut runs = Vec::new();
+    for skip in [false, true] {
+        let db = dir.path().join(format!("lib_{}.db", skip as u8));
+        let messages = std::sync::Mutex::new(Vec::<String>::new());
+        let progress = |_: u64, _: u64, m: &str| messages.lock().unwrap().push(m.to_string());
+        let stats = import_inpx(
+            &ImportOptions {
+                inpx: inpx.clone(),
+                db_path: db.clone(),
+                skip_deleted: skip,
+                ..Default::default()
+            },
+            &progress,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let size = std::fs::metadata(&db).unwrap().len();
+        let cat = Catalog::open(&db).unwrap();
+        let st = cat.stats().clone();
+
+        // one definition of the counts everywhere
+        assert!(stats.deleted > 300, "{stats:?}");
+        assert_eq!(stats.skip_deleted, skip);
+        assert_eq!(
+            stats.books,
+            stats.records - stats.dropped_duplicates - if skip { stats.deleted } else { 0 }
+        );
+        assert_eq!(
+            stats.books - stats.live_books,
+            if skip { 0 } else { stats.deleted }
+        );
+        assert_eq!(st.book_count as u64, stats.books);
+        assert_eq!(st.live_book_count as u64, stats.live_books);
+        assert_eq!(st.work_count as u64, stats.works);
+        assert_eq!(st.author_count as u64, stats.authors);
+        assert_eq!(st.series_count as u64, stats.series);
+        assert_eq!(st.record_count as u64, stats.records);
+        assert_eq!(st.deleted_count as u64, stats.deleted);
+        assert_eq!(cat.authors().unwrap().rows.len() as i64, st.author_count);
+        assert_eq!(
+            cat.series_list().unwrap().rows.len() as i64,
+            st.series_count
+        );
+        let all = BookSelector::Since("1900-01-01".into());
+        assert_eq!(
+            works_total(&cat, &all),
+            st.work_count,
+            "works = grouped list"
+        );
+        assert!(st.work_count < st.live_book_count);
+        // the log says the same
+        let last = messages.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(last, format!("Imported: {}", stats.summary()));
+        assert!(
+            last.contains(&format!(
+                "{} deleted ({})",
+                freelib_import::builder::thousands(stats.deleted),
+                if skip { "skipped" } else { "hidden" }
+            )),
+            "{last}"
+        );
+        assert!(last.contains(&format!(
+            "{} books ({} works)",
+            freelib_import::builder::thousands(stats.live_books),
+            freelib_import::builder::thousands(stats.works)
+        )));
+
+        // the showcase's deleted edition of «Пикник на обочине» (lib id 304)
+        let key = "lib:304".to_string();
+        let found = cat.ids_by_keys(std::slice::from_ref(&key)).unwrap();
+        let search_deleted = cat
+            .search(&SearchQuery {
+                q: "пикник".into(),
+                include_deleted: true,
+                limit: 100,
+                ..Default::default()
+            })
+            .unwrap();
+        let hidden = cat
+            .search(&SearchQuery {
+                q: "пикник".into(),
+                limit: 100,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(hidden.books.iter().all(|b| !b.deleted), "always hidden");
+        if skip {
+            assert!(found.is_empty(), "not stored");
+            assert!(search_deleted.books.iter().all(|b| !b.deleted));
+        } else {
+            let id = found[0].1;
+            let d = cat.book(id).unwrap().unwrap();
+            assert!(d.book.deleted && d.book.title == "Пикник на обочине");
+            // … and leads to its live editions
+            let eds = cat
+                .editions(id, false, &freelib_catalog::NoRatings)
+                .unwrap()
+                .unwrap();
+            assert!(eds.iter().any(|e| !e.book.deleted), "{eds:?}");
+            assert!(search_deleted.books.iter().any(|b| b.deleted));
+        }
+        runs.push((stats, size));
+    }
+    let ((kept, kept_size), (skipped, skipped_size)) = (&runs[0], &runs[1]);
+    // the same library either way, only smaller without the deleted records
+    assert_eq!(kept.records, skipped.records);
+    assert_eq!(kept.deleted, skipped.deleted);
+    assert_eq!(kept.live_books, skipped.live_books);
+    assert_eq!(kept.works, skipped.works);
+    assert_eq!(kept.authors, skipped.authors);
+    assert_eq!(kept.series, skipped.series);
+    assert!(skipped_size < kept_size, "{skipped_size} < {kept_size}");
+}

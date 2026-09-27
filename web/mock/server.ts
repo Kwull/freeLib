@@ -4,8 +4,8 @@ import { nameRank } from '../src/lib/utils/phonetic';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { store, catalog, createJob, runJobProgress, runSendJob, broadcast } from './store';
-import type { JobItem } from '../src/lib/api/types';
+import { store, catalog, createJob, runJobProgress, runSendJob, broadcast, libCounts, importSummary } from './store';
+import type { JobItem, Library } from '../src/lib/api/types';
 import { placeholderCover } from './covers';
 import { scenarioOf, handleScenario, handleMockControl, sendSlowly } from './scenario';
 import { normalize } from './normalize';
@@ -183,6 +183,25 @@ function paginate<T>(items: T[], cursor: string | null, limit: number): { page: 
   return { page, next };
 }
 
+/** A re-import of an existing library: progress, then the summary line of the server's log. */
+function startImport(lib: Library, title: string) {
+  const job = createJob('import', title);
+  lib.status = { state: 'importing', progress: 0 };
+  broadcast('library', lib);
+  runJobProgress(job, {
+    onDone: () => {
+      const c = catalog(lib.id);
+      Object.assign(lib, libCounts(c));
+      job.message = importSummary(c, lib.skipDeleted);
+      job.log = [...job.log, `Imported: ${job.message}`];
+      lib.status = { state: 'idle' };
+      lib.catalogVersion++;
+      broadcast('library', lib);
+    },
+  });
+  return job;
+}
+
 function matchLib(req: IncomingMessage, pattern: RegExp): RegExpMatchArray | null {
   const url = (req.url ?? '').split('?')[0];
   return url.match(pattern);
@@ -267,7 +286,7 @@ export function installMockApi(server: Connect.Server) {
         const lib = {
           id, name: body.name, path: body.path, inpx: body.inpx ?? null,
           firstAuthorOnly: !!body.firstAuthorOnly, skipDeleted: !!body.skipDeleted, isDefault: !!body.isDefault,
-          bookCount: 0, authorCount: 0, seriesCount: 0, importedAt: null, catalogVersion: 0, newSinceLastVisit: 0,
+          bookCount: 0, workCount: 0, deletedCount: 0, authorCount: 0, seriesCount: 0, importedAt: null, catalogVersion: 0, newSinceLastVisit: 0,
           status: { state: 'idle' as const }, opdsUrl: `/opds/${id}`,
         };
         store.libraries.push(lib);
@@ -278,7 +297,9 @@ export function installMockApi(server: Connect.Server) {
           runJobProgress(job, {
             onDone: () => {
               const c = catalog(id);
-              lib.bookCount = c.books.filter((b) => !b.deleted).length; lib.authorCount = c.authorRows.length; lib.seriesCount = c.seriesRows.length;
+              Object.assign(lib, libCounts(c));
+              job.message = importSummary(c, lib.skipDeleted);
+              job.log = [...job.log, `Imported: ${job.message}`];
               lib.importedAt = new Date().toISOString(); lib.catalogVersion = 1;
               lib.status = { state: 'idle' };
               broadcast('library', lib);
@@ -291,7 +312,12 @@ export function installMockApi(server: Connect.Server) {
       if (m && method === 'PATCH') {
         const lib = store.libraries.find((l) => l.id === Number(m![1]));
         if (!lib) return fail(res, 404, 'not_found', 'Library not found');
-        Object.assign(lib, await readBody(req));
+        const body = await readBody(req);
+        const optionsChanged = (body.skipDeleted !== undefined && !!body.skipDeleted !== lib.skipDeleted)
+          || (body.firstAuthorOnly !== undefined && !!body.firstAuthorOnly !== lib.firstAuthorOnly);
+        Object.assign(lib, body);
+        // like the server: changed import options are applied by a re-import
+        if (optionsChanged && lib.inpx && lib.status.state !== 'importing') startImport(lib, `Import · ${lib.name}`);
         return send(res, 200, lib);
       }
       if (m && method === 'DELETE') {
@@ -306,10 +332,7 @@ export function installMockApi(server: Connect.Server) {
         if (!lib) return fail(res, 404, 'not_found', 'Library not found');
         if (lib.status.state === 'importing') return fail(res, 409, 'conflict', 'Import already running');
         const body = await readBody(req);
-        const job = createJob('import', `${body.mode === 'full' ? 'Full' : 'Incremental'} import · ${lib.name}`);
-        lib.status = { state: 'importing', progress: 0 };
-        broadcast('library', lib);
-        runJobProgress(job, { onDone: () => { lib.status = { state: 'idle' }; lib.catalogVersion++; broadcast('library', lib); } });
+        const job = startImport(lib, `${body.mode === 'full' ? 'Full' : 'Incremental'} import · ${lib.name}`);
         return send(res, 200, job);
       }
       if (path === '/api/v1/fs' && method === 'GET') {

@@ -31,7 +31,10 @@ type LibraryStatus = {
 type Library = {
   id: number; name: string; path: string; inpx: string | null;
   firstAuthorOnly: boolean; skipDeleted: boolean; isDefault: boolean;
-  bookCount: number; authorCount: number; seriesCount: number;
+  bookCount: number;               // live books (not marked deleted)
+  workCount: number;               // works of the live books: what every list counts
+  deletedCount: number;            // records marked deleted: hidden, or not stored with skipDeleted
+  authorCount: number; seriesCount: number;  // with ≥ 1 live book = the rows of GET authors / series
   importedAt: string | null;       // RFC3339
   catalogVersion: number;          // 0 when never imported
   newSinceLastVisit: number;       // books dated on/after the server-local day of the previous visit
@@ -193,7 +196,7 @@ passwords: a user created by single sign-on sets a password in Settings → Acco
 |---|---|---|
 | `GET /libraries` | – | `Library[]` |
 | `POST /libraries` **(admin)** | `{name, path, inpx?, firstAuthorOnly?, skipDeleted?, isDefault?}`; `path` and `inpx` must be inside `FREELIB_BOOKS_DIR` | `Library` (import job started automatically when `inpx` given) |
-| `PATCH /libraries/:lib` **(admin)** | any subset of POST fields | `Library` |
+| `PATCH /libraries/:lib` **(admin)** | any subset of POST fields; a changed `firstAuthorOnly` / `skipDeleted` starts a re-import (unless one runs) | `Library` |
 | `DELETE /libraries/:lib` **(admin)** | – | 204 (removes `lib_<id>.db` and cache) |
 | `POST /libraries/:lib/import` **(admin)** | `{mode: "full" \| "new"}` | `Job` (409 if an import is already running) |
 | `GET /fs` **(admin)** | `?path=<dir under books dir>` | `{path, parent: string\|null, entries: [{name, dir: boolean, size}]}` (dirs, `.inpx`, `.zip` only) |
