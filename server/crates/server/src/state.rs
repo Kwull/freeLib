@@ -263,6 +263,8 @@ impl AppState {
             skip_deleted: row.skip_deleted,
             is_default: row.is_default,
             book_count: st.live_book_count,
+            work_count: st.work_count,
+            deleted_count: st.deleted_count,
             author_count: st.author_count,
             series_count: st.series_count,
             imported_at: st.imported_at,
@@ -319,7 +321,14 @@ pub struct LibraryDto {
     pub first_author_only: bool,
     pub skip_deleted: bool,
     pub is_default: bool,
+    /// Live books (not marked deleted).
     pub book_count: i64,
+    /// Works of the live books: what every list counts.
+    pub work_count: i64,
+    /// Records marked deleted at the last import: hidden (reachable by link), or not stored at
+    /// all with `skip_deleted`.
+    pub deleted_count: i64,
+    /// Authors with at least one live book.
     pub author_count: i64,
     pub series_count: i64,
     pub imported_at: Option<String>,

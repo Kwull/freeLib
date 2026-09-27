@@ -1,4 +1,5 @@
 import { generateLibrary, type MockLibrary } from './gen';
+import { workKey } from './find';
 import type { Device, Job, JobItem, Shelf, Settings, User, Library, ConvertOptions, ApiToken, AuditRow, OAuthApp, OAuthRequest } from '../src/lib/api/types';
 
 // the server's tuned presets (server/crates/server/src/presets.rs, docs/web/DEVICES.md)
@@ -87,12 +88,35 @@ export function catalog(libId: number): MockLibrary {
   return c;
 }
 
+/**
+ * Library counts, one definition like the server: live books, their works, authors / series with
+ * a live book (the name lists), and the records marked deleted.
+ */
+export function libCounts(c: MockLibrary) {
+  const live = c.books.filter((b) => !b.deleted);
+  return {
+    bookCount: live.length,
+    workCount: new Set(live.map((b) => workKey(b))).size,
+    deletedCount: c.books.length - live.length,
+    authorCount: c.authorRows.length,
+    seriesCount: c.seriesRows.length,
+  };
+}
+
+/** The import log's summary line, like the server's. */
+export function importSummary(c: MockLibrary, skipDeleted: boolean): string {
+  const n = libCounts(c);
+  const f = (x: number) => x.toLocaleString('en-US');
+  return `${f(c.books.length)} records · ${f(n.deletedCount)} deleted (${skipDeleted ? 'skipped' : 'hidden'}) · `
+    + `${f(n.bookCount)} books (${f(n.workCount)} works) · ${f(n.authorCount)} authors · ${f(n.seriesCount)} series`;
+}
+
 function libMetaFor(id: number, name: string, isDefault: boolean): LibraryMeta {
   const c = catalog(id);
   return {
     id, name, path: `/books/${name}`, inpx: `${name}.inpx`,
     firstAuthorOnly: false, skipDeleted: false, isDefault,
-    bookCount: c.books.filter((b) => !b.deleted).length, authorCount: c.authorRows.length, seriesCount: c.seriesRows.length,
+    ...libCounts(c),
     importedAt: '2026-08-01T10:00:00Z', catalogVersion: 1, newSinceLastVisit: 12,
     status: { state: 'idle' },
     opdsUrl: `/opds/${id}`,

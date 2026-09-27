@@ -61,8 +61,13 @@
 
   const saveEdit = () => guarded(async () => {
     if (!editing) return;
+    const before = librariesState.items.find((l) => l.id === editing!.id);
+    const optionsChanged = !!before && !!editing.inpx
+      && (before.skipDeleted !== editing.skipDeleted || before.firstAuthorOnly !== editing.firstAuthorOnly);
     const lib = await api.updateLibrary(editing.id, editing);
     upsertLibrary(lib);
+    // the server re-imports to apply changed import options
+    if (optionsChanged) showToast(t('libraries.optionsReimport', { name: lib.name }));
     editing = null;
   });
 
@@ -105,10 +110,16 @@
           {#if lib.isDefault}<span class="badge">{t('libraries.default')}</span>{/if}
         </div>
         <div class="stats">
-          <span><b>{num(lib.bookCount)}</b> {tn('libraries.books', lib.bookCount)}</span>
-          <span><b>{num(lib.authorCount)}</b> {tn('libraries.authors', lib.authorCount)}</span>
-          <span><b>{num(lib.seriesCount)}</b> {tn('libraries.series', lib.seriesCount)}</span>
+          <span data-testid="lib-books"><b>{num(lib.bookCount)}</b> {tn('libraries.books', lib.bookCount)}</span>
+          {#if lib.workCount}<span data-testid="lib-works"><b>{num(lib.workCount)}</b> {tn('libraries.works', lib.workCount)}</span>{/if}
+          <span data-testid="lib-authors"><b>{num(lib.authorCount)}</b> {tn('libraries.authors', lib.authorCount)}</span>
+          <span data-testid="lib-series"><b>{num(lib.seriesCount)}</b> {tn('libraries.series', lib.seriesCount)}</span>
         </div>
+        {#if lib.deletedCount && lib.importedAt}
+          <div class="muted small" data-testid="lib-deleted" title={t('libraries.addDialog.skipDeletedHint')}>
+            {t(lib.skipDeleted ? 'libraries.deletedSkipped' : 'libraries.deletedHidden', { count: num(lib.deletedCount) })}
+          </div>
+        {/if}
         <div class="muted">
           {lib.importedAt ? `${t('libraries.imported')} ${formatDate(lib.importedAt.slice(0, 10), i18nState.lang)}` : t('libraries.never')}
         </div>
@@ -153,7 +164,8 @@
       </div>
     </label>
     <label class="checkbox"><input type="checkbox" bind:checked={firstAuthorOnly} />{t('libraries.addDialog.firstAuthorOnly')}</label>
-    <label class="checkbox"><input type="checkbox" bind:checked={skipDeleted} />{t('libraries.addDialog.skipDeleted')}</label>
+    <label class="checkbox"><input type="checkbox" bind:checked={skipDeleted} aria-describedby="skip-deleted-hint" />{t('libraries.addDialog.skipDeleted')}</label>
+    <p class="hint" id="skip-deleted-hint">{t('libraries.addDialog.skipDeletedHint')}</p>
     <label class="checkbox"><input type="checkbox" bind:checked={isDefault} />{t('libraries.addDialog.isDefault')}</label>
     <div class="footer">
       <button type="button" onclick={() => (addOpen = false)}>{t('common.cancel')}</button>
@@ -181,7 +193,8 @@
     <form class="form" onsubmit={(e) => { e.preventDefault(); saveEdit(); }}>
       <label>{t('libraries.addDialog.name')}<input type="text" bind:value={editing.name} /></label>
       <label class="checkbox"><input type="checkbox" bind:checked={editing.firstAuthorOnly} />{t('libraries.addDialog.firstAuthorOnly')}</label>
-      <label class="checkbox"><input type="checkbox" bind:checked={editing.skipDeleted} />{t('libraries.addDialog.skipDeleted')}</label>
+      <label class="checkbox"><input type="checkbox" bind:checked={editing.skipDeleted} aria-describedby="edit-skip-deleted-hint" />{t('libraries.addDialog.skipDeleted')}</label>
+      <p class="hint" id="edit-skip-deleted-hint">{t('libraries.addDialog.skipDeletedHint')}</p>
       <label class="checkbox"><input type="checkbox" bind:checked={editing.isDefault} />{t('libraries.addDialog.isDefault')}</label>
       <div class="footer">
         <button type="button" onclick={() => (editing = null)}>{t('common.cancel')}</button>
@@ -253,6 +266,7 @@
   .form .row input { flex-grow: 1; }
   .checkbox { flex-direction: row !important; align-items: center; gap: 8px !important; font-size: 14px !important; }
   .checkbox input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .form .hint { margin: -6px 0 0 24px; font-size: 12px; line-height: 1.4; color: var(--muted); }
   .footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
   .footer button { height: 38px; padding: 0 16px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); font-size: 14px; }
   .footer .primary, .footer .danger-btn { border: none; color: #fff; }

@@ -1621,3 +1621,139 @@ async fn outdated_catalog_is_reimported_on_start() {
             .any(|j| j["kind"] == "import")
     );
 }
+
+/// The Libraries card, the import log and the Authors / Series pages count the same things,
+/// and changing `skipDeleted` re-imports: deleted books are hidden either way, reachable by id
+/// only while they are stored.
+#[tokio::test]
+async fn library_counts_agree_and_skip_deleted_reimports() {
+    let (app, lib) = app_with_library().await;
+    let card = app.get("/api/v1/libraries").await.json()[0].clone();
+    let n = |v: &Value, k: &str| v[k].as_i64().unwrap_or_else(|| panic!("{k}: {v}"));
+    let rows = |kind: &str| {
+        let app = &app;
+        let kind = kind.to_string();
+        async move {
+            app.get(&format!("/api/v1/libraries/{lib}/{kind}"))
+                .await
+                .json()["rows"]
+                .as_array()
+                .unwrap()
+                .len() as i64
+        }
+    };
+    assert_eq!(n(&card, "authorCount"), rows("authors").await);
+    assert_eq!(n(&card, "seriesCount"), rows("series").await);
+    assert!(
+        n(&card, "deletedCount") > 0 && n(&card, "workCount") > 0,
+        "{card}"
+    );
+    assert!(n(&card, "workCount") <= n(&card, "bookCount"));
+    let grouped = app
+        .get(&format!(
+            "/api/v1/libraries/{lib}/books?since=1900-01-01&group=1&limit=1"
+        ))
+        .await
+        .json();
+    assert_eq!(n(&grouped, "total"), n(&card, "workCount"));
+    let summary = |c: &Value, how: &str| {
+        format!(
+            "{} deleted ({how}) · {} books ({} works) · {} authors · {} series",
+            freelib_import::builder::thousands(n(c, "deletedCount") as u64),
+            freelib_import::builder::thousands(n(c, "bookCount") as u64),
+            freelib_import::builder::thousands(n(c, "workCount") as u64),
+            freelib_import::builder::thousands(n(c, "authorCount") as u64),
+            freelib_import::builder::thousands(n(c, "seriesCount") as u64),
+        )
+    };
+    let import_jobs = |jobs: Value| -> Vec<Value> {
+        jobs.as_array()
+            .unwrap()
+            .iter()
+            .filter(|j| j["kind"] == "import")
+            .cloned()
+            .collect()
+    };
+    let jobs = import_jobs(app.get("/api/v1/jobs").await.json());
+    assert!(
+        jobs[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains(&summary(&card, "hidden")),
+        "{}",
+        jobs[0]["message"]
+    );
+
+    // a deleted book: hidden from lists, shown with deleted=1, opened by id
+    let deleted = app
+        .get(&format!(
+            "/api/v1/libraries/{lib}/books?since=1900-01-01&deleted=1&limit=5000"
+        ))
+        .await
+        .json()["books"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["deleted"] == true)
+        .cloned()
+        .expect("a deleted book");
+    let r = app
+        .get(&format!("/api/v1/libraries/{lib}/books/{}", deleted["id"]))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["deleted"], true);
+
+    // not stored any more: changing the option re-imports
+    let r = app
+        .patch(
+            &format!("/api/v1/libraries/{lib}"),
+            &json!({"skipDeleted": true}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["skipDeleted"], true);
+    let first_id = jobs[0]["id"].clone();
+    let jobs = import_jobs(app.get("/api/v1/jobs").await.json());
+    assert_eq!(jobs.len(), 2, "{jobs:?}");
+    let newest = jobs.iter().find(|j| j["id"] != first_id).unwrap();
+    let done = app.wait_job(newest["id"].as_str().unwrap()).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let after = app.get("/api/v1/libraries").await.json()[0].clone();
+    for k in [
+        "bookCount",
+        "workCount",
+        "deletedCount",
+        "authorCount",
+        "seriesCount",
+    ] {
+        assert_eq!(after[k], card[k], "{k}: the same library, only smaller");
+    }
+    assert!(
+        done["message"]
+            .as_str()
+            .unwrap()
+            .contains(&summary(&after, "skipped")),
+        "{}",
+        done["message"]
+    );
+    let none = app
+        .get(&format!(
+            "/api/v1/libraries/{lib}/books?since=1900-01-01&deleted=1&limit=5000"
+        ))
+        .await
+        .json();
+    assert!(
+        none["books"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["deleted"] == false)
+    );
+    // an unchanged option starts nothing
+    app.patch(
+        &format!("/api/v1/libraries/{lib}"),
+        &json!({"skipDeleted": true, "name": "Test 2"}),
+    )
+    .await;
+    assert_eq!(import_jobs(app.get("/api/v1/jobs").await.json()).len(), 2);
+}

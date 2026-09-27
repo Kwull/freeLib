@@ -9,7 +9,9 @@ export type LibraryStatus = {
 export type Library = {
   id: number; name: string; path: string; inpx: string | null;
   firstAuthorOnly: boolean; skipDeleted: boolean; isDefault: boolean;
-  bookCount: number; authorCount: number; seriesCount: number;
+  /** Live books; `workCount` their works (what the lists count); `deletedCount` the records marked deleted
+   *  (hidden, or not stored with `skipDeleted`); authors / series with at least one live book. */
+  bookCount: number; workCount: number; deletedCount: number; authorCount: number; seriesCount: number;
   importedAt: string | null;
   catalogVersion: number;
   newSinceLastVisit: number;

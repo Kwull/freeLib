@@ -83,7 +83,10 @@ served, and a read-only WAL database would need writable `-wal`/`-shm` files nex
 ```sql
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
   -- schema_version, inpx_version, collection_name, imported_at (RFC3339), catalog_version (int, strictly increasing,
-  -- ms timestamp), source_inpx, first_author_only, skip_deleted, book_count, live_book_count, author_count, series_count
+  -- ms timestamp), source_inpx, first_author_only, skip_deleted, record_count (INPX records), deleted_record_count
+  -- (records marked deleted: stored hidden, or left out with skip_deleted), book_count (stored), live_book_count,
+  -- work_count (works of the live books), author_count / series_count (with ≥ 1 live book, = the name lists).
+  -- A catalog without work_count (imported by an older build) has these three counted at open, no re-import.
 CREATE TABLE author (
   id INTEGER PRIMARY KEY,
   last TEXT NOT NULL, first TEXT NOT NULL, middle TEXT NOT NULL,
@@ -192,7 +195,14 @@ top-level "Прочее" (id 11). A book's genre ids are deduplicated; books wit
 * **One FTS query**: every word becomes `("word"* OR "stem" OR "key"*)`, AND-ed; a second query with plain prefixes and a
   third with the phrase on the title column (`title : "война и мир"*`, one word: `title : ^ "word"*`) assign tiers:
   phrase 3 > all prefixes 2 > word forms / transliterations 1; the score is `bm25 − 1000 × tier`, so the existing
-  relevance/rating ordering code is unchanged. With several words, a book whose author matches one word (the word's
+  relevance/rating ordering code is unchanged. bm25 is taken relative to the query's best match (−1 … 0), so within a
+  tier the boosts weigh the same for every query: the title *is* the query (+0.6; title word count kept in
+  `BookAttrs`), several query words start the title (+0.3, `title : ^ "…"*`), and the book's standing
+  (`search::popularity`, +0.5 for a known first author — not "Автор неизвестен" — plus up to 1.5 from the live
+  editions of its work, the live works of its first author and its library stars; none for 18+ books, which are
+  neither boosted nor hidden). So `пикник` lists the Strugatskys' «Пикник на обочине» (many editions, a famous author)
+  before two anonymous 18+ books titled just «Пикник», while an exact title by a known author stays above those.
+  With several words, a book whose author matches one word (the word's
   `author_fts` matches → their books) while another word matches elsewhere (title, series) gains 1.5 tiers — above a
   title phrase match — so `азимоф роботы` puts Азимов's «Роботы зари» above an essay titled «Азимов, роботы и мы».
   **Names** (authors, series; search, typeahead and the SPA's authors/series filter use the same order,
@@ -201,9 +211,13 @@ top-level "Прочее" (id 11). A book's genre ids are deduplicated; books wit
   infix matches last); ties by works, then the whole query as a prefix of the name. The 400 most-booked candidates
   are ranked in memory.
 * **Typos.** When a search finds fewer than 3 matches (or no author/series), each word of ≥ 4 letters that is neither the prefix of a
-  vocabulary word nor (by its key) of a word's key is replaced by the closest vocabulary word (optimal string alignment,
-  ≤ 1 edit up to 7 letters, ≤ 2 from 8, in the word's own script and in Latin-key space; among equally close words one
-  of the query's own script first — `азимв` → `азимов`, not the Latin `asimov` of the same key — then by frequency). A 64-bit
+  vocabulary word nor (by its key) of a word's key is replaced by the closest vocabulary word that is genuinely close
+  (optimal string alignment; `Vocab::closest`): ≤ 1 edit for 4–5 letters, ≤ 2 from 6, counted on the *shorter* word (no
+  correction into a word under 4 letters) and, at 2 edits, only with the same first letter; in the same script, or with
+  the same phonetic key, or — across scripts — within those edits in Latin-key space *and* by transliteration
+  (`azimv` → `азимов`). Phonetic keys fold doubled letters and spelling variants, so a key match alone is not enough:
+  `zzzqxw` (key `skxv`) used to become «скв» and show 932 books; now nothing is corrected and the SPA says "Nothing
+  found". Among equally close words one of the query's own script first — `азимв` → `азимов`, not the Latin `asimov` of the same key — then by frequency). A 64-bit
   character-set signature and the length pre-filter candidates. When the corrected query finds more (or finds
   authors/series the query did not), its results are returned (`corrected`, "Showing results for … · Search instead
   for …", `exact=1` skips the correction); otherwise it is only offered (`didYouMean`). The vocabulary is held in memory per
@@ -260,7 +274,10 @@ Every count shown next to a list counts **works** — the rows of the list with 
 default): the authors / series name lists and search hits (`book_count`, recomputed after the work ids are final),
 the genre tree (`genre_count`; a top-level genre counts a work once), the author summary (`count`, per series,
 "Outside series", languages, genres, anthologies), the grouped list `total` and search facets with `group=1` (a facet
-value counts the works it would leave, so it equals the results after choosing it). A work is placed by its **best
+value counts the works it would leave, so it equals the results after choosing it). The library itself (Libraries card,
+`Library.workCount`, the import log) shows live books *and* works, and counts the authors / series that have a live book —
+exactly the rows of the Authors / Series pages (the import used to count every author and series, also those with
+only deleted books: 171,302 vs 170,303 authors on Flibusta). A work is placed by its **best
 copy** (the row shown): its series, its number of authors (anthology = ≥ 4) — the summary groups with the same known
 covers as the list. Deleted books are never counted (they are listed only with `deleted=1`). Where the number of
 files differs it is labelled as files (`AuthorSummary.files`, the header shows "862 books · 976 files"). With
@@ -600,8 +617,15 @@ INPX parsing details (compared with `importthread.cpp`):
 * Authors: empty entries skipped, duplicates removed, `Автор неизвестен`/`неизвестно`/`unknown` variants and books
   with no author map to one author "Автор неизвестен" (dropped when real authors are present). Qt's fallback of
   reading the FB2 for unknown authors is not done (too slow for bulk import).
-* `first_author_only` keeps only the first author (Qt applied it only to FB2 folder imports); `skip_deleted` drops
-  records with `DEL` > 0.
+* `first_author_only` keeps only the first author (Qt applied it only to FB2 folder imports). Records with `DEL` > 0
+  are always hidden (lists, counts, search, OPDS); `skip_deleted` decides whether they are stored: `false` (default)
+  keeps them — reachable by id / `book_key` (shelves, history, links), marked deleted on the book page, listed with
+  `deleted=1`, and joined to their work so they lead to the current editions; `true` leaves them out — a smaller
+  catalog and a faster import. Changing either option (`PATCH /libraries/:lib`) re-imports. The counts are the same
+  either way (the series-number rule of the editions runs over the live books; a work of only deleted books is then
+  joined to the work the rule puts it with, never bridging two live works); the import log reads `705,588 records · 113,285 deleted (hidden) · 592,303 books (563,846 works) ·
+  170,303 authors · 70,732 series` (`ImportStats::summary`; `(skipped)` with `skip_deleted`), in the Activity log, the
+  job message and the server log alike.
 * SERNO / SIZE / LIBID / STARS: integers (leading digits accepted); SERNO 0 → NULL; LIBID 0 → none; STARS clamped 0..5.
   DATE validated (`YYYY-M-D` normalised), invalid → `""`. LANG lower-case, first 2 chars. EXT lower-case, leading dot removed.
 * FOLDER: `x.zip` → archive `x.zip`; `x.inp` → archive `x.zip`; any other non-empty value is a plain sub-folder
@@ -725,6 +749,14 @@ Phonetic keys, name ranking and counts in works (schema 6), same 600k library an
 The SPA's author filter (client side, measured in Node over 176k names): ≈ 30 ms per one-word keystroke
 (was 8–20 ms with the plain substring match), ≈ 60 ms for two words; the names' phonetic keys take ≈ 0.3 s once
 per list, in 5 000-row slices after it arrives (memoized per word).
+
+Ranking by standing, genuine-closeness typo correction and live-only counts (same 600k library and machine, master →
+this build, `bench --skip-import` back to back): search kind=all p95 83.1 → 80.7 ms, all 41 queries p95 104.5 → 102–104
+ms (max 134 → 140 ms, noisy), typos p95 19.2 → 16.7–24.5 ms; new rows: generic titles (`пикник`, `мир`, `дом`) p95 59–66
+ms, nonsense (`zzzqxw`, `qwrtpl`, `xqzvbnm`: no correction, nothing found) p95 < 1 ms. The one-time attribute load
+grows 524 → 550–620 ms (first author's works, title word counts, a standing byte per book, +2 bytes/book). Import:
+`600,000 records · 47,912 deleted (hidden) · 552,088 books (538,688 works) · 175,787 authors · 58,915 series`, 429 MB;
+with `skip_deleted` the same counts, 398 MB.
 
 Search p95 stays well under the 300 ms target. Reproduce: `gen-inpx --books 600000 --out bench-data/synthetic-600k.inpx`,
 then `bench --inpx bench-data/synthetic-600k.inpx`.

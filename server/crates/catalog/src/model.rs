@@ -167,12 +167,20 @@ pub struct GenreCount {
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryStats {
-    /// All books in the catalog, including deleted ones.
+    /// All books in the catalog, including deleted ones (none with `skip_deleted`).
     pub book_count: i64,
     /// Books with `deleted = 0`.
     pub live_book_count: i64,
+    /// Works of the live books (editions of one work once): the unit of every list count.
+    pub work_count: i64,
+    /// Authors with at least one live book (the Authors page).
     pub author_count: i64,
+    /// Series with at least one live book (the Series page).
     pub series_count: i64,
+    /// Records in the INPX, deleted and duplicate ones included.
+    pub record_count: i64,
+    /// Records marked deleted in the INPX (stored hidden, or left out with `skip_deleted`).
+    pub deleted_count: i64,
     pub imported_at: Option<String>,
     pub catalog_version: i64,
     pub inpx_version: Option<String>,

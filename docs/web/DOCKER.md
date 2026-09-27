@@ -61,6 +61,21 @@ Multiple libraries can be comma-separated:
 FREELIB_AUTOIMPORT=/books/lib1.inpx,/books/lib2.inpx
 ```
 
+### Deleted books
+
+Collections such as Flibusta list many records as deleted (113,285 of 705,588 on Flibusta: replaced by a better
+copy, or withdrawn). They are **always hidden** from lists, counts, search and OPDS. The library option
+**"Don't store deleted books"** (`skipDeleted`, Libraries → Edit) only decides whether they are kept in the catalog:
+
+- **Off (default):** kept, hidden. A book you shelved, rated or sent that the library later marks deleted still opens
+  (marked "deleted in the library") and leads to its current editions; "Show deleted books" lists them.
+- **On:** not stored. The catalog is smaller and imports are faster — on a 600k synthetic library with 8 % deleted,
+  398 MB instead of 429 MB and ~10 % less import time; with Flibusta's ~16 % expect about twice that. Shelf entries,
+  ratings and history of such books show as unavailable.
+
+The default stays off: the space saved is modest and keeping the records protects the links in your shelves and
+history. Changing the option re-imports the library; all counts (books, works, authors, series) are the same either way.
+
 ## Image Variants
 
 ### `full` (default)
