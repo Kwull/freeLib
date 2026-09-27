@@ -148,3 +148,10 @@ button { cursor: pointer; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* Menus shown in the top layer by utils/popover.ts: undo the browser's [popover] defaults so the
+   component's own styles decide (zero specificity, still above the user-agent sheet). */
+:where([popover][data-fl-popover]) {
+  inset: auto; margin: 0; padding: 0; border: 0; overflow: visible;
+  color: inherit; background: transparent; width: auto; height: auto;
+}

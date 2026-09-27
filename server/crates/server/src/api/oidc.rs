@@ -15,7 +15,8 @@ use crate::auth::{self, Auth, COOKIE};
 use crate::db;
 use crate::error::{ApiError, ApiResult};
 use crate::oidc::{
-    self, CallbackQuery, Outcome, PENDING_TTL, STATE_COOKIE, STATE_COOKIE_PATH, SsoError,
+    self, CallbackQuery, LINK_COOKIE, LINK_COOKIE_PATH, Outcome, PENDING_TTL, STATE_COOKIE,
+    STATE_COOKIE_PATH, SsoError,
 };
 use crate::state::{AppState, LimitKey};
 use crate::util::{random_token, set_header};
@@ -23,6 +24,14 @@ use crate::util::{random_token, set_header};
 fn state_cookie(value: &str, max_age: u64, secure: bool) -> String {
     format!(
         "{STATE_COOKIE}={value}; Path={STATE_COOKIE_PATH}; HttpOnly; SameSite=Lax; Max-Age={max_age}{}",
+        if secure { "; Secure" } else { "" }
+    )
+}
+
+/// The pending-link cookie (`max_age` 0 clears it).
+pub fn link_cookie(value: &str, max_age: u64, secure: bool) -> String {
+    format!(
+        "{LINK_COOKIE}={value}; Path={LINK_COOKIE_PATH}; HttpOnly; SameSite=Lax; Max-Age={max_age}{}",
         if secure { "; Secure" } else { "" }
     )
 }
@@ -192,8 +201,26 @@ pub async fn callback(
             return Ok(r);
         }
     };
-    let user = match &outcome {
-        Outcome::SignedIn(u) | Outcome::Linked(u) => u.clone(),
+    let user = match outcome {
+        Outcome::SignedIn(u) | Outcome::Linked(u) => u,
+        Outcome::NeedsLink {
+            user,
+            can_link,
+            profile,
+        } => {
+            // the name is taken: ask for that account's password (never linked by name)
+            let r = match p.add_link(*profile, user.id, user.username.clone(), can_link, ret) {
+                Ok(token) => {
+                    let mut r = see_other("/login?ssoLink=1");
+                    add_cookie(&mut r, &link_cookie(&token, PENDING_TTL.as_secs(), secure));
+                    r
+                }
+                Err(e) => error_redirect(&e, false),
+            };
+            let mut r = r;
+            add_cookie(&mut r, &clear_state);
+            return Ok(r);
+        }
     };
     // a fresh session id for every sign-in (and link); the old one is dropped
     let old = auth::cookie_value(&headers, COOKIE);
@@ -218,6 +245,100 @@ pub async fn callback(
     add_cookie(&mut r, &auth::session_cookie(&token, secure));
     add_cookie(&mut r, &clear_state);
     Ok(r)
+}
+
+/// `GET /auth/oidc/pending`: the pending link of this browser (a first single sign-on whose
+/// user name belongs to an existing account): `{ username, canLink, canCreate,
+/// passwordLogin, label }`; 404 when there is none.
+pub async fn pending(State(st): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
+    let p = provider(&st)?;
+    let l = auth::cookie_value(&headers, LINK_COOKIE)
+        .and_then(|t| p.peek_pending_link(&t))
+        .ok_or_else(|| ApiError::not_found("no single sign-on is waiting to be linked"))?;
+    let mut r = Json(json!({
+        "username": l.username,
+        "canLink": l.can_link,
+        "canCreate": p.cfg.auto_create,
+        "passwordLogin": !st.password_login_refused(&l.username),
+        "label": p.cfg.button,
+    }))
+    .into_response();
+    set_header(&mut r, header::CACHE_CONTROL, "no-store");
+    Ok(r)
+}
+
+/// `POST /auth/oidc/pending/create`: instead of linking, creates a separate account for the
+/// pending sign-in (`alice (2)`; only with auto-creation on) and signs it in: `{ user }`.
+pub async fn pending_create(State(st): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
+    let p = provider(&st)?;
+    if !p.cfg.auto_create {
+        return Err(ApiError::forbidden(
+            "accounts are not created by single sign-on on this server",
+        ));
+    }
+    let l = auth::cookie_value(&headers, LINK_COOKIE)
+        .and_then(|t| p.take_pending_link(&t, |_| true))
+        .ok_or_else(|| ApiError::not_found("no single sign-on is waiting to be linked"))?;
+    let cfg = p.cfg.clone();
+    let token = random_token(32);
+    let t2 = token.clone();
+    let user = st
+        .db
+        .run(move |c| {
+            // the identity may have been linked meanwhile (another tab)
+            if let Some(u) = db::identity_user(c, &l.profile.issuer, &l.profile.subject)? {
+                db::create_session(c, u.id, &t2)?;
+                return Ok(u);
+            }
+            let u = oidc::create_account(c, &cfg, &l.profile, Some("user name taken"))?;
+            db::create_session(c, u.id, &t2)?;
+            Ok(u)
+        })
+        .await?;
+    let secure = st.secure_cookies(&headers);
+    let mut r = Json(json!({ "user": user })).into_response();
+    add_cookie(&mut r, &auth::session_cookie(&token, secure));
+    add_cookie(&mut r, &link_cookie("", 0, secure));
+    set_header(&mut r, header::CACHE_CONTROL, "no-store");
+    let _ = st.events().send(crate::jobs::Event::Users);
+    Ok(r)
+}
+
+/// `DELETE /auth/oidc/pending`: drops this browser's pending link.
+pub async fn pending_cancel(State(st): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
+    let p = provider(&st)?;
+    if let Some(t) = auth::cookie_value(&headers, LINK_COOKIE) {
+        p.take_pending_link(&t, |_| true);
+    }
+    let mut r = StatusCode::NO_CONTENT.into_response();
+    add_cookie(&mut r, &link_cookie("", 0, st.secure_cookies(&headers)));
+    Ok(r)
+}
+
+/// After a password sign-in as `uid`: links this browser's pending single sign-on when it
+/// was waiting for exactly this account (blocking). Returns whether it linked.
+pub fn finish_pending_link(st: &AppState, headers: &HeaderMap, uid: i64) -> bool {
+    let (Some(p), Some(token)) = (st.oidc.as_ref(), auth::cookie_value(headers, LINK_COOKIE))
+    else {
+        return false;
+    };
+    let Some(l) = p.take_pending_link(&token, |l| l.user_id == uid && l.can_link) else {
+        return false;
+    };
+    let c = st.db.lock();
+    let pr = &l.profile;
+    match db::link_identity(&c, uid, &pr.issuer, &pr.subject, pr.email.as_deref())
+        .and_then(|_| db::touch_identity(&c, &pr.issuer, &pr.subject, pr.email.as_deref()))
+    {
+        Ok(()) => {
+            tracing::info!(user = %l.username, "single sign-on identity linked after a password sign-in");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(user = %l.username, "single sign-on could not be linked: {e}");
+            false
+        }
+    }
 }
 
 /// `GET /me/account`: how the current user can sign in.

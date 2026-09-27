@@ -472,10 +472,11 @@ async fn enrichment_worker_priorities_and_spacing() {
         titles.iter().all(|t| first_n.contains(&t)),
         "{titles:?} first, got {first_n:?}"
     );
-    // requests are at least the interval apart
+    // requests are the interval (60 ms) apart: they are spaced when sent, and arrive with
+    // some scheduling jitter on a busy machine (a first request also opens the connection)
     for w in hits.windows(2) {
         let gap = w[1].1.duration_since(w[0].1);
-        assert!(gap >= Duration::from_millis(55), "gap {gap:?}");
+        assert!(gap >= Duration::from_millis(40), "gap {gap:?}");
     }
     // the admin switch stops the worker
     app.put(

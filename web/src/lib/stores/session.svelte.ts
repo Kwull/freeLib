@@ -17,9 +17,11 @@ export async function loadSession(): Promise<Session> {
   return s;
 }
 
-export async function login(username: string, password: string) {
-  const { user } = await api.login(username, password);
+/** Signs in; whether a pending single sign-on was linked to the account on the way. */
+export async function login(username: string, password: string): Promise<boolean> {
+  const { user, ssoLinked } = await api.login(username, password);
   sessionState.user = user;
+  return !!ssoLinked;
 }
 
 export async function logout() {

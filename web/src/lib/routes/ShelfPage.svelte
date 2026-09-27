@@ -1,6 +1,8 @@
 <script lang="ts">
   import ScopeBooksPage from './ScopeBooksPage.svelte';
   import { shelvesState } from '../stores/shelves.svelte';
+  import NotFoundCard from '../components/NotFoundCard.svelte';
+  import { t } from '../i18n';
 
   let { lib, id }: { lib: number; id: number } = $props();
   const shelf = $derived(shelvesState.items.find((s) => s.id === id));
@@ -13,7 +15,11 @@
       <h1>{shelf.name}</h1>
     </div>
   {/if}
-  <ScopeBooksPage {lib} scope={{ kind: 'shelf', id }} />
+  {#if shelf || !shelvesState.loaded}
+    <ScopeBooksPage {lib} scope={{ kind: 'shelf', id }} />
+  {:else}
+    <NotFoundCard {lib} title={t('notFound.shelf')} back="/l/{lib}/shelves" />
+  {/if}
 </div>
 
 <style>

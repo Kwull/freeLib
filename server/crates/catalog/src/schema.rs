@@ -12,7 +12,10 @@ use rusqlite::Connection;
 ///    series number, title keys drop format notes / repeated volume numbers (re-import).
 /// 5: omnibus / part titles (`Миры Айзека Азимова. Книга 9`) no longer join a work by series
 ///    number (re-import).
-pub const CATALOG_SCHEMA_VERSION: i64 = 5;
+/// 6: Latin keys are coarse phonetic keys (`asimov` = `azimoff` = `Азимов`); `author` /
+///    `series` `book_count` and `genre_count` count live works (editions of one work once),
+///    like the grouped lists (re-import).
+pub const CATALOG_SCHEMA_VERSION: i64 = 6;
 
 /// Catalog tables. Created on an empty database by the importer *before* the bulk load;
 /// indexes ([`CATALOG_INDEXES`]) are created afterwards.
@@ -168,6 +171,12 @@ CREATE INDEX job_owner ON job(owner);
 CREATE TABLE job_item (job_id TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE, pos INTEGER NOT NULL, book_id INTEGER NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, size INTEGER, mail INTEGER, updated_at TEXT NOT NULL, PRIMARY KEY (job_id, pos)) WITHOUT ROWID;
 CREATE TABLE handoff (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, library_id INTEGER NOT NULL, book_id INTEGER NOT NULL, book_key TEXT NOT NULL, device_id INTEGER, format TEXT NOT NULL, options TEXT NOT NULL, file_name TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, uses INTEGER NOT NULL DEFAULT 0, max_uses INTEGER NOT NULL) WITHOUT ROWID;
 CREATE INDEX handoff_user ON handoff(user_id, created_at);
+"#,
+    // v9: a user's e-mail address (set by an administrator): a first single sign-on with a
+    // verified e-mail equal to it links to that account instead of creating another
+    r#"
+ALTER TABLE user ADD COLUMN email TEXT;
+CREATE INDEX user_email ON user(email COLLATE NOCASE);
 "#,
 ];
 

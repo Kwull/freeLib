@@ -15,8 +15,10 @@
   async function toggle() {
     busy = true;
     try {
-      setFollows(lib, await api.setFollow(lib, kind, id, !on));
-      showToast(on ? t('follow.stopped') : t('follow.started'));
+      // the message follows the state asked for, captured before the store update flips `on`
+      const next = !on;
+      setFollows(lib, await api.setFollow(lib, kind, id, next));
+      showToast(next ? t('follow.started') : t('follow.stopped'));
     } catch (e) {
       showToast(errorText(e), 'error');
     } finally {

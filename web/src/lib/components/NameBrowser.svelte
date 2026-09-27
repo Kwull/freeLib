@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import VirtualList from './VirtualList.svelte';
   import Icon from './Icon.svelte';
   import { normalize } from '../utils/normalize';
+  import { latinKey, nameRank, wordsOf } from '../utils/phonetic';
   import { t } from '../i18n';
   import {
     SCRIPT_LABEL, letterAt, scriptOf, scriptsByCount, stripLetters, type Script,
@@ -36,6 +38,7 @@
   let query = $state('');
   let scrollToIndex = $state<number | null>(null);
   let activeIndex = $state(-1);
+  let listRef = $state<{ reveal: (i: number) => void } | undefined>();
   let topIndex = $state(0);
   let script = $state<Script | null>(null);
 
@@ -48,14 +51,93 @@
     normalizedFor = rows;
   });
 
+  // The phonetic keys of each name's words that differ from the word (` asimov aisek`), so a
+  // Latin spelling finds a Cyrillic name (`asimov`, `azimoff` → Азимов). Computed in slices
+  // after the list arrives (memoized per word: first names and patronymics repeat); until then
+  // the filter matches the text only.
+  let hayRows: string[] = [];
+  let hayFor: unknown = null;
+  let keysVersion = $state(0);
+  $effect(() => {
+    const r = rows;
+    const out: string[] = new Array(r.length);
+    const memo = new Map<string, string | null>();
+    const key = (w: string) => {
+      let k = memo.get(w);
+      if (k === undefined) {
+        k = latinKey(w);
+        if (k === w) k = null;
+        memo.set(w, k);
+      }
+      return k;
+    };
+    let i = 0;
+    let cancelled = false;
+    const step = () => {
+      if (cancelled) return;
+      const norm = normalizedFor === r ? normalizedRows : null;
+      const end = Math.min(r.length, i + 5000);
+      for (; i < end; i++) {
+        const n = norm?.[i] ?? normalize(r[i][1]);
+        let h = '';
+        for (const w of wordsOf(n)) {
+          const k = key(w);
+          if (k) h += ` ${k}`;
+        }
+        out[i] = h;
+      }
+      if (i < r.length) setTimeout(step, 0);
+      else {
+        hayRows = out;
+        hayFor = r;
+        keysVersion++;
+      }
+    };
+    const timer = setTimeout(step, 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  });
+
+  /** Rows matching the filter, best first (like the server's search): the last name is the
+   *  query word, then starts with it, then another word is / starts with it, then an infix
+   *  match; more books first among equals. Every query word must match the start of a word
+   *  (as typed or by its phonetic key), or the whole query must occur in the name. */
   const filtered = $derived.by(() => {
+    keysVersion;
     const q = normalize(query);
     if (!q) return rows;
     const norm = normalizedFor === rows ? normalizedRows : rows.map((r) => normalize(r[1]));
+    const hay = hayFor === rows ? hayRows : null;
     const start = performance.now();
-    const out: typeof rows = [];
+    const tokens = wordsOf(q);
+    const needles = tokens.map((t) => {
+      const k = [...t].length >= 3 ? latinKey(t) : null;
+      return { t: ` ${t}`, k: hay && k ? ` ${k}` : null };
+    });
+    const hits: { i: number; words: boolean }[] = [];
+    const one = needles.length === 1 ? needles[0] : null;
     for (let i = 0; i < rows.length; i++) {
-      if (norm[i].includes(q)) out.push(rows[i]);
+      const n = norm[i];
+      const infix = n.includes(q);
+      let words: boolean;
+      if (one) {
+        // one word: a word start implies an infix match, so most rows cost one or two scans
+        words = infix ? n.startsWith(q) || n.includes(one.t) : !!(one.k && hay && hay[i].includes(one.k));
+      } else {
+        words = needles.length > 0;
+        for (const nd of needles) {
+          if (!(n.startsWith(nd.t.slice(1)) || n.includes(nd.t)) && !(nd.k && hay && hay[i].includes(nd.k))) { words = false; break; }
+        }
+      }
+      if (words || infix) hits.push({ i, words });
+    }
+    // ranking every hit of a one-letter filter is not worth it: those stay in list order
+    let out: typeof rows;
+    if (hits.length <= 20000) {
+      const ranked = hits.map((h) => ({ ...h, rank: h.words ? nameRank(norm[h.i], tokens) : 4 }));
+      ranked.sort((a, b) => a.rank - b.rank || rows[b.i][2] - rows[a.i][2] || a.i - b.i);
+      out = ranked.map((h) => rows[h.i]);
+    } else {
+      out = hits.map((h) => rows[h.i]);
     }
     if (import.meta.env.DEV) {
       const ms = performance.now() - start;
@@ -116,6 +198,62 @@
     if (first) jumpToLetter(first[0], first[2]);
   }
 
+  // Keyboard on the list itself (a listbox): ↑/↓, Home/End, PgUp/PgDn move the focus between
+  // the names (the virtual list renders the new one first), Enter opens it.
+  let listEl: HTMLDivElement | undefined = $state();
+  function focusRow(i: number) {
+    if (!filtered.length) return;
+    i = Math.max(0, Math.min(filtered.length - 1, i));
+    activeIndex = i;
+    listRef?.reveal(i);
+    tick().then(() => listEl?.querySelector<HTMLElement>(`[data-i="${i}"]`)?.focus());
+  }
+  function onListKeydown(e: KeyboardEvent) {
+    const row = (e.target as HTMLElement).closest<HTMLElement>('[data-i]');
+    if (!row || e.altKey || e.ctrlKey || e.metaKey) return;
+    const i = Number(row.dataset.i);
+    const page = Math.max(1, Math.floor((listEl?.clientHeight ?? 360) / ROW) - 1);
+    const to = e.key === 'ArrowDown' ? i + 1 : e.key === 'ArrowUp' ? i - 1 : e.key === 'Home' ? 0
+      : e.key === 'End' ? filtered.length - 1 : e.key === 'PageDown' ? i + page : e.key === 'PageUp' ? i - page : null;
+    if (to === null) return;
+    e.preventDefault();
+    focusRow(to);
+  }
+
+  // Letter strip: tap a letter, or (phones) press and slide along the strip — the letter
+  // under the finger is shown large in a bubble and the list follows it.
+  let scrub = $state<{ letter: string; y: number } | null>(null);
+  let stripEl: HTMLDivElement | undefined = $state();
+  function letterFromPoint(x: number, y: number): HTMLButtonElement | null {
+    const el = document.elementFromPoint(x, y)?.closest<HTMLButtonElement>('.letters button');
+    return el && stripEl?.contains(el) ? el : null;
+  }
+  function scrubAt(e: PointerEvent) {
+    if (!stripEl) return;
+    const r = stripEl.getBoundingClientRect();
+    // clamp to the strip so a finger sliding past its end still picks the first / last letter
+    const y = Math.max(r.top + 2, Math.min(r.bottom - 2, e.clientY));
+    const btn = letterFromPoint(r.left + r.width / 2, y);
+    if (!btn || btn.disabled) return;
+    const i = Number(btn.dataset.strip);
+    const l = strip[i];
+    if (!l || l.index === null) return;
+    scrub = { letter: l.letter, y: y - r.top };
+    if (pinnedLetter !== l.letter) jumpToLetter(l.letter, l.index);
+  }
+  function onStripDown(e: PointerEvent) {
+    if (e.pointerType === 'mouse') return; // mice click the buttons
+    try { stripEl?.setPointerCapture(e.pointerId); } catch { /* not an active pointer */ }
+    e.preventDefault();
+    scrubAt(e);
+  }
+  function onStripMove(e: PointerEvent) {
+    if (scrub) scrubAt(e);
+  }
+  function onStripUp() {
+    scrub = null;
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -170,7 +308,7 @@
     {/if}
   </div>
   <div class="body">
-    <div class="list" onwheel={userScrolled} ontouchmove={userScrolled} onkeydown={userScrolled} onpointerdown={userScrolled} role="presentation">
+    <div class="list" bind:this={listEl} onwheel={userScrolled} ontouchmove={userScrolled} onkeydown={(e) => { userScrolled(); onListKeydown(e); }} onpointerdown={userScrolled} role="presentation">
       {#if loading && !rows.length}
         <div class="loading" aria-busy="true">
           {#if progressText}
@@ -187,10 +325,11 @@
       {#if rows.length && !filtered.length}
         <div class="nothing">{t('search.noResults')}</div>
       {/if}
-      <VirtualList items={filtered} itemHeight={ROW} bind:scrollToIndex onRangeChange={(_s, _e, first) => (topIndex = first)}>
+      <VirtualList bind:this={listRef} items={filtered} itemHeight={ROW} bind:scrollToIndex onRangeChange={(_s, _e, first) => (topIndex = first)}>
         {#snippet row(r, i)}
           <button
             type="button"
+            data-i={i}
             class="arow"
             class:active={r[0] === selectedId}
             class:hover-active={i === activeIndex}
@@ -205,10 +344,12 @@
       </VirtualList>
     </div>
     {#if !query && strip.length}
-      <div class="letters" aria-label={t('browse.jumpToLetter')}>
+      <div class="letters" class:scrubbing={!!scrub} aria-label={t('browse.jumpToLetter')} bind:this={stripEl} data-testid="letter-strip"
+        role="group" onpointerdown={onStripDown} onpointermove={onStripMove} onpointerup={onStripUp} onpointercancel={onStripUp}>
         {#each strip as l, i (i)}
           <button
             type="button"
+            data-strip={i}
             class:active={l.letter === currentLetter}
             disabled={l.index === null}
             aria-label={l.index === null ? `${l.letter}: 0` : `${l.letter}: ${l.count}`}
@@ -216,6 +357,9 @@
           >{l.letter}</button>
         {/each}
       </div>
+      {#if scrub}
+        <div class="bubble" style:top="{scrub.y}px" aria-hidden="true" data-testid="letter-bubble">{scrub.letter}</div>
+      {/if}
     {/if}
   </div>
 </section>
@@ -256,7 +400,7 @@
   .load-bar div { height: 100%; background: var(--accent); transition: width .3s; }
   @keyframes pulse { 50% { opacity: .45; } }
   .nothing { padding: 16px; color: var(--muted); font-size: 14px; }
-  .body { flex-grow: 1; display: flex; min-height: 0; }
+  .body { flex-grow: 1; display: flex; min-height: 0; position: relative; }
   .list { flex-grow: 1; min-width: 0; padding: 0 2px 0 8px; position: relative; }
   .arow {
     display: flex; justify-content: space-between; align-items: center; height: 36px; width: 100%;
@@ -280,8 +424,21 @@
   .letters button:hover:not(:disabled) { color: var(--accent); background: var(--surface-hover); }
   .letters button:disabled { color: var(--muted); opacity: .35; cursor: default; font-weight: 400; }
   .letters button.active { color: var(--accent); font-weight: 700; }
+  .arow:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .bubble {
+    position: absolute; right: 52px; width: 56px; height: 56px; margin-top: -28px; border-radius: 28px;
+    display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 3;
+    background: var(--accent); color: #fff; font-size: 26px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.25);
+  }
   @media (max-width: 900px) {
     .browser { flex: 1 1 auto; border-right: none; }
-    .letters button { min-height: 16px; font-size: 12px; }
+    /* phones: a wider strip for the thumb (the whole strip is a scrub area, see onStripDown);
+       letters as tall as the strip allows, at least 24px when there is room */
+    .letters { width: 36px; touch-action: none; padding: 4px 0 8px; }
+    .letters button { width: 36px; min-height: 16px; max-height: 28px; font-size: 13px; }
+    .letters.scrubbing button.active { background: var(--accent-soft); }
+    /* overlay scrollbars sit on the right edge of the list: keep the counts clear of them */
+    .arow { padding-right: 16px; }
+    .list { padding-right: 4px; }
   }
 </style>

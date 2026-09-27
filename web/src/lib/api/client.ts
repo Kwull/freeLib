@@ -2,7 +2,7 @@ import { ApiError } from './types';
 import type {
   Library, Book, BookDetail, Genre, Shelf, Device, Job, Session, NameListResponse,
   BooksResponse, SearchResponse, Settings, User, ConvertOptions, AuthorSummary, CoauthorsResponse,
-  Account, UserRow, RatingParams, TokensResponse, ApiToken, AuditRow, TokenScope, OAuthApp, HandoffLink,
+  Account, UserRow, SsoPending, MergeResult, RatingParams, TokensResponse, ApiToken, AuditRow, TokenScope, OAuthApp, HandoffLink,
   OAuthRequest,
   EditionsResponse, FollowList, HomeResponse,
 } from './types';
@@ -84,12 +84,16 @@ export const api = {
   // Session
   session: () => request<Session>('/session'),
   login: (username: string, password: string) =>
-    request<{ user: User }>('/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+    request<{ user: User; ssoLinked?: boolean }>('/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   logout: () => request<void>('/logout', { method: 'POST' }),
   /** Single sign-on: where the browser goes to sign in (a full page navigation). */
   oidcLoginUrl: (returnTo: string) => `${BASE}/auth/oidc/login${qs({ return: returnTo })}`,
   oidcLink: () => request<{ url: string }>('/auth/oidc/link', { method: 'POST' }),
   oidcUnlink: () => request<void>('/me/oidc', { method: 'DELETE' }),
+  /** A first single sign-on waiting to be linked to an existing account (404 when none). */
+  oidcPending: () => request<SsoPending>('/auth/oidc/pending'),
+  oidcPendingCreate: () => request<{ user: User }>('/auth/oidc/pending/create', { method: 'POST' }),
+  oidcPendingCancel: () => request<void>('/auth/oidc/pending', { method: 'DELETE' }),
   account: () => request<Account>('/me/account'),
   setPassword: (password: string, current?: string) =>
     request<void>('/me/password', { method: 'PUT', body: JSON.stringify({ password, current }) }),
@@ -189,8 +193,12 @@ export const api = {
   users: () => request<UserRow[]>('/users'),
   createUser: (u: { username: string; password: string; role: string }) =>
     request<User>('/users', { method: 'POST', body: JSON.stringify(u) }),
-  updateUser: (id: number, u: { password?: string; role?: string }) =>
+  updateUser: (id: number, u: { password?: string; role?: string; email?: string }) =>
     request<User>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(u) }),
+  /** Moves everything of user `id` (identity, shelves, ratings, history, devices, …) to `into`
+   *  and deletes `id`. */
+  mergeUser: (id: number, into: number) =>
+    request<MergeResult>(`/users/${id}/merge`, { method: 'POST', body: JSON.stringify({ into }) }),
   deleteUser: (id: number) => request<void>(`/users/${id}`, { method: 'DELETE' }),
 
   // API tokens (MCP)

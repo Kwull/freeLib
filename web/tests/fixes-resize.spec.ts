@@ -95,6 +95,8 @@ test('bad stored widths are clamped on load', async ({ page }) => {
     sessionStorage.setItem('seeded', '1');
     localStorage.setItem('freelib.prefs', JSON.stringify({
       panes: { list: 5000, details: 'abc', nav: -3 }, columns: { size: 9999, added: null, genre: '100' },
+      // chosen (not just default) columns stay in the narrowed books pane
+      'cols.author': ['size', 'added'],
     }));
   });
   await openDoyle(page);
@@ -131,6 +133,9 @@ test('column widths apply to header and rows, also after scrolling and toggling 
   await page.locator('.scroll .vlist').evaluate((e) => (e.scrollTop = 300));
   await page.getByRole('button', { name: 'Columns' }).click();
   for (const c of ['Author', 'Series', 'Genre', 'Language', 'Format']) await page.getByTestId('columns-menu').getByLabel(c).check();
+  // the default Size column made way for the chosen ones; ticking it asks for it back
+  await expect(page.getByTestId('columns-menu').getByLabel('Size')).not.toBeChecked();
+  await page.getByTestId('columns-menu').getByLabel('Size').check();
   await page.keyboard.press('Escape');
   await page.locator('.scroll .vlist').evaluate((e) => (e.scrollLeft = 10_000));
   await expect.poll(async () => {

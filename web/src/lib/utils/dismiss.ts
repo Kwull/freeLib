@@ -28,8 +28,7 @@ function triggerOf(o: DismissOptions): HTMLElement | null {
 }
 
 function close(e: Entry) {
-  const i = open.indexOf(e);
-  if (i >= 0) open.splice(i, 1);
+  unregister(e);
   e.opts.onClose();
 }
 
@@ -79,9 +78,19 @@ function register(e: Entry) {
   open.push(e);
 }
 
+let lastTrigger: { el: HTMLElement; at: number } | null = null;
+
 function unregister(e: Entry) {
   const i = open.indexOf(e);
   if (i >= 0) open.splice(i, 1);
+  const t = triggerOf(e.opts);
+  if (t) lastTrigger = { el: t, at: Date.now() };
+}
+
+/** The trigger of the popup that closed last, if that was within `ms` (a dialog opened from a
+ *  menu item returns focus there: the item itself is gone with its menu). */
+export function recentPopupTrigger(ms = 1500): HTMLElement | null {
+  return lastTrigger && Date.now() - lastTrigger.at <= ms && lastTrigger.el.isConnected ? lastTrigger.el : null;
 }
 
 export function dismissable(node: HTMLElement, opts: DismissOptions) {

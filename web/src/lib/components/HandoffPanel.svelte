@@ -90,7 +90,9 @@
   .error { color: var(--danger); margin: 0; }
   .secondary { align-self: flex-start; display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); }
   @media (max-width: 560px) {
-    .handoff { flex-direction: column; align-items: center; text-align: center; }
+    .handoff { flex-direction: column; align-items: center; text-align: center; padding: 12px; }
+    /* the text column takes the panel's width (not its content's): the link shortens instead */
+    .info { align-self: stretch; overflow-wrap: anywhere; }
     .url-row { justify-content: center; }
   }
 </style>

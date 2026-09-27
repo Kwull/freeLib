@@ -29,3 +29,8 @@ To refresh: re-copy the same files from the upstream repo at a pinned commit,
 re-apply the same trims to `view.js` (diff against upstream's `open()`,
 `makeBook()`, `search()`, `initTTS()`), and re-check its dynamic `import()`
 list only points at files still vendored here.
+
+Lifecycle patch (freeLib): `paginator.js` disconnects its resize observers in `destroy()` (it
+used to `unobserve(this)` while observing `#container`) and ignores late resize / font / frame
+callbacks after it (`#view` is null then: "Cannot read properties of null (reading
+'document')" after leaving the reader). Marked "freeLib patch"; re-apply when refreshing.

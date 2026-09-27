@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 
-test.use({ viewport: { width: 1440, height: 900 } });
+// wide enough that the default Size column still fits once the list and the details pane are
+// widened (a narrower books pane drops it, see live-ui.spec.ts)
+test.use({ viewport: { width: 1600, height: 900 } });
 
 async function drag(page: import('@playwright/test').Page, handle: import('@playwright/test').Locator, dx: number) {
   const b = (await handle.boundingBox())!;

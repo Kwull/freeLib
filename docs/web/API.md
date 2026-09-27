@@ -80,15 +80,19 @@ type Isbn = {
   isbn10: string | null;           // 10 characters (last may be "X"); null for 979- ISBNs
   display: string;                 // as printed when it was printed as a hyphenated ISBN-13, else the bare ISBN-13
 };
-type Genre = { id: number; name: string; parent: number /*0 = top*/; count: number };
+type Genre = { id: number; name: string; parent: number /*0 = top*/; count: number /*live works*/ };
+// Counts are live WORKS: the rows of the author's list with editions grouped (group=1), each work
+// placed by its best copy (the row shown: its series, its authors). See ARCHITECTURE.md "Counts".
 type AuthorSummary = {             // GET /libraries/:lib/authors/:id/summary; live books only
   id: number; name: string;
-  count: number;                   // books
-  anthologies: number;             // books with ≥ 4 authors (anthologies / collections)
-  series: { id: number; name: string; count: number }[];  // series of the author's books, most books first
-  withoutSeries: number;
-  langs: [string, number][];       // most frequent first
-  genres: [number, number][];      // top 8 assigned genres
+  count: number;                   // works (= books?author=…&group=1 total, = the authors list count)
+  files: number;                   // live files (every edition)
+  anthologies: number;             // works whose copy has ≥ 4 authors (anthologies / collections)
+  series: { id: number; name: string; count: number; anthologies: number }[];  // most works first
+  withoutSeries: number;           // works outside any series ("Outside series")
+  withoutSeriesAnthologies: number;
+  langs: [string, number][];       // works, most frequent first
+  genres: [number, number][];      // top 8 assigned genres (works)
   firstDate: string; lastDate: string;  // oldest / newest `date`, "" when unknown
   coauthors: { id: number; name: string; books: number; direct: number }[];
                                    // ≤ 10 co-authors with ≥ 1 direct or ≥ 2 shared books, ranked by
@@ -174,7 +178,13 @@ configured. The flow is the authorization code flow with PKCE (S256), `state` an
 | `PUT /me/password` | `{password, current?}` | 204 + a new session cookie; `current` is required (403 when wrong, rate limited like `/login`) when the account has a password. Accounts created by single sign-on have none: this sets one for OPDS apps. Other sessions of the user are signed out |
 | `DELETE /me/oidc` | – | 204; 409 when the account has no password or password sign-in is disabled (it would lock the user out); 404 when nothing is linked |
 
-Accounts are matched by (issuer, `sub`) only, never by user name or e-mail. OPDS keeps HTTP Basic auth with local
+| `GET /auth/oidc/pending` | – (the `freelib_sso_link` cookie) | `{ username, canLink, canCreate, passwordLogin, label }`: a first sign-in whose user name belongs to an existing account (the callback sent the browser to `/login?ssoLink=1`); 404 when none. A `POST /login` as that account in this browser links it (`{ user, ssoLinked: true }`) |
+| `POST /auth/oidc/pending/create` | – | `{ user }` + session: a separate account (`name (2)`) instead of linking; 403 with `FREELIB_OIDC_AUTO_CREATE=false` |
+| `DELETE /auth/oidc/pending` | – | 204: forgets the pending link |
+
+Accounts are matched by (issuer, `sub`). A first sign-in is linked to an existing account only when the provider's
+`email_verified` e-mail equals the e-mail an administrator stored for that account (`PATCH /users/:id {email}`), and
+that account has no identity from this provider; a taken user name is never linked by the name alone (see above). OPDS keeps HTTP Basic auth with local
 passwords: a user created by single sign-on sets a password in Settings → Account to use OPDS apps.
 
 ## Libraries
@@ -192,7 +202,7 @@ passwords: a user created by single sign-on sets a password in Settings → Acco
 
 | Method & path | Query | Response |
 |---|---|---|
-| `GET /libraries/:lib/authors` | `v?` | `{ version, columns: ["id","name","count"], rows: [[1,"Стругацкий Аркадий Натанович",12], …], letters: [["А", count, firstRowIndex], …] }`. Only names with at least one live (non-deleted) book. Sorted by sort key (accented Latin letters fold to their base letter: `Čapek` sorts and indexes under `C`, see `normalize-vectors.json`), except that names not starting with a letter (digits, symbols) form a `#` group **at the end**. `letters` are in row order, one entry per letter |
+| `GET /libraries/:lib/authors` | `v?` | `{ version, columns: ["id","name","count"], rows: [[1,"Стругацкий Аркадий Натанович",12], …], letters: [["А", count, firstRowIndex], …] }`. `count` = live works (editions of one work once, like the grouped list). Only names with at least one live (non-deleted) book. Sorted by sort key (accented Latin letters fold to their base letter: `Čapek` sorts and indexes under `C`, see `normalize-vectors.json`), except that names not starting with a letter (digits, symbols) form a `#` group **at the end**. `letters` are in row order, one entry per letter |
 | `GET /libraries/:lib/series` | `v?` | same shape as authors |
 | `GET /libraries/:lib/authors/:id/summary` | – | `AuthorSummary` (below); 404 for an unknown author |
 | `GET /libraries/:lib/authors/:id/coauthors` | – | `{ columns: ["id","name","books","direct"], rows: [[id, name, books, direct], …] }`: everybody sharing a live book with the author, ranked like `AuthorSummary.coauthors` (not filtered); 404 for an unknown author |
@@ -202,7 +212,7 @@ passwords: a user created by single sign-on sets a password in Settings → Acco
 | `GET /libraries/:lib/books/:id` | – | `BookDetail` (first call may take up to ~150 ms, then cached) |
 | `GET /libraries/:lib/books/:id/cover` | `size=thumb\|full` | image (`image/webp` or original jpeg/png); `full` is 404 when the book has no cover. `thumb` = 240 px high; when the book has no cover, a generated SVG placeholder tile (background colour from the title, author + title text, like the SPA's own placeholder) is returned instead of 404, with header `X-Cover: generated` |
 | `GET /libraries/:lib/books/:id/file` | `format` (default `original`), `device?` (device id → its options & file name) , `inline=1` for the web reader | the file with `Content-Disposition: attachment`; `inline=1` is honoured for EPUB only. HTML, XHTML, XML, FB2 and SVG files are sent as `application/octet-stream`. Originals are streamed (no `Content-Length` for deflated zip entries); books above 256 MiB → 413. 501 `unsupported_format` if the format needs Calibre and it is missing, or the book is neither FB2 nor EPUB (other formats are offered as `original` only) |
-| `GET /libraries/:lib/search` | `q` (≥ 2 chars), `kind=all\|books\|authors\|series`, `genre` (comma ids), `lang` (comma), `ext`, `from`, `to` (YYYY-MM-DD), `limit` (books, default 200, max 1000), `group=1` (one row per work) | `{ tookMs, authors: [{id,name,count}] (≤ 20), series: [{id,name,count,authors: string}] (≤ 20), books: Book[], total: number, facets: { genre: [[id,count]], lang: [[code,count]], ext: [[ext,count]] }, corrected: string \| null, didYouMean: string \| null, highlight: string[] }`. Every word matches as a prefix of a word, as another form of the same word (Snowball stem: `книгу` → `Книга`, `книги`), or as a transliteration (`strugatsky` / `strugackie` → `Стругацкий`, `лем` → `Lem`); `ё` = `е`. Ranking: title starts with the query / contains it as a phrase (authors, series: the name starts with it) > every word as a prefix > word forms / transliterations; then bm25 (authors/series: more books first). When the query finds fewer than 3 matches, or no author/series, unknown words are corrected by edit distance (≤ 1 for 4–7 letters, ≤ 2 from 8) against the author/series/title vocabulary: when the corrected query finds more (or finds authors/series the query did not) its results are returned (`corrected` = the query used), otherwise it is offered as `didYouMean`. `exact=1` searches the query as typed (no correction; the SPA's "Search instead for …"). `highlight` = normalized words of the returned titles and names that matched (whole words, for `<mark>`). With `group=1` `total` counts works |
+| `GET /libraries/:lib/search` | `q` (≥ 2 chars), `kind=all\|books\|authors\|series`, `genre` (comma ids), `lang` (comma), `ext`, `from`, `to` (YYYY-MM-DD), `limit` (books, default 200, max 1000), `group=1` (one row per work) | `{ tookMs, authors: [{id,name,count}] (≤ 20), series: [{id,name,count,authors: string}] (≤ 20), books: Book[], total: number, facets: { genre: [[id,count]], lang: [[code,count]], ext: [[ext,count]] }, corrected: string \| null, didYouMean: string \| null, highlight: string[] }`. Every word matches as a prefix of a word, as another form of the same word (Snowball stem: `книгу` → `Книга`, `книги`), or as a transliteration (`strugatsky` / `strugackie` → `Стругацкий`, `лем` → `Lem`); `ё` = `е`. Transliterations use a coarse phonetic key, so English / German spellings match too (`asimov`, `azimoff`, `asimow` → `Азимов`). Ranking: title starts with the query / contains it as a phrase > every word as a prefix > word forms / transliterations, with a boost (above a phrase match) for books whose author matches one word and whose title another; then bm25. Authors/series: the last name (first word) is a query word > starts with one > another word is / starts with one; then more works. Counts (`count`) are works. With `group=1` facet counts are works too (each equals the `total` after choosing that value). When the query finds fewer than 3 matches, or no author/series, unknown words are corrected by edit distance (≤ 1 for 4–7 letters, ≤ 2 from 8) against the author/series/title vocabulary: when the corrected query finds more (or finds authors/series the query did not) its results are returned (`corrected` = the query used), otherwise it is offered as `didYouMean`. `exact=1` searches the query as typed (no correction; the SPA's "Search instead for …"). `highlight` = normalized words of the returned titles and names that matched (whole words, for `<mark>`). With `group=1` `total` counts works |
 | `GET /languages` | `lib` | `[[code, count]]` for that library |
 | `PUT /libraries/:lib/books/:id/rating` | `{rating: 0..5}` | 204 |
 
@@ -251,8 +261,9 @@ type HomeResponse = {
   };                               // live books dated ≥ since by followed authors, in followed series, or by authors of
                                    // books the user sent/downloaded/read, rated ≥ 4 or shelved (anthologies ≥ 4 authors
                                    // and "Автор неизвестен" do not count), without works the user already has; grouped
-  picks: Book[];                   // empty state (or both lists empty): best library-rated works of the 30 days before
-                                   // the newest book, ≤ 12
+  picks: Book[];                   // "Well-rated new arrivals", always: best library-rated works of the 30 days before
+                                   // the newest book (wider while < 12 are rated ≥ 4), without the user's works and
+                                   // those shown above, ≤ 12
   following: { authors: number; series: number };
 };
 ```
@@ -293,7 +304,7 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | `PUT /devices/:id` | `Device` | `Device` (shared and folder devices: admin only) |
 | `DELETE /devices/:id` | – | 204 |
 | `PUT /devices/order` | `{ids: number[]}` | `Device[]` in the new order. Per user: `ids` first (any subset of the devices the user sees, shared ones included), the others after them. `GET /devices` returns the user's order (devices never ordered follow, oldest first). **The first device is the user's default** (the quick-send button, the Send dialog's preselection, MCP `device: "default"`). 404 for an unknown id, 400 for duplicates |
-| `POST /send` | `{library, books: number[], series?: number[], device: number, target?: string, fileName?: string, options?: Partial<ConvertOptions>}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`). `series` (≤ 20, "send whole series"): the series' live books in reading order, each title once (newest edition), after the explicit `books`; 404 for an unknown series. E-mail jobs convert all books, then send them in as few mails as `smtp.maxAttachments` / `smtp.maxMailMb` allow, retrying temporary SMTP failures (DEVICES.md); the job's `items` show each book's delivery state. `options` is merged (shallow) over the device's own options for this send only; the device itself is not changed. E-mail: the recipient must match `smtp.allowedRecipients` (403 `forbidden` otherwise, admins included) and the user's mails today plus this request's books must not exceed `smtp.dailyLimitPerUser` (429 `rate_limited`). Folder: readers may only use shared folder devices with their configured target (403). At most 5 queued + running send/export/download jobs per user (429 `rate_limited`). Exports never overwrite: an existing file gets a ` (2)`, ` (3)`, … sibling. The daily mail limit counts mails; a request needs at least ⌈books / maxAttachments⌉ |
+| `POST /send` | `{library, books: number[], series?: number[], device: number, target?: string, fileName?: string, options?: Partial<ConvertOptions>}` | `Job`. kind `send` for email, `export` for folder, `download` for download (result: single file or zip, see `downloadUrl`). `series` (≤ 20, "send whole series"): the series' live books in reading order, each title once (newest edition), after the explicit `books`; 404 for an unknown series. E-mail jobs convert all books, then send them in as few mails as `smtp.maxAttachments` / `smtp.maxMailMb` allow, retrying temporary SMTP failures (DEVICES.md); the job's `items` show each book's delivery state. `options` is merged (shallow) over the device's own options for this send only; the device itself is not changed. E-mail: the recipient must match `smtp.allowedRecipients` (403 `forbidden` otherwise, admins included) and the user's mails today plus this request's books must not exceed `smtp.dailyLimitPerUser` (429 `rate_limited`). Folder: readers may only use shared folder devices with their configured target (403); an empty folder (`target` `""` or null, as on the seeded "Server folder") exports into the export folder itself (`FREELIB_EXPORT_DIR`), shown as "Export folder (root)" in the UI. At most 5 queued + running send/export/download jobs per user (429 `rate_limited`). Exports never overwrite: an existing file gets a ` (2)`, ` (3)`, … sibling. The daily mail limit counts mails; a request needs at least ⌈books / maxAttachments⌉ |
 | `POST /handoff` | `{library, book, device?: number, format?: string}` | `{url: "/h/<token>", absoluteUrl, expiresAt, maxUses: 3, format, fileName, title}`: a link for "Send to my phone" / "Open in Books". Format and options from `device` (default: the Apple Books device; e-mail devices give EPUB), `format` overrides. 15 minutes, 3 downloads, 20 links per user per 10 minutes (429). See DEVICES.md for the security properties |
 | `GET /fonts` | – | `string[]` font family names available for embedding |
 
@@ -315,9 +326,10 @@ Books of a shelf: `GET /libraries/:lib/books?shelf=:id`.
 | `GET /settings` **(admin)** | – | `{ externalRatings: {enabled, source: "openlibrary", contactSet, progress: {lookedUp, found, rated, total}, queued, requests, pausedFor (s), lastError}, mcp: {enabled, url}, smtp: {host, port, security: "none"\|"starttls"\|"tls", username, from, passwordSet: boolean, pauseSeconds, allowedRecipients: string[], dailyLimitPerUser: number, subject: string (mail subject template: `%b` title, `%a` author; default `%b`)}, opds: {enabled: boolean, requireAuth: boolean}, calibre: {available: boolean, version: string\|null} }` |
 | `PUT /settings` **(admin)** | same shape (`externalRatings.enabled`, default true: when false the server sends nothing to Open Library; `mcp.enabled`, default true: when false `/mcp` answers 403; the other `externalRatings` fields are read-only); `smtp.password` write-only (omit to keep, `""` to remove; stored encrypted, see ARCHITECTURE.md "Secrets at rest"). `allowedRecipients`: patterns where `*` matches any characters, compared case-insensitively with the whole address (default `["*@kindle.com", "*@free.kindle.com"]`; a lone `*` allows every address; at most 100, each `*` or containing `@`, else 400). `dailyLimitPerUser`: mails per user and server-local day (default 100). `maxAttachments` (1..100, default 25) and `maxMailMb` (1..200, default 50, base64 size): books per mail and mail size (Amazon's Send to Kindle limits). `retries` (0..10, default 3) and `retryDelaySeconds` (0..3600, default 30, ×4 per retry): automatic retries of temporary SMTP failures | same as GET |
 | `POST /settings/smtp/test` **(admin)** | `{to}` | 204 or 400 with message |
-| `GET /users` **(admin)** | – | `[{id, username, role, hasPassword: boolean, sso: {issuer, email, createdAt, lastLogin} \| null}]` (`sso`: the linked single sign-on identity) |
-| `POST /users` **(admin)** | `{username, password, role}` | user; 409 when the name exists (case-insensitive). User ids are never reused |
-| `PATCH /users/:id` **(admin)** | `{password?, role?}` | user |
+| `GET /users` **(admin)** | – | `[{id, username, role, hasPassword: boolean, email: string \| null, sso: {issuer, email, createdAt, lastLogin} \| null}]` (`sso`: the linked single sign-on identity; `email`: stored by an administrator, a first single sign-on with this verified e-mail links to the account) |
+| `POST /users` **(admin)** | `{username, password, role, email?}` | user; 409 when the name exists (case-insensitive). User ids are never reused |
+| `PATCH /users/:id` **(admin)** | `{password?, role?, email?}` (`""` clears the e-mail) | user |
+| `POST /users/:id/merge` **(admin)** | `{into}` | `{ user, moved: {identities, shelves, ratings, history, devices, follows, jobs, tokens, apps, promoted} }`: moves the single sign-on identity and all data of user `:id` to `into` and deletes `:id` (repairs a duplicate made by an older first sign-in). `into` becomes an admin when `:id` was one. 400 for itself, 404 unknown, 409 when both have an identity from the same provider. Logged as an audit line |
 | `DELETE /users/:id` **(admin)** | – | 204 (also cancels and removes the user's jobs and their files) |
 | `GET /me/tokens` | – | `{ tokens: ApiToken[], scopes: ["read","write","send"], mcp: {enabled, url, oauth} }` (`url`: `FREELIB_PUBLIC_URL` + `/mcp`, else built from the request's host; `oauth`: apps can connect by signing in, i.e. `FREELIB_PUBLIC_URL` is `https://`) |
 | `POST /me/tokens` | `{name, scopes: ("read"\|"write"\|"send")[], expiresInDays?: 1..3650}` | `{ token: ApiToken, secret: "fl_…" }` — the secret is returned **only here**; the server keeps its SHA-256. At most 50 tokens per user (409) |
@@ -408,4 +420,4 @@ Basic auth when `opds.requireAuth` (same users and the same login rate limits). 
 
 `GET /` and any non-`/api`, non-`/opds` path → SPA `index.html` (history routing). Static assets under `/assets/*` with long cache.
 SPA routes: `/` (→ the current library's start page), `/l/:lib[/home]` (start page), `/l/:lib/new`, `/l/:lib/authors[/:id][?book=:id]`, `/l/:lib/series[/:id][?book=:id]`, `/l/:lib/genres[/:id]`, `/l/:lib/shelves/:id`,
-`/l/:lib/search?q=…`, `/l/:lib/book/:id` (phone), `/l/:lib/read/:id`, `/libraries`, `/settings[/:section]`, `/login`.
+`/l/:lib/search?q=…[&exact=1][&genre=1,2][&lang=ru,en][&ext=fb2][&minMy=|minLib=|minExt=|minExtVotes=…][&unrated=1][&kids=12][&sort=myRating|libRating|extRating]` (facet filters and sort in the query, so back/forward and shared links keep them), `/l/:lib/book/:id` (phone), `/l/:lib/read/:id`, `/libraries`, `/settings[/:section]`, `/login`. Unknown ids show a not-found card with a way back.

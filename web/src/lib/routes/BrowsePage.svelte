@@ -11,6 +11,7 @@
   import { navigate, routerState } from '../router.svelte';
   import { api, errorText } from '../api/client';
   import StateCard from '../components/StateCard.svelte';
+  import NotFoundCard from '../components/NotFoundCard.svelte';
   import Spinner from '../components/Spinner.svelte';
   import Icon from '../components/Icon.svelte';
   import { t, tn, i18nState } from '../i18n';
@@ -104,6 +105,7 @@
           crumb: `${title} / ${letterOf(normalize(current[1]))}`,
           name: current[1],
           booksCount: summary?.id === id ? summary.count : current[2],
+          filesCount: kind === 'authors' && summary?.id === id ? summary.files : undefined,
           seriesCount: kind === 'authors' && summary?.id === id ? summary.series.length : undefined,
           anthologies: kind === 'authors' && summary?.id === id ? summary.anthologies : undefined,
           coauthors: kind === 'authors' && summary?.id === id ? summary.coauthors : undefined,
@@ -152,11 +154,12 @@
         <button type="button" class="primary" onclick={() => reloadTick++}><Icon name="refresh" size={16} />{t('common.retry')}</button>
       {/snippet}
     </StateCard>
+  {:else if id !== null && list}
+    <NotFoundCard {lib} title={kind === 'authors' ? t('notFound.author') : t('notFound.series')}
+      text={kind === 'authors' ? t('browse.noSuchAuthor') : t('browse.noSuchSeries')} back="/l/{lib}/{kind}" />
   {:else}
     <div class="placeholder">
-      {#if id !== null && list}
-        <p>{kind === 'authors' ? t('browse.noSuchAuthor') : t('browse.noSuchSeries')}</p>
-      {:else if list}
+      {#if list}
         <p class="big">{kind === 'authors' ? tn('browse.authorsTotal', rows.length) : tn('browse.seriesTotal', rows.length)}</p>
         <p>{kind === 'authors' ? t('browse.pickAuthor') : t('browse.pickSeries')}</p>
       {:else}

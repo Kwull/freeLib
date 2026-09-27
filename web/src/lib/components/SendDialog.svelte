@@ -154,6 +154,10 @@
           {#if d.id === deviceId}<Icon name="check" size={18} />{/if}
         </span>
         <span class="how">{d.kind === 'email' ? t('send.how.email') : d.kind === 'folder' ? t('send.how.folder') : t('send.how.download')}</span>
+        {#if d.kind === 'folder'}
+          <!-- an empty folder is the export folder itself -->
+          <span class="how folder" data-testid="device-folder">{(d.target ?? '').trim() || t('device.exportRoot')}</span>
+        {/if}
         <span class="fmt">{d.format.toUpperCase()}</span>
       </button>
     {/each}
@@ -163,7 +167,7 @@
     <div class="options">
       {#if device.kind !== 'download'}
         <label>{destLabel(device)}
-          <input type="text" bind:value={target} placeholder={device.kind === 'email' ? 'name@kindle.com' : ''} />
+          <input type="text" bind:value={target} placeholder={device.kind === 'email' ? 'name@kindle.com' : t('device.exportRoot')} />
         </label>
       {/if}
       <label class:wide={device.kind === 'download'}>{t('send.fileName')}
@@ -192,9 +196,9 @@
       <button type="button" class="secondary" data-testid="send-dialog-phone" aria-pressed={phone} onclick={() => (phone = !phone)}><Icon name="phone" size={16} />{t('phone.action')}</button>
     {/if}
     <span class="bg-note" class:warn={needsAddress}>{needsAddress ? t('send.needAddress') : t('send.background')}</span>
-    <button type="button" class="secondary" onclick={onClose}>{t('send.cancel')}</button>
+    <button type="button" class="secondary cancel" onclick={onClose}>{t('send.cancel')}</button>
     <!-- svelte-ignore a11y_autofocus -->
-    <button type="button" class="primary" autofocus disabled={!device || sending || needsAddress} onclick={submit}>{actionLabel(device)}</button>
+    <button type="button" class="primary" data-testid="send-submit" autofocus disabled={!device || sending || needsAddress} onclick={submit}>{actionLabel(device)}</button>
   </div>
 </Dialog>
 
@@ -235,6 +239,17 @@
   button.secondary[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); }
   button.secondary { gap: 6px; }
   .footer button { white-space: nowrap; flex-shrink: 0; }
+  /* narrow screens: the main action gets a full-width row of its own, then "Send to my phone"
+     and Cancel share the next row (each on its own when they don't fit) */
+  @media (max-width: 560px) {
+    .footer { flex-wrap: wrap; padding: 12px 16px; gap: 8px; }
+    .footer .bg-note { flex-basis: 100%; order: 0; }
+    .footer .bg-note:not(.warn) { display: none; }
+    .footer button.primary { order: 1; flex: 1 1 100%; justify-content: center; min-width: 0; }
+    .footer button.secondary { order: 2; flex: 1 1 auto; justify-content: center; min-width: 0; }
+    .footer button { white-space: normal; text-align: center; }
+  }
+  .how.folder { font-size: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bg-note.warn { color: var(--amber); }
   button.secondary { display: flex; align-items: center; height: 40px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 14px; }
   button.primary { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 500; }

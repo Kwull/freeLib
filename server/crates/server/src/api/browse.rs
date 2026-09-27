@@ -474,14 +474,18 @@ pub async fn books(
 /// co-authors of one author.
 pub async fn author_summary(
     State(st): State<AppState>,
-    _: Auth,
+    Auth(u): Auth,
     Path((lib, id)): Path<(i64, i64)>,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
+    let st2 = st.clone();
     let v = st
         .catalog_call(lib, move |cat| -> ApiResult<_> {
-            cat.author_summary(id)?
-                .ok_or_else(|| ApiError::not_found("author not found"))
+            // works are grouped like the list (`group=1`): the same best copies
+            with_sources(&st2, u.id, lib, cat, &RatingQuery::default(), true, |src| {
+                cat.author_summary_with(id, src)?
+                    .ok_or_else(|| ApiError::not_found("author not found"))
+            })
         })
         .await?;
     json_etag(&headers, &v)

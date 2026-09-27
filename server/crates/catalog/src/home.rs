@@ -16,6 +16,9 @@ use crate::works::{group_ids, load_groups};
 /// фантастики"): only books sharing an author with the user's books in it count.
 pub const PUBLISHER_SERIES_AUTHORS: usize = 3;
 
+/// A library rating (INPX stars) of at least this counts as well rated for "picks".
+pub const PICK_MIN_STARS: u8 = 4;
+
 /// A series the user has started, with the next unread book(s).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -341,28 +344,69 @@ impl Catalog {
             .query_row([], |r| r.get(0))?)
     }
 
-    /// Suggestions for a new user: the best-rated (library rating) works among the books of
-    /// the `days` days before the newest book, newest first among equals.
-    pub fn picks(&self, days: i64, src: &dyn RatingSource, limit: usize) -> Result<Vec<Book>> {
+    /// "Well-rated new arrivals": the best-rated (library rating) works among the books of
+    /// the `days` days before the newest book, newest first among equals, without the works
+    /// of `exclude` (books the user has, or that the start page already shows). When that
+    /// window has fewer than `limit` well-rated works (rating ≥ [`PICK_MIN_STARS`]), it is
+    /// widened (90 days, a year, the whole catalog), so the section is never empty in a
+    /// library with books.
+    pub fn picks(
+        &self,
+        days: i64,
+        exclude: &HashSet<i64>,
+        src: &dyn RatingSource,
+        limit: usize,
+    ) -> Result<Vec<Book>> {
         let Some(newest) = self.newest_date()? else {
             return Ok(Vec::new());
         };
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let attrs = self.attrs()?;
+        let excluded: HashSet<i64> = exclude.iter().map(|id| attrs.work(*id)).collect();
         let d = crate::search::date_num(&newest);
         let (y, m, dd) = ((d / 10000) as i64, d / 100 % 100, d % 100);
-        let since_days = crate::util::days_from_civil(y, m, dd) - days;
-        let (y, m, dd) = crate::util::civil_from_days(since_days);
-        let since = format!("{y:04}-{m:02}-{dd:02}");
-        let attrs = self.attrs()?;
-        let mut ids = attrs.scan(&CountSel::Since(since), &BookFilter::default());
-        ids.sort_by(|a, b| {
+        let newest_day = crate::util::days_from_civil(y, m, dd);
+        let cmp = |a: &i64, b: &i64| {
             attrs
                 .stars(*b)
                 .cmp(&attrs.stars(*a))
                 .then(attrs.date(*b).cmp(&attrs.date(*a)))
                 .then(a.cmp(b))
-        });
-        ids.truncate(limit * 4);
-        let mut groups = group_ids(&ids, &attrs, src);
+        };
+        let windows = [days, days.max(90), days.max(365), i64::MAX];
+        let mut groups = Vec::new();
+        for (i, w) in windows.iter().enumerate() {
+            if i > 0 && *w == windows[i - 1] {
+                continue;
+            }
+            let since = if *w == i64::MAX {
+                "0001-01-01".to_string()
+            } else {
+                let (y, m, dd) = crate::util::civil_from_days(newest_day - w);
+                format!("{y:04}-{m:02}-{dd:02}")
+            };
+            let mut ids = attrs.scan(&CountSel::Since(since), &BookFilter::default());
+            ids.retain(|id| !excluded.contains(&attrs.work(*id)));
+            let keep = (limit * 8).min(ids.len());
+            if ids.len() > keep {
+                ids.select_nth_unstable_by(keep, cmp);
+                ids.truncate(keep);
+            }
+            ids.sort_by(cmp);
+            groups = group_ids(&ids, &attrs, src);
+            let rated = groups
+                .iter()
+                .filter(|g| attrs.stars(g.best) >= PICK_MIN_STARS)
+                .count();
+            if rated >= limit {
+                break;
+            }
+        }
+        // well-rated first (a group's best copy may have fewer stars than the edition that
+        // put it on the list), then by the list order
+        groups.sort_by_key(|g| std::cmp::Reverse(attrs.stars(g.best) >= PICK_MIN_STARS));
         groups.truncate(limit);
         let conn = self.conn()?;
         load_groups(&conn, &groups)

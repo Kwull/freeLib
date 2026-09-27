@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api, errorText } from '../api/client';
   import type { Book, SearchResponse } from '../api/types';
-  import { navigate } from '../router.svelte';
+  import { navigate, routerState, setSearch } from '../router.svelte';
   import { t, tn, i18nState } from '../i18n';
   import Icon from '../components/Icon.svelte';
   import CoverThumb from '../components/CoverThumb.svelte';
@@ -17,8 +17,9 @@
   import { getPref, setPref } from '../stores/prefs.svelte';
   import { dismissable } from '../utils/dismiss';
   import {
-    emptyRatingFilters, ratingFilterCount, ratingParams, type RatingFilters as RatingFiltersT, type RatingSortKey,
+    emptyRatingFilters, ratingFilterCount, ratingParams, type RatingFilters as RatingFiltersT,
   } from '../utils/ratings';
+  import { parseSearchFilters, withSearchFilters, type SearchFilters, type SearchSort } from '../utils/searchQuery';
 
   let { lib, q, exact = false }: { lib: number; q: string; exact?: boolean } = $props();
 
@@ -26,9 +27,15 @@
   let result = $state<SearchResponse | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
-  let genreFilter = $state<Set<number>>(new Set());
-  let langFilter = $state<Set<string>>(new Set());
-  let extFilter = $state<Set<string>>(new Set());
+  // facet filters and the sort live in the URL query (Back/Forward, shared links)
+  const urlFilters = $derived(parseSearchFilters(routerState.search));
+  const genreFilter = $derived(urlFilters.genre);
+  const langFilter = $derived(urlFilters.lang);
+  const extFilter = $derived(urlFilters.ext);
+  const ratingFilters = $derived(urlFilters.rating);
+  function setFilters(patch: Partial<SearchFilters>) {
+    setSearch(withSearchFilters(routerState.search, { ...urlFilters, ...patch }));
+  }
   let send = $state<{ ids: number[]; device?: number } | null>(null);
   let shelfIds = $state<number[] | null>(null);
   let genresById = $state<Map<number, string>>(new Map());
@@ -38,9 +45,12 @@
   let selectedBookId = $state<number | null>(null);
   let expanded = $state<Set<number>>(new Set());
   const groupEditions = $derived(getPref<boolean>('groupEditions', true));
-  let ratingFilters = $state<RatingFiltersT>(emptyRatingFilters());
-  type SearchSort = 'relevance' | RatingSortKey;
-  const sortKey = $derived(getPref<SearchSort>('sort.search', 'relevance'));
+  // an explicit sort in the URL wins over the saved preference
+  const sortKey = $derived<SearchSort>(urlFilters.sort ?? getPref<SearchSort>('sort.search', 'relevance'));
+  function setSort(v: SearchSort) {
+    setPref('sort.search', v);
+    setFilters({ sort: v === 'relevance' ? null : v });
+  }
 
   $effect(() => { query = q; selectedBookId = null; expanded = new Set(); });
   $effect(() => {
@@ -69,7 +79,10 @@
   });
 
   function submit() {
-    navigate(`/l/${lib}/search?q=${encodeURIComponent(query.trim())}`);
+    // a new query keeps the filters and the sort
+    const p = new URLSearchParams(withSearchFilters('', urlFilters));
+    p.set('q', query.trim());
+    navigate(`/l/${lib}/search?${p.toString().replace(/%2C/g, ',')}`);
   }
   function toggleSet<T>(set: Set<T>, v: T): Set<T> {
     const next = new Set(set);
@@ -77,9 +90,9 @@
     return next;
   }
   function clearFilters() {
-    genreFilter = new Set(); langFilter = new Set(); extFilter = new Set();
-    ratingFilters = emptyRatingFilters();
+    setFilters({ genre: new Set(), lang: new Set(), ext: new Set(), rating: emptyRatingFilters() });
   }
+  const setRating = (f: RatingFiltersT) => setFilters({ rating: f });
   const filterCount = $derived(genreFilter.size + langFilter.size + extFilter.size + ratingFilterCount(ratingFilters));
 
   // words to highlight: the server says which words of the shown names matched (by prefix,
@@ -136,14 +149,14 @@
       <div class="facet-groups" use:dismissable={{ enabled: facetsOpen, onClose: () => (facetsOpen = false), trigger: () => facetsBtn }}>
         <div class="facet">
           <h3>{t('ratings.filtersCaps')}</h3>
-          <RatingFilters filters={ratingFilters} onChange={(f) => (ratingFilters = f)} />
+          <RatingFilters filters={ratingFilters} onChange={setRating} />
         </div>
         {#if result.facets.genre.length}
           <div class="facet">
             <h3>{t('search.genre')}</h3>
             {#each facetGenres as [id, count] (id)}
               <label class="fl">
-                <input type="checkbox" checked={genreFilter.has(id)} onchange={() => (genreFilter = toggleSet(genreFilter, id))} />
+                <input type="checkbox" checked={genreFilter.has(id)} onchange={() => setFilters({ genre: toggleSet(genreFilter, id) })} />
                 <span class="fname">{genresById.get(id) ?? id}</span><span class="n">{count}</span>
               </label>
             {/each}
@@ -157,7 +170,7 @@
             <h3>{t('search.language')}</h3>
             {#each result.facets.lang as [code, count] (code)}
               <label class="fl">
-                <input type="checkbox" checked={langFilter.has(code)} onchange={() => (langFilter = toggleSet(langFilter, code))} />
+                <input type="checkbox" checked={langFilter.has(code)} onchange={() => setFilters({ lang: toggleSet(langFilter, code) })} />
                 <span class="fname">{code}</span><span class="n">{count}</span>
               </label>
             {/each}
@@ -168,7 +181,7 @@
             <h3>{t('search.format')}</h3>
             {#each result.facets.ext as [ext, count] (ext)}
               <label class="fl">
-                <input type="checkbox" checked={extFilter.has(ext)} onchange={() => (extFilter = toggleSet(extFilter, ext))} />
+                <input type="checkbox" checked={extFilter.has(ext)} onchange={() => setFilters({ ext: toggleSet(extFilter, ext) })} />
                 <span class="fname">{ext.toUpperCase()}</span><span class="n">{count}</span>
               </label>
             {/each}
@@ -193,7 +206,7 @@
         <span><b>{result.total}</b> {tn('search.resultsCount', result.total)} «{result.corrected ?? q}»</span>
         <label class="sort-sel">
           <span class="visually-hidden">{t('books.sort')}</span>
-          <select data-testid="search-sort" value={sortKey} aria-label={t('books.sort')} onchange={(e) => setPref('sort.search', (e.currentTarget as HTMLSelectElement).value)}>
+          <select data-testid="search-sort" value={sortKey} aria-label={t('books.sort')} onchange={(e) => setSort((e.currentTarget as HTMLSelectElement).value as SearchSort)}>
             <option value="relevance">{t('search.sortRelevance')}</option>
             <option value="myRating">{t('books.sort.myRating')}</option>
             <option value="libRating">{t('books.sort.libRating')}</option>
@@ -201,13 +214,13 @@
           </select>
         </label>
         {#each [...genreFilter] as g (g)}
-          <button type="button" class="chip" onclick={() => (genreFilter = toggleSet(genreFilter, g))}>{genresById.get(g) ?? g}<Icon name="close" size={12} /></button>
+          <button type="button" class="chip" onclick={() => setFilters({ genre: toggleSet(genreFilter, g) })}>{genresById.get(g) ?? g}<Icon name="close" size={12} /></button>
         {/each}
         {#each [...langFilter] as l (l)}
-          <button type="button" class="chip" onclick={() => (langFilter = toggleSet(langFilter, l))}>{l}<Icon name="close" size={12} /></button>
+          <button type="button" class="chip" onclick={() => setFilters({ lang: toggleSet(langFilter, l) })}>{l}<Icon name="close" size={12} /></button>
         {/each}
         {#each [...extFilter] as x (x)}
-          <button type="button" class="chip" onclick={() => (extFilter = toggleSet(extFilter, x))}>{x.toUpperCase()}<Icon name="close" size={12} /></button>
+          <button type="button" class="chip" onclick={() => setFilters({ ext: toggleSet(extFilter, x) })}>{x.toUpperCase()}<Icon name="close" size={12} /></button>
         {/each}
         {#if filterCount > 1}<button type="button" class="link-btn" onclick={clearFilters}>{t('books.resetFilters')}</button>{/if}
       </div>

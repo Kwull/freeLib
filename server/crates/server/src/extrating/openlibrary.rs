@@ -16,27 +16,170 @@ use std::time::Duration;
 use serde::Deserialize;
 use tokio::time::Instant;
 
-/// Result of an HTTP GET: status and body, or a transport error.
-pub type HttpResult = Result<(u16, String), String>;
+/// An HTTP answer (any status).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub body: String,
+    /// `Retry-After` in seconds (429 / 503), when the server sent one.
+    pub retry_after: Option<u64>,
+}
+
+impl HttpResponse {
+    pub fn new(status: u16, body: impl Into<String>) -> HttpResponse {
+        HttpResponse {
+            status,
+            body: body.into(),
+            retry_after: None,
+        }
+    }
+}
+
+/// What kind of transport failure a request had (the pause after it depends on it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// The host name did not resolve (no DNS in the container, a typo in the URL).
+    Dns,
+    /// No connection (refused, unreachable, blocked by a firewall).
+    Connect,
+    /// The TLS handshake failed (a proxy or middlebox with its own certificate).
+    Tls,
+    /// The HTTP(S) proxy refused or failed.
+    Proxy,
+    /// No answer in time.
+    Timeout,
+    /// Anything else (a broken body, …).
+    Other,
+}
+
+impl ErrorKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ErrorKind::Dns => "DNS",
+            ErrorKind::Connect => "connection",
+            ErrorKind::Tls => "TLS",
+            ErrorKind::Proxy => "proxy",
+            ErrorKind::Timeout => "timeout",
+            ErrorKind::Other => "network",
+        }
+    }
+}
+
+/// A transport error: its kind and the full error chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HttpError {
+    pub kind: ErrorKind,
+    pub detail: String,
+}
+
+/// Result of an HTTP GET.
+pub type HttpResult = Result<HttpResponse, HttpError>;
 
 /// The HTTP layer (a trait so tests can answer from fixtures without a network).
 pub trait HttpGet: Send + Sync + 'static {
     fn get(&self, url: String) -> Pin<Box<dyn Future<Output = HttpResult> + Send>>;
 }
 
-/// `reqwest` with a descriptive User-Agent and a 20 s timeout.
+/// An error with its sources (`reqwest` hides the interesting part in them).
+pub fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut s = e.to_string();
+    let mut cur = e.source();
+    while let Some(c) = cur {
+        let t = c.to_string();
+        if !s.contains(&t) {
+            s.push_str(": ");
+            s.push_str(&t);
+        }
+        cur = c.source();
+    }
+    s
+}
+
+/// Sorts a `reqwest` error into an [`ErrorKind`] by its flags and its error chain.
+pub fn classify(e: &reqwest::Error) -> HttpError {
+    let detail = error_chain(e);
+    let lower = detail.to_lowercase();
+    let kind = if e.is_timeout() || lower.contains("timed out") {
+        ErrorKind::Timeout
+    } else if lower.contains("dns error")
+        || lower.contains("failed to lookup address")
+        || lower.contains("name or service not known")
+        || lower.contains("no such host")
+        || lower.contains("temporary failure in name resolution")
+    {
+        ErrorKind::Dns
+    } else if lower.contains("proxy") {
+        ErrorKind::Proxy
+    } else if lower.contains("certificate")
+        || lower.contains("tls")
+        || lower.contains("handshake")
+        || lower.contains("invalidcertificate")
+    {
+        ErrorKind::Tls
+    } else if e.is_connect() {
+        ErrorKind::Connect
+    } else {
+        ErrorKind::Other
+    };
+    HttpError { kind, detail }
+}
+
+/// The HTTPS proxy `reqwest` takes from the environment (`HTTPS_PROXY`, `ALL_PROXY`,
+/// `HTTP_PROXY`, lower-case too), without credentials, for the log; `None` without one.
+pub fn env_proxy() -> Option<String> {
+    [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ]
+    .iter()
+    .filter_map(|k| std::env::var(k).ok())
+    .find(|v| !v.trim().is_empty())
+    .map(|v| match (v.find("://"), v.rfind('@')) {
+        (Some(i), Some(at)) if at > i => format!("{}{}", &v[..i + 3], &v[at + 1..]),
+        _ => v,
+    })
+}
+
+/// `reqwest` with a descriptive User-Agent, a 10 s connect and a 20 s total timeout, kept-alive
+/// connections (one host, one request at a time), and the proxy of `HTTPS_PROXY` /
+/// `HTTP_PROXY` / `ALL_PROXY` (with `NO_PROXY`), as `reqwest` reads them.
 pub struct ReqwestGet {
     client: reqwest::Client,
 }
 
 impl ReqwestGet {
     pub fn new(user_agent: &str) -> Result<ReqwestGet, String> {
-        let client = reqwest::Client::builder()
+        Self::build(
+            user_agent,
+            Duration::from_secs(10),
+            Duration::from_secs(20),
+            true,
+        )
+    }
+
+    /// [`new`](Self::new) with other timeouts, and optionally without the environment's proxy.
+    pub fn build(
+        user_agent: &str,
+        connect_timeout: Duration,
+        timeout: Duration,
+        env_proxy: bool,
+    ) -> Result<ReqwestGet, String> {
+        let mut b = reqwest::Client::builder()
             .user_agent(user_agent)
-            .timeout(Duration::from_secs(20))
-            .redirect(reqwest::redirect::Policy::limited(3))
-            .build()
-            .map_err(|e| e.to_string())?;
+            .connect_timeout(connect_timeout)
+            .timeout(timeout)
+            .pool_idle_timeout(Duration::from_secs(90))
+            .pool_max_idle_per_host(2)
+            .tcp_keepalive(Duration::from_secs(60))
+            .redirect(reqwest::redirect::Policy::limited(3));
+        if !env_proxy {
+            b = b.no_proxy();
+        }
+        let client = b.build().map_err(|e| error_chain(&e))?;
         Ok(ReqwestGet { client })
     }
 }
@@ -50,14 +193,26 @@ impl HttpGet for ReqwestGet {
                 .header("Accept", "application/json")
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| classify(&e))?;
             let status = r.status().as_u16();
+            let retry_after = r
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok());
             // bodies are small JSON; bound them anyway
-            let body = r.bytes().await.map_err(|e| e.to_string())?;
+            let body = r.bytes().await.map_err(|e| classify(&e))?;
             if body.len() > 4 * 1024 * 1024 {
-                return Err("response too large".into());
+                return Err(HttpError {
+                    kind: ErrorKind::Other,
+                    detail: "response too large".into(),
+                });
             }
-            Ok((status, String::from_utf8_lossy(&body).into_owned()))
+            Ok(HttpResponse {
+                status,
+                body: String::from_utf8_lossy(&body).into_owned(),
+                retry_after,
+            })
         })
     }
 }
@@ -71,8 +226,36 @@ pub fn user_agent(contact: Option<&str>) -> String {
     )
 }
 
-/// One request at a time, at least `interval` apart; after errors a growing pause
-/// (30 s, 60 s, … 1 h) before the next request.
+/// Why requests pause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Failure {
+    /// HTTP 429 (with the server's `Retry-After`, if any).
+    TooMany(Option<u64>),
+    /// HTTP 5xx.
+    Server,
+    /// A transport error of this kind.
+    Transport(ErrorKind),
+}
+
+impl Failure {
+    /// (first pause, longest pause) of this kind; the pause doubles with every consecutive
+    /// failure up to the longest.
+    fn backoff(self) -> (Duration, Duration) {
+        match self {
+            Failure::TooMany(_) => (Duration::from_secs(60), MAX_BACKOFF),
+            Failure::Server => (FIRST_BACKOFF, Duration::from_secs(30 * 60)),
+            Failure::Transport(ErrorKind::Timeout) => {
+                (Duration::from_secs(15), Duration::from_secs(15 * 60))
+            }
+            Failure::Transport(ErrorKind::Other) => (FIRST_BACKOFF, Duration::from_secs(15 * 60)),
+            Failure::Transport(_) => (FIRST_BACKOFF, MAX_BACKOFF),
+        }
+    }
+}
+
+/// One request at a time, at least `interval` apart; after errors a pause that doubles with
+/// each consecutive failure, from a first pause and up to a cap that depend on the kind of
+/// failure ([`Failure`]: 429 honours `Retry-After`).
 pub struct Limiter {
     interval: Duration,
     state: tokio::sync::Mutex<Instant>,
@@ -112,13 +295,20 @@ impl Limiter {
         g.1.filter(|t| *t > Instant::now())
     }
 
-    /// A failed request (5xx, 429, network): pause, doubling with each consecutive failure.
+    /// A failed request (5xx, network): pause as a generic server error ([`Failure::Server`]).
     pub fn failed(&self) -> Duration {
+        self.failed_with(Failure::Server)
+    }
+
+    /// A failed request: pause, doubling with each consecutive failure, capped per kind.
+    pub fn failed_with(&self, why: Failure) -> Duration {
         let mut g = self.backoff.lock().unwrap_or_else(|e| e.into_inner());
         g.0 = g.0.saturating_add(1);
-        let pause = FIRST_BACKOFF
-            .saturating_mul(1u32 << (g.0 - 1).min(10))
-            .min(MAX_BACKOFF);
+        let (first, cap) = why.backoff();
+        let mut pause = first.saturating_mul(1u32 << (g.0 - 1).min(10)).min(cap);
+        if let Failure::TooMany(Some(secs)) = why {
+            pause = pause.max(Duration::from_secs(secs).min(MAX_BACKOFF));
+        }
         g.1 = Some(Instant::now() + pause);
         pause
     }
@@ -229,22 +419,41 @@ impl OpenLibrary {
     async fn fetch(&self, url: String) -> Fetch {
         self.limiter.acquire().await;
         match self.http.get(url).await {
-            Ok((200, body)) => {
+            Ok(r) if r.status == 200 => {
                 self.limiter.succeeded();
-                Fetch::Ok(body)
+                Fetch::Ok(r.body)
             }
-            Ok((404, _)) => {
+            Ok(r) if r.status == 404 => {
                 self.limiter.succeeded();
                 Fetch::NotFound
             }
-            Ok((s, _)) if s == 429 || s >= 500 => {
-                let p = self.limiter.failed();
-                Fetch::Err(format!("HTTP {s}; pausing {} s", p.as_secs()))
+            Ok(r) if r.status == 429 => {
+                let p = self.limiter.failed_with(Failure::TooMany(r.retry_after));
+                Fetch::Err(format!(
+                    "HTTP 429 (too many requests){}; pausing {} s",
+                    r.retry_after
+                        .map(|s| format!(", Retry-After {s} s"))
+                        .unwrap_or_default(),
+                    p.as_secs()
+                ))
             }
-            Ok((s, _)) => Fetch::Err(format!("HTTP {s}")),
+            Ok(r) if r.status >= 500 => {
+                let p = self.limiter.failed_with(Failure::Server);
+                Fetch::Err(format!(
+                    "HTTP {} (server error); pausing {} s",
+                    r.status,
+                    p.as_secs()
+                ))
+            }
+            Ok(r) => Fetch::Err(format!("HTTP {}", r.status)),
             Err(e) => {
-                let p = self.limiter.failed();
-                Fetch::Err(format!("{e}; pausing {} s", p.as_secs()))
+                let p = self.limiter.failed_with(Failure::Transport(e.kind));
+                Fetch::Err(format!(
+                    "{} error: {}; pausing {} s",
+                    e.kind.label(),
+                    e.detail,
+                    p.as_secs()
+                ))
             }
         }
     }
@@ -294,6 +503,15 @@ impl OpenLibrary {
         }
         if has_cyrillic(&title) {
             attempts.push((translit(&title), translit(first)));
+        }
+        // "Солярис: роман" / "Dune. Book 1": the main title alone (matching still needs the
+        // whole title or a meaningful main title, see `titles_match`)
+        let main = main_title(&title).trim().to_string();
+        if main != title && title_key(&main).chars().filter(|c| *c != ' ').count() >= 4 {
+            attempts.push((main.clone(), first.to_string()));
+            if has_cyrillic(&main) {
+                attempts.push((translit(&main), translit(first)));
+            }
         }
         let mut last_err = None;
         for (t, a) in attempts {
@@ -397,7 +615,7 @@ pub fn has_cyrillic(s: &str) -> bool {
     s.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c))
 }
 
-pub use freelib_catalog::text::{translit, word_key};
+pub use freelib_catalog::text::{phonetic_key, translit, word_key};
 
 /// Title comparison key: words keyed, a leading English article dropped.
 pub fn title_key(t: &str) -> String {
@@ -443,15 +661,17 @@ pub fn titles_match(book: &str, doc: &str) -> bool {
     (bm == d && long(&bm)) || (dm == b && long(&dm))
 }
 
-/// Whether one of `surnames` is a word of one of the Open Library author names.
+/// Whether one of `surnames` is a word of one of the Open Library author names, compared by
+/// transliteration key or by the coarse phonetic key (`Азимов` = `Asimov`, `Tolstoj` =
+/// `Tolstoy`).
 pub fn authors_match(surnames: &[String], names: &[String]) -> bool {
-    let keys: Vec<String> = surnames
+    let keys: Vec<(String, String)> = surnames
         .iter()
         .flat_map(|s| {
             freelib_catalog::normalize(s)
                 .split(' ')
-                .map(word_key)
-                .filter(|k| k.chars().count() >= 2)
+                .map(|w| (word_key(w), phonetic_key(w)))
+                .filter(|(k, _)| k.chars().count() >= 2)
                 .collect::<Vec<_>>()
         })
         .collect();
@@ -459,10 +679,11 @@ pub fn authors_match(surnames: &[String], names: &[String]) -> bool {
         return false;
     }
     names.iter().any(|n| {
-        freelib_catalog::normalize(n)
-            .split(' ')
-            .map(word_key)
-            .any(|w| keys.contains(&w))
+        freelib_catalog::normalize(n).split(' ').any(|w| {
+            let (k, p) = (word_key(w), phonetic_key(w));
+            keys.iter()
+                .any(|(sk, sp)| *sk == k || (sp.chars().count() >= 4 && *sp == p))
+        })
     })
 }
 
@@ -566,8 +787,8 @@ pub(crate) mod tests {
                 .routes
                 .iter()
                 .find(|(needle, _, _)| url.contains(needle))
-                .map(|(_, s, b)| Ok((*s, b.to_string())))
-                .unwrap_or(Ok((404, String::new())));
+                .map(|(_, s, b)| Ok(HttpResponse::new(*s, *b)))
+                .unwrap_or(Ok(HttpResponse::new(404, "")));
             Box::pin(async move { r })
         }
     }
@@ -770,12 +991,192 @@ pub(crate) mod tests {
         for _ in 0..20 {
             l.failed();
         }
-        assert_eq!(l.failed(), MAX_BACKOFF);
+        // server errors: capped at 30 minutes
+        assert_eq!(l.failed(), Duration::from_secs(1800));
         let before = Instant::now();
         l.acquire().await;
-        assert!(Instant::now() - before >= MAX_BACKOFF - Duration::from_secs(1));
+        assert!(Instant::now() - before >= Duration::from_secs(1799));
         l.succeeded();
         assert!(l.backoff_until().is_none());
+    }
+
+    #[test]
+    fn backoff_depends_on_the_kind_of_failure() {
+        let seq = |why: Failure, n: usize| {
+            let l = Limiter::new(Duration::from_secs(1));
+            (0..n)
+                .map(|_| l.failed_with(why).as_secs())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(seq(Failure::Server, 3), [30, 60, 120]);
+        assert_eq!(*seq(Failure::Server, 20).last().unwrap(), 1800);
+        assert_eq!(seq(Failure::Transport(ErrorKind::Timeout), 3), [15, 30, 60]);
+        assert_eq!(
+            *seq(Failure::Transport(ErrorKind::Timeout), 20)
+                .last()
+                .unwrap(),
+            900
+        );
+        assert_eq!(
+            *seq(Failure::Transport(ErrorKind::Dns), 20).last().unwrap(),
+            3600
+        );
+        assert_eq!(seq(Failure::TooMany(None), 2), [60, 120]);
+        // Retry-After wins when longer, and is capped
+        assert_eq!(seq(Failure::TooMany(Some(600)), 1), [600]);
+        assert_eq!(seq(Failure::TooMany(Some(10)), 1), [60]);
+        assert_eq!(seq(Failure::TooMany(Some(999_999)), 1), [3600]);
+    }
+
+    #[test]
+    fn proxies_from_the_environment_hide_credentials() {
+        // (reads the process environment; only checks the formatting helper's output shape)
+        if let Some(p) = env_proxy() {
+            assert!(!p.contains('@'), "{p}");
+        }
+    }
+
+    /// A tiny HTTP server: answers each connection with the next canned response (`None` =
+    /// accept and never answer).
+    async fn fake_server(answers: Vec<Option<&'static str>>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            for a in answers {
+                let Ok((mut sock, _)) = l.accept().await else {
+                    return;
+                };
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                match a {
+                    Some(resp) => {
+                        let _ = sock.write_all(resp.as_bytes()).await;
+                        let _ = sock.shutdown().await;
+                    }
+                    None => held.push(sock),
+                }
+            }
+            // no more answers: close the port (later requests are refused)
+            drop(l);
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            drop(held);
+        });
+        format!("http://{addr}")
+    }
+
+    fn test_http(timeout_ms: u64) -> ReqwestGet {
+        ReqwestGet::build(
+            "freeLib-test",
+            Duration::from_millis(timeout_ms),
+            Duration::from_millis(timeout_ms),
+            false,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn real_http_errors_are_classified() {
+        // 429 with Retry-After, then a 503, then JSON
+        let base = fake_server(vec![
+            Some("HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+            Some("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbusy"),
+            Some("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"),
+            None,
+        ])
+        .await;
+        let http = test_http(700);
+        let r = http.get(format!("{base}/a")).await.unwrap();
+        assert_eq!((r.status, r.retry_after), (429, Some(120)));
+        let r = http.get(format!("{base}/b")).await.unwrap();
+        assert_eq!((r.status, r.body.as_str()), (503, "busy"));
+        let r = http.get(format!("{base}/c")).await.unwrap();
+        assert_eq!((r.status, r.body.as_str()), (200, "{}"));
+        // accepted, never answered: a timeout
+        let e = http.get(format!("{base}/d")).await.unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Timeout, "{e:?}");
+        assert!(e.detail.contains("/d"), "the URL is in the chain: {e:?}");
+        // nobody listening: a connection error with its cause
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let e = http
+            .get(format!("http://127.0.0.1:{port}/x"))
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Connect, "{e:?}");
+        assert!(e.detail.to_lowercase().contains("refused"), "{e:?}");
+        // a name that cannot resolve
+        let e = http
+            .get("http://freelib-test.invalid/x".into())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(e.kind, ErrorKind::Dns | ErrorKind::Timeout),
+            "{e:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn client_reports_errors_with_their_kind_and_pause() {
+        let base = fake_server(vec![
+            Some("HTTP/1.1 429 Too Many Requests\r\nRetry-After: 90\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+            Some("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+        ])
+        .await;
+        let ol = OpenLibrary::new(
+            &base,
+            Arc::new(test_http(2000)),
+            Arc::new(Limiter::new(Duration::from_millis(1))),
+        );
+        let out = ol.lookup(&q("Dune", "Herbert")).await;
+        assert_eq!(
+            out,
+            Outcome::Error("HTTP 429 (too many requests), Retry-After 90 s; pausing 90 s".into())
+        );
+        // (the pause is real: reset it instead of waiting)
+        ol.limiter.succeeded();
+        let out = ol.lookup(&q("Dune", "Herbert")).await;
+        assert_eq!(
+            out,
+            Outcome::Error("HTTP 502 (server error); pausing 30 s".into())
+        );
+        ol.limiter.succeeded();
+        // the server is gone: a connection error
+        let out = ol.lookup(&q("Dune", "Herbert")).await;
+        let Outcome::Error(e) = out else {
+            panic!("{out:?}")
+        };
+        assert!(
+            e.starts_with("connection error: ") && e.ends_with("; pausing 30 s"),
+            "{e}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn phonetic_author_and_main_title_attempts() {
+        // «Азимов» on Open Library is «Isaac Asimov»
+        assert!(authors_match(&["Азимов".into()], &["Isaac Asimov".into()]));
+        assert!(authors_match(&["Толстой".into()], &["Leo Tolstoy".into()]));
+        assert!(!authors_match(&["Азимов".into()], &["Agaev".into()]));
+        // a subtitle: the main title is tried as well
+        let http = FakeHttp::new(vec![("/search.json", 200, EMPTY)]);
+        let out = client(http.clone())
+            .lookup(&q("Солярис: роман в двух частях", "Лем"))
+            .await;
+        assert_eq!(out, Outcome::NotFound);
+        let urls = http.urls();
+        assert!(
+            urls.iter()
+                .any(|u| u.contains("title=%D0%A1%D0%BE%D0%BB%D1%8F%D1%80%D0%B8%D1%81&")),
+            "{urls:?}"
+        );
+        assert!(
+            urls.iter().any(|u| u.contains("title=Solyaris&")),
+            "{urls:?}"
+        );
     }
 
     #[test]

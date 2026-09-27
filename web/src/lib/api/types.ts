@@ -217,8 +217,23 @@ export type Session = { user: User | null; openMode: boolean; auth?: AuthMethods
 /** A user in the admin's list: how they sign in. */
 export type UserRow = User & {
   hasPassword: boolean;
+  /** stored by an administrator: a first single sign-on with this verified e-mail links here */
+  email?: string | null;
   sso: { issuer: string; email: string | null; createdAt: string; lastLogin: string | null } | null;
 };
+
+/** GET /auth/oidc/pending: a first single sign-on whose user name belongs to an account */
+export type SsoPending = {
+  username: string;
+  /** false: that account is linked to another sign-in (only a separate account is possible) */
+  canLink: boolean;
+  canCreate: boolean;
+  passwordLogin: boolean;
+  label: string;
+};
+
+/** POST /users/:id/merge */
+export type MergeResult = { user: User; moved: Record<string, number | boolean> };
 
 /** GET /me/account */
 export type Account = {
@@ -238,13 +253,19 @@ export type NameListResponse = {
 
 export type Coauthor = { id: number; name: string; books: number; direct: number };
 
+/** Counts are in works (rows of the grouped list: editions of one work once, placed by the
+ *  copy shown); `files` counts every live edition. */
 export type AuthorSummary = {
   id: number; name: string;
+  /** live works */
   count: number;
-  /** live books with ≥ 4 authors (anthologies / collections) */
+  /** live files (editions) */
+  files: number;
+  /** works whose copy has ≥ 4 authors (anthologies / collections) */
   anthologies: number;
-  series: { id: number; name: string; count: number }[];
+  series: { id: number; name: string; count: number; anthologies: number }[];
   withoutSeries: number;
+  withoutSeriesAnthologies: number;
   langs: [string, number][];
   genres: [number, number][];
   firstDate: string; lastDate: string;
