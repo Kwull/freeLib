@@ -140,7 +140,7 @@
   <aside class="facets" class:open={facetsOpen} aria-label={t('search.filters')}>
     <form class="search-box" role="search" onsubmit={(e) => { e.preventDefault(); submit(); }}>
       <Icon name="search" size={16} />
-      <input type="search" bind:value={query} aria-label={t('search.placeholder')} placeholder={t('search.placeholder')} />
+      <input type="search" data-search-input bind:value={query} aria-label={t('search.placeholder')} placeholder={t('search.placeholder')} />
     </form>
     <button type="button" class="facets-toggle" bind:this={facetsBtn} aria-expanded={facetsOpen} onclick={() => (facetsOpen = !facetsOpen)}>
       <Icon name="filter" size={14} />{t('search.filters')}{#if filterCount}<span class="badge">{filterCount}</span>{/if}

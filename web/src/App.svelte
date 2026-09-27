@@ -12,7 +12,8 @@
   import OAuthConsentPage from './lib/routes/OAuthConsentPage.svelte';
   import HomePage from './lib/routes/HomePage.svelte';
 
-  import { currentRoute, navigate } from './lib/router.svelte';
+  import { currentRoute, navigate, routerState } from './lib/router.svelte';
+  import NotFoundCard from './lib/components/NotFoundCard.svelte';
   import { loadSession, isLoggedIn } from './lib/stores/session.svelte';
   import { errorText } from './lib/api/client';
   import ShellSkeleton from './lib/components/ShellSkeleton.svelte';
@@ -29,6 +30,7 @@
   import { i18nState } from './lib/i18n';
   import { toastState } from './lib/stores/toast.svelte';
   import { loadPrefs, getPref, setPref } from './lib/stores/prefs.svelte';
+  import { nameFilterKey } from './lib/stores/nameFilter.svelte';
 
   // boot: the session is loading (skeleton frame), failed (card + retry), or known
   let boot = $state<'loading' | 'error' | 'ready'>('loading');
@@ -39,6 +41,13 @@
   let started = false;
   let readerComp = $state<any>(null);
   let settingsComp = $state<any>(null);
+
+  /** On the authors / series pages the skeletons have the real filter box (typing is kept). */
+  const earlyFilter = $derived.by(() => {
+    const r = currentRoute();
+    if (r.name !== 'authors' && r.name !== 'series') return null;
+    return { key: nameFilterKey(r.lib, r.name), label: r.name === 'authors' ? t('authors.filterLabel') : t('series.filterLabel') };
+  });
 
   applyTheme();
   document.documentElement.lang = i18nState.lang;
@@ -101,7 +110,7 @@
 </script>
 
 {#if boot === 'loading'}
-  <ShellSkeleton label={bootSlow ? t('boot.slow') : t('boot.loading')} />
+  <ShellSkeleton label={bootSlow ? t('boot.slow') : t('boot.loading')} filter={earlyFilter} />
 {:else if boot === 'error'}
   <div class="boot-error">
     <StateCard tone="error" icon="alert" title={t('boot.error')} text={t('boot.errorText')} detail={bootError} testid="boot-error">
@@ -113,6 +122,10 @@
 {:else if currentRoute().name === 'oauthConsent' && (isLoggedIn() || (currentRoute() as { error: string | null }).error)}
   {@const r = currentRoute() as { request: string | null; error: string | null }}
   <OAuthConsentPage request={r.request} error={r.error} />
+{:else if !isLoggedIn() && currentRoute().name === 'notFound'}
+  <div class="standalone">
+    <NotFoundCard lib={null} title={t('notFound.page')} text={t('notFound.pageText')} path={routerState.path + routerState.search} testid="page-not-found" />
+  </div>
 {:else if !isLoggedIn()}
   <LoginPage />
 {:else}
@@ -123,7 +136,7 @@
     {:else if route.name === 'start'}
       <LibraryGate lib={route.lib}><HomePage lib={route.lib} /></LibraryGate>
     {:else if route.name === 'authors' || route.name === 'series'}
-      <LibraryGate lib={route.lib}><BrowsePage kind={route.name} lib={route.lib} id={route.id} /></LibraryGate>
+      <LibraryGate lib={route.lib} filter={earlyFilter}><BrowsePage kind={route.name} lib={route.lib} id={route.id} /></LibraryGate>
     {:else if route.name === 'genres'}
       <LibraryGate lib={route.lib}><GenresPage lib={route.lib} id={route.id} /></LibraryGate>
     {:else if route.name === 'new'}
@@ -153,7 +166,7 @@
     {:else if route.name === 'login'}
       <LibraryGate lib={null}><BrowseSkeleton label={t('libstate.loading')} /></LibraryGate>
     {:else}
-      <div class="not-found">404</div>
+      <NotFoundCard lib={currentLibrary()?.id ?? null} title={t('notFound.page')} text={t('notFound.pageText')} path={routerState.path + routerState.search} testid="page-not-found" />
     {/if}
   </Shell>
 {/if}
@@ -166,7 +179,7 @@
 
 <style>
   .boot-error { height: 100%; display: flex; }
-  .not-found { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+  .standalone { height: 100%; display: flex; background: var(--page); }
   .toasts { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }
   .toast { padding: 10px 16px; border-radius: 8px; background: var(--inverse-bg); color: var(--inverse-ink); font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-width: 420px; }
   .toast.error { background: var(--danger); color: #fff; }

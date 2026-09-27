@@ -122,7 +122,11 @@ test.describe('desktop', () => {
     const tag = list.getByTestId('editions-toggle').first();
     if (await tag.count()) { await tag.click(); await expect(list.getByTestId('edition-row').first()).toBeVisible(); }
     expectStacked(await rowBoxes(rows), 40);
-    // collapse all → expand all → scroll to the end → the last rows are reachable and stacked
+    // one group open of many: still "Expand all" (not "Collapse all")
+    await expect(page.getByTestId('expand-all')).toHaveText('Expand all');
+    // expand all → collapse all → expand all → scroll to the end → the last rows are reachable and stacked
+    await page.getByRole('button', { name: 'Expand all' }).click();
+    await expect(page.getByTestId('expand-all')).toHaveText('Collapse all');
     await page.getByRole('button', { name: 'Collapse all' }).click();
     await expect(list.locator('.brow')).toHaveCount(0);
     await page.getByRole('button', { name: 'Expand all' }).click();

@@ -36,9 +36,22 @@
     return 'ok';
   }
 
+  /** the item of the current page (search, a book, the reader… highlight none) */
   function isActive(name: string): boolean {
     return route.name === name;
   }
+
+  // After a navigation that did not come from the sidebar (a search typed in the top bar, a
+  // link), the pointer may still rest on the item it was clicked on: that item's hover
+  // background would look like the highlight of the page left. Hover shows again once the
+  // pointer moves over the sidebar.
+  let staleHover = $state(false);
+  $effect(() => {
+    const onNav = () => (staleHover = true);
+    window.addEventListener('freelib:navigate', onNav);
+    window.addEventListener('popstate', onNav);
+    return () => { window.removeEventListener('freelib:navigate', onNav); window.removeEventListener('popstate', onNav); };
+  });
 </script>
 
 <div class="shell">
@@ -115,7 +128,7 @@
 
   <div class="body">
     {#if lib}
-      <nav aria-label="Main" class="sidenav" style:--w="{navWidth}px">
+      <nav aria-label="Main" class="sidenav" class:stale-hover={staleHover} style:--w="{navWidth}px" onpointermove={() => (staleHover = false)}>
         <a class="nav" href="/l/{lib.id}/home" data-link aria-current={isActive('start') ? 'page' : undefined} class:active={isActive('start')}>
           <Icon name="home" size={18} /><span class="label">{t('nav.home')}</span>
         </a>
@@ -242,6 +255,7 @@
   .sidenav { flex: 0 0 var(--w, 208px); min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px; border-right: 1px solid var(--line); overflow-y: auto; }
   .nav { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-radius: 8px; color: var(--muted-2); font-size: 14px; text-decoration: none; }
   .nav:hover { background: var(--surface-hover); text-decoration: none; color: var(--ink); }
+  .sidenav.stale-hover .nav:not(.active):hover { background: none; color: var(--muted-2); }
   .nav.active { background: var(--accent-soft); color: var(--accent-soft-ink); font-weight: 500; }
   .nav .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .nav .dot { flex-shrink: 0; }

@@ -66,6 +66,29 @@ the tab bar, phone back arrow. Dark theme: toasts and the selection bar were whi
 ticked rows were light in system-dark mode → inverse / row-checked tokens. Login: autocomplete
 and autofocus.
 
+## Retest on the live deployment (592k books, 1302px window, 390px phone)
+
+- Book table columns give way to the live books-pane width (details pane, window, splitters),
+  least useful first, the title never below 220px; the Columns menu marks them "no room" and
+  says "N columns hidden". A column list saved by an older version (plain keys) fits like the
+  defaults. Only a column asked for while there is no room for it (`+key` in `cols.*`, together
+  with the columns on screen then) stays, and the table scrolls sideways.
+- Settings → Users: two-line rows (name and badges wrap; e-mail field takes the rest, Merge /
+  role / Delete wrap under it), phone tabs scroll sideways.
+- Unknown addresses: a not-found page with the path, Back and "To the start page" (also
+  signed out).
+- "Collapse all" only when every series group is open; groups remember a default plus the
+  ones flipped, so groups that appear later follow Expand / Collapse all.
+- Letter strip in the list's own order (lower-cased code points, like the server's sort keys):
+  … Щ Ы Ь Э Ю Я, then Є І Ї Ґ.
+- The top search box shows the query only on that search page; the sidebar highlights the page
+  shown (no stale hover highlight after a search typed with the pointer resting on an item);
+  the phone Search tab focuses the search box inside the tap (iOS keyboard).
+- The authors / series filter is kept per library across visits, and the loading placeholder has
+  the real filter box: text typed before the list arrives is kept, focused. An author's books
+  and toolbar show from its summary without waiting for the whole name list.
+- The reader follows the app theme (and the system's) until a theme is picked in the reader.
+
 ## Not changed (noted)
 - `newSinceLastVisit` has no matching date filter in the API, so New arrivals uses presets.
 - The reader (foliate-js) logs a benign "ResizeObserver loop" in dev.

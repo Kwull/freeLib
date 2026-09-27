@@ -17,6 +17,7 @@
   import { t, tn, i18nState } from '../i18n';
   import { normalize, letterOf } from '../utils/normalize';
   import type { AuthorSummary, NameListResponse } from '../api/types';
+  import { nameFilterKey } from '../stores/nameFilter.svelte';
 
   let { kind, lib, id }: { kind: 'authors' | 'series'; lib: number; id: number | null } = $props();
 
@@ -94,7 +95,12 @@
 
   const rows = $derived(list?.rows ?? []);
   const letters = $derived(list?.letters ?? []);
-  const current = $derived(rows.find((r) => r[0] === id) ?? null);
+  // An author's books do not wait for the whole name list (hundreds of thousands of names on a
+  // big library): its summary names it, so the books pane and its toolbar work at once.
+  const current = $derived<[number, string, number] | null>(
+    rows.find((r) => r[0] === id)
+      ?? (!list && kind === 'authors' && summary && summary.id === id ? [summary.id, summary.name, summary.count] : null),
+  );
   const title = $derived(kind === 'authors' ? t('nav.authors') : t('nav.series'));
   const filterLabel = $derived(kind === 'authors' ? t('authors.filterLabel') : t('series.filterLabel'));
   const listWidth = $derived(liveListWidth ?? paneWidth('list'));
@@ -117,7 +123,7 @@
 </script>
 
 <div class="browse" class:show-list={mobilePane === 'list'} class:show-books={mobilePane === 'books'}>
-  <NameBrowser {title} {filterLabel} {rows} {letters} selectedId={id} onSelect={selectName} width={listWidth}
+  <NameBrowser {title} {filterLabel} {rows} {letters} selectedId={id} onSelect={selectName} width={listWidth} filterKey={nameFilterKey(lib, kind)}
     loading={!list && !listError} {progressText} progress={progressValue} />
   <Splitter
     value={listWidth}

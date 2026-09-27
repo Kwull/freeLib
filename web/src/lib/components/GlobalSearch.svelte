@@ -1,7 +1,8 @@
 <script lang="ts">
   import { api } from '../api/client';
   import type { SearchResponse } from '../api/types';
-  import { navigate } from '../router.svelte';
+  import { untrack } from 'svelte';
+  import { navigate, currentRoute } from '../router.svelte';
   import { t, tn } from '../i18n';
   import Hl from './Hl.svelte';
 
@@ -15,11 +16,28 @@
   let seq = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
+  // The box shows the query of the search page it is on, and is empty everywhere else
+  // (an author, New arrivals…); Back to the search page brings the query back.
+  const routeQuery = $derived.by(() => {
+    const r = currentRoute();
+    return r.name === 'search' ? r.q : '';
+  });
+  $effect(() => {
+    const q = routeQuery;
+    untrack(() => {
+      if (query === q) return;
+      query = q;
+      open = false;
+      result = null;
+    });
+  });
+
   $effect(() => {
     const q = query;
     clearTimeout(timer);
     active = -1;
-    if (q.trim().length < 2) { result = null; return; }
+    // only while the user types here (not for the query a search page put in the box)
+    if (q.trim().length < 2 || untrack(() => !open)) { result = null; return; }
     timer = setTimeout(async () => {
       const mine = ++seq;
       try {

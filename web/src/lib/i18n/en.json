@@ -674,8 +674,12 @@
   "notFound.text": "It may have been removed, or the link is wrong.",
   "notFound.toLibrary": "To the start page",
   "notFound.toList": "To the list",
+  "notFound.page": "Page not found",
+  "notFound.pageText": "There is no page at this address. The link may be wrong or out of date.",
   "books.colNoRoom": "Hidden: not enough room in this pane",
   "books.colNoRoomShort": "no room",
+  "books.colsHidden.one": "{count} column hidden: not enough room",
+  "books.colsHidden.other": "{count} columns hidden: not enough room",
   "books.colSorted": "Shown while the list is sorted by it",
   "books.colSortedShort": "sorted",
   "device.exportRoot": "Export folder (root)"

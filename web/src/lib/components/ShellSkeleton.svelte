@@ -6,7 +6,7 @@
   import { t } from '../i18n';
   import { paneWidth } from '../stores/layout.svelte';
 
-  let { label }: { label: string } = $props();
+  let { label, filter = null }: { label: string; filter?: { key: string; label: string } | null } = $props();
 </script>
 
 <div class="shell-skel" data-testid="shell-skeleton">
@@ -23,7 +23,7 @@
         <div class="nav-row"><span class="sk icon"></span><span class="sk" style:width="{w}%"></span></div>
       {/each}
     </nav>
-    <BrowseSkeleton {label} />
+    <BrowseSkeleton {label} {filter} />
   </div>
 </div>
 
