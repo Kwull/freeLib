@@ -122,6 +122,87 @@ pub fn word_key(w: &str) -> String {
     out
 }
 
+/// Coarse phonetic key of one word, for search: like [`word_key`] but also folding the
+/// English / German / Polish spellings of Russian names, so `asimov`, `azimov`, `asimow`,
+/// `azimoff` and `Азимов` share the key `asimov` (and `Jurij` = `Yuri` = `Юрий`,
+/// `Majakowski` = `Маяковский`, `Tschechow`/`Chekhov` share their consonants).
+///
+/// Transliterated, accents folded, lower case, ASCII letters and digits only, then:
+/// `w`→`v`, `q`→`k`; `tsch`→`q` (ч), `shch`/`sch`/`sh`/`zh`→`w` (ш, щ, ж); `tch`/`ch`→`q`;
+/// `kh`→`h`, `ph`→`f`, `ks`→`x`; `ts`/`tz`/`tc`→`c`; `z`→`s`; `yo`/`jo` after a
+/// consonant → `e` (ё); `y`/`j`→`i`; `ie`→`e` (`Andreyev` = `Андреев`, `Yevgeny` =
+/// `Евгений`); doubled letters collapsed; a final `of`/`ef` → `ov`/`ev`.
+///
+/// Keep in sync with `phoneticKey` in web/src/lib/utils/phonetic.ts (both are checked against
+/// docs/web/phonetic-vectors.json).
+pub fn phonetic_key(w: &str) -> String {
+    let t = translit(w);
+    let folded = normalize(&t);
+    let s: String = folded
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| match c {
+            'w' => 'v',
+            'q' => 'k',
+            c => c,
+        })
+        .collect();
+    let s = s
+        .replace("tsch", "q")
+        .replace("shch", "w")
+        .replace("sch", "w")
+        .replace("sh", "w")
+        .replace("zh", "w")
+        .replace("tch", "q")
+        .replace("ch", "q")
+        .replace("kh", "h")
+        .replace("ph", "f")
+        .replace("ks", "x")
+        .replace("ts", "c")
+        .replace("tz", "c")
+        .replace("tc", "c")
+        .replace('z', "s");
+    // ё spelled yo / jo after a consonant: Semyonov = Семёнов, Artjom = Артём
+    let chars: Vec<char> = s.chars().collect();
+    let mut t = String::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if (c == 'y' || c == 'j')
+            && chars.get(i + 1) == Some(&'o')
+            && i > 0
+            && chars[i - 1].is_ascii_alphabetic()
+            && !is_vowel(chars[i - 1])
+            && chars[i - 1] != 'y'
+        {
+            t.push('e');
+            i += 2;
+            continue;
+        }
+        t.push(match c {
+            'y' | 'j' => 'i',
+            c => c,
+        });
+        i += 1;
+    }
+    let t = t.replace("ie", "e");
+    let mut out = String::with_capacity(t.len());
+    for c in t.chars() {
+        if out.ends_with(c) && c.is_ascii_alphabetic() {
+            continue;
+        }
+        out.push(c);
+    }
+    if out.len() > 3 {
+        if let Some(stem) = out.strip_suffix("of") {
+            out = format!("{stem}ov");
+        } else if let Some(stem) = out.strip_suffix("ef") {
+            out = format!("{stem}ev");
+        }
+    }
+    out
+}
+
 // ------------------------------------------------------------------ stemming
 
 static RU: LazyLock<Stemmer> = LazyLock::new(|| Stemmer::create(Algorithm::Russian));
@@ -198,13 +279,13 @@ pub fn stems_text(text: &str) -> String {
     out.join(" ")
 }
 
-/// Latin key of a normalized word for search: [`word_key`] for words of at least 3 characters
-/// with a letter, else `None`.
+/// Latin key of a normalized word for search: its [`phonetic_key`] for words of at least 3
+/// characters with a letter, else `None`.
 pub fn latin_key(w: &str) -> Option<String> {
     if w.chars().count() < 3 || !w.chars().any(char::is_alphabetic) {
         return None;
     }
-    let k = word_key(w);
+    let k = phonetic_key(w);
     (k.len() >= 2).then_some(k)
 }
 
@@ -557,12 +638,84 @@ mod tests {
     fn stems_and_latin_texts() {
         assert_eq!(stems_text("мир книги"), "книг");
         assert_eq!(stems_text("мир"), "");
-        assert_eq!(latin_text("стругацкий аркадий"), "strugacky arkady");
+        assert_eq!(latin_text("стругацкий аркадий"), "strugacki arkadi");
         assert_eq!(latin_text("asimov"), "");
-        assert_eq!(latin_key("strugatsky"), Some("strugacky".into()));
-        assert_eq!(latin_key("strugatskii"), Some("strugacky".into()));
+        assert_eq!(latin_key("strugatsky"), Some("strugacki".into()));
+        assert_eq!(latin_key("strugatskii"), Some("strugacki".into()));
         assert_eq!(latin_key("стругацкие"), latin_key("strugackie"));
         assert_eq!(latin_key("ив"), None);
+    }
+
+    #[test]
+    fn phonetic_keys_fold_spellings() {
+        let k = |w: &str| phonetic_key(&normalize(w));
+        for w in [
+            "asimov",
+            "azimov",
+            "asimow",
+            "azimoff",
+            "Азимов",
+            "азимоф",
+            "Asimoff",
+        ] {
+            assert_eq!(k(w), "asimov", "{w}");
+        }
+        let same = [
+            ("Yuri", "Юрий"),
+            ("Jurij", "Юрий"),
+            ("Yuriy", "Jurij"),
+            ("Majakowski", "Маяковский"),
+            ("Mayakovsky", "Маяковский"),
+            ("Dostoyevsky", "Достоевский"),
+            ("Dostojewski", "Достоевский"),
+            ("Andreyev", "Андреев"),
+            ("Andrejew", "Андреев"),
+            ("Yevgeny", "Евгений"),
+            ("Jewgeni", "Евгений"),
+            ("Semyonov", "Семёнов"),
+            ("Artjom", "Артём"),
+            ("Fyodor", "Фёдор"),
+            ("Tolstoj", "Толстой"),
+            ("Tolstoy", "Tolstoi"),
+            ("Mikhail", "Mihail"),
+            ("Maxim", "Максим"),
+            ("Aleksandr", "Alexandr"),
+            ("Strugatsky", "Стругацкий"),
+            ("Strugatzki", "Стругацкий"),
+            ("Strugacki", "Стругацкий"),
+            ("Chekhov", "Чехов"),
+            ("Tchekhov", "Чехов"),
+            ("Shukshin", "Шукшин"),
+            ("Schukschin", "Шукшин"),
+            ("Zhukov", "Жуков"),
+            ("Tsvetaeva", "Цветаева"),
+            ("Kassil", "Кассиль"),
+            ("Turgenieff", "Тургенев"),
+            ("Philipp", "Филип"),
+            ("Yakov", "Яков"),
+            ("Jakov", "Iakov"),
+            ("Yulia", "Юлия"),
+            ("Julia", "Iulia"),
+            ("Gorky", "Горький"),
+            ("Gorkij", "Gorkiy"),
+        ];
+        for (a, b) in same {
+            assert_eq!(k(a), k(b), "{a} / {b}");
+        }
+        // precision: different names stay apart
+        for (a, b) in [
+            ("Азимов", "Агаев"),
+            ("Толстой", "Толстая"),
+            ("Стругацкий", "Стратский"),
+            ("Иванов", "Иваненко"),
+            ("Чехов", "Шехов"),
+            ("Маркс", "Маркес"),
+        ] {
+            assert_ne!(k(a), k(b), "{a} / {b}");
+        }
+        // Latin keys of search use it
+        assert_eq!(latin_key("азимов"), Some("asimov".into()));
+        assert_eq!(latin_key("asimow"), Some("asimov".into()));
     }
 
     #[test]

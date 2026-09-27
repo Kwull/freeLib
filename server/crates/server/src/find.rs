@@ -273,7 +273,8 @@ pub struct Home {
     pub empty: bool,
     pub continue_series: Vec<SeriesNextOut>,
     pub new_from_authors: NewFromOut,
-    /// Suggestions (best-rated recent books) for the empty state.
+    /// "Well-rated new arrivals": best-rated recent works the user does not have and the
+    /// sections above do not show (a wider window when the last 30 days have too few).
     pub picks: Vec<BookOut>,
     pub following: FollowCounts,
 }
@@ -379,11 +380,14 @@ pub fn home(
 
     let empty =
         history.is_empty() && ratings.is_empty() && shelved.is_empty() && follow_rows.is_empty();
-    let picks = if empty || (cont.is_empty() && new_books.is_empty()) {
-        cat.picks(30, &src, PICKS_MAX)?
-    } else {
-        Vec::new()
-    };
+    // "Well-rated new arrivals" is always there (it used to be only for a new user, so one
+    // sent book emptied it): without the user's books and what the sections above show
+    let mut shown = exclude.clone();
+    for s in &cont {
+        shown.extend(s.next.iter().map(|b| b.id));
+    }
+    shown.extend(new_books.iter().map(|n| n.book.id));
+    let picks = cat.picks(30, &shown, &src, PICKS_MAX)?;
 
     // user marks for every book shown, in one pass
     let mut all: Vec<Book> = Vec::new();

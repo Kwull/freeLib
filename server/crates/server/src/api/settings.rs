@@ -285,8 +285,9 @@ pub async fn smtp_test(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Users with how they sign in: `hasPassword`, and `sso` (the linked single sign-on identity:
-/// `email`, `createdAt`, `lastLogin`) or `null`.
+/// Users with how they sign in: `hasPassword`, `email` (stored by an administrator; a first
+/// single sign-on with this verified e-mail links to the account), and `sso` (the linked
+/// single sign-on identity: `email`, `createdAt`, `lastLogin`) or `null`.
 pub async fn users(State(st): State<AppState>, Admin(_): Admin) -> ApiResult<Json<Vec<Value>>> {
     let issuer = st.oidc.as_ref().map(|p| p.issuer().to_string());
     let rows = st
@@ -297,6 +298,7 @@ pub async fn users(State(st): State<AppState>, Admin(_): Admin) -> ApiResult<Jso
             let mut out = Vec::with_capacity(users.len());
             for u in users {
                 let hp = db::has_password(c, u.id)?;
+                let email = db::user_email(c, u.id)?;
                 let sso = ids
                     .get(&u.id)
                     .filter(|i| issuer.as_deref().is_none_or(|x| x == i.issuer));
@@ -305,6 +307,7 @@ pub async fn users(State(st): State<AppState>, Admin(_): Admin) -> ApiResult<Jso
                     "username": u.username,
                     "role": u.role,
                     "hasPassword": hp,
+                    "email": email,
                     "sso": sso,
                 }));
             }
@@ -319,6 +322,19 @@ pub struct NewUser {
     username: String,
     password: String,
     role: Option<String>,
+    email: Option<String>,
+}
+
+fn valid_email(e: &Option<String>) -> ApiResult<()> {
+    match e.as_deref().map(str::trim) {
+        Some(e)
+            if !e.is_empty()
+                && (!e.contains('@') || e.len() > 254 || e.contains(char::is_whitespace)) =>
+        {
+            Err(ApiError::bad_request("not an e-mail address"))
+        }
+        _ => Ok(()),
+    }
 }
 
 fn valid_role(r: &str) -> ApiResult<()> {
@@ -338,13 +354,19 @@ pub async fn create_user(
     auth::validate_password(&b.password)?;
     let role = b.role.unwrap_or_else(|| "reader".into());
     valid_role(&role)?;
+    valid_email(&b.email)?;
+    let email = b.email;
     let fast = st.cfg.fast_password_hash;
     let pw = b.password;
     let hash = tokio::task::spawn_blocking(move || auth::hash_password(&pw, fast)).await??;
     let name = b.username;
     let user = st
         .db
-        .run(move |c| db::insert_user(c, &name, &hash, &role))
+        .run(move |c| {
+            let u = db::insert_user(c, &name, &hash, &role)?;
+            db::set_user_email(c, u.id, email.as_deref())?;
+            Ok(u)
+        })
         .await?;
     if st.open_mode() {
         // the first account ends open mode only once an administrator exists
@@ -362,6 +384,8 @@ pub async fn create_user(
 pub struct PatchUser {
     password: Option<String>,
     role: Option<String>,
+    /// `""` clears it.
+    email: Option<String>,
 }
 
 pub async fn update_user(
@@ -373,6 +397,7 @@ pub async fn update_user(
     if let Some(r) = &b.role {
         valid_role(r)?;
     }
+    valid_email(&b.email)?;
     let hash = match b.password {
         Some(pw) => {
             auth::validate_password(&pw)?;
@@ -382,6 +407,7 @@ pub async fn update_user(
         None => None,
     };
     let role = b.role;
+    let email = b.email;
     let user = st
         .db
         .run(move |c| {
@@ -392,6 +418,9 @@ pub async fn update_user(
                 ));
             }
             db::update_user(c, id, hash.as_deref(), role.as_deref())?;
+            if let Some(e) = &email {
+                db::set_user_email(c, id, Some(e))?;
+            }
             db::get_user(c, id)?.ok_or_else(|| ApiError::not_found("user not found"))
         })
         .await?;
@@ -428,6 +457,58 @@ pub async fn delete_user(
     }
     let _ = st.events().send(crate::jobs::Event::Users);
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct MergeBody {
+    /// The account that stays.
+    into: i64,
+}
+
+/// `POST /users/:id/merge {into}` (admin): repairs a duplicate account (e.g. one a first
+/// single sign-on created next to an existing account): moves the identity and everything of
+/// user `id` to user `into` and deletes `id` (see [`db::merge_user`]). Logged as an audit line.
+pub async fn merge_user(
+    State(st): State<AppState>,
+    Admin(me): Admin,
+    Path(id): Path<i64>,
+    Json(b): Json<MergeBody>,
+) -> ApiResult<Json<Value>> {
+    if st.open_mode() {
+        return Err(ApiError::bad_request("there are no accounts in open mode"));
+    }
+    let into = b.into;
+    let (from, to, report) = st
+        .db
+        .run(move |c| {
+            let from = db::get_user(c, id)?.ok_or_else(|| ApiError::not_found("user not found"))?;
+            let to = db::get_user(c, into)?
+                .ok_or_else(|| ApiError::not_found("target user not found"))?;
+            let r = db::merge_user(c, id, into)?;
+            Ok((from, to, r))
+        })
+        .await?;
+    st.jobs.reassign_user(id, into);
+    st.invalidate_sessions();
+    tracing::warn!(
+        target: "audit",
+        admin = %me.username,
+        from = %from.username,
+        from_id = from.id,
+        into = %to.username,
+        into_id = to.id,
+        report = ?report,
+        "accounts merged: {} into {}",
+        from.username,
+        to.username
+    );
+    let _ = st.events().send(crate::jobs::Event::Users);
+    let user = st
+        .db
+        .run(move |c| db::get_user(c, into))
+        .await?
+        .ok_or_else(|| ApiError::not_found("target user not found"))?;
+    Ok(Json(json!({ "user": user, "moved": report })))
 }
 
 pub async fn get_prefs(State(st): State<AppState>, Auth(u): Auth) -> ApiResult<Json<Value>> {

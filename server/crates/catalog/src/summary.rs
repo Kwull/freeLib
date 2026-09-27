@@ -32,32 +32,45 @@ pub struct Coauthor {
     pub direct: i64,
 }
 
-/// A series of the author with the number of the author's live books in it.
+/// A series of the author with the number of the author's live works in it (see
+/// [`AuthorSummary`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SeriesCount {
     pub id: i64,
     pub name: String,
+    /// Works (list rows) in the series.
     pub count: i64,
+    /// Of them, anthologies (the row's copy has at least [`ANTHOLOGY_MIN_AUTHORS`] authors).
+    pub anthologies: i64,
 }
 
 /// Overview of an author's live (non-deleted) books.
+///
+/// Counts are in **works**: the rows of the author's list with editions grouped
+/// (`GET books?author=…&group=1`). Editions of one work count once, and a work is placed by
+/// its best copy (its series, its number of authors), exactly like the list. `files` is the
+/// number of live files (editions).
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthorSummary {
     pub id: i64,
     pub name: String,
-    /// Live books.
+    /// Live works (rows of the grouped list).
     pub count: i64,
-    /// Live books with at least [`ANTHOLOGY_MIN_AUTHORS`] authors.
+    /// Live files (every edition).
+    pub files: i64,
+    /// Works whose copy has at least [`ANTHOLOGY_MIN_AUTHORS`] authors (anthologies).
     pub anthologies: i64,
-    /// Series of the author's books, most books first (then by name).
+    /// Series of the author's works, most works first (then by name).
     pub series: Vec<SeriesCount>,
-    /// Live books outside any series.
+    /// Works outside any series.
     pub without_series: i64,
-    /// `[(lang, count)]`, most frequent first.
+    /// Of them, anthologies.
+    pub without_series_anthologies: i64,
+    /// `[(lang, works)]`, most frequent first.
     pub langs: Vec<(String, i64)>,
-    /// `[(genre id, count)]` of the most frequent (assigned) genres, at most 8.
+    /// `[(genre id, works)]` of the most frequent (assigned) genres, at most 8.
     pub genres: Vec<(u16, i64)>,
     /// Oldest and newest `date` of the live books (`YYYY-MM-DD`), empty when unknown.
     pub first_date: String,
@@ -69,9 +82,11 @@ pub struct AuthorSummary {
     pub coauthor_count: i64,
 }
 
+/// (book id, series id, lang, date, number of authors)
+type BookRow = (i64, Option<i64>, String, String, usize);
+
 struct AuthorBooks {
-    /// (book id, series id, lang, date, number of authors)
-    books: Vec<(i64, Option<i64>, String, String, usize)>,
+    books: Vec<BookRow>,
 }
 
 impl Catalog {
@@ -150,29 +165,71 @@ impl Catalog {
     }
 
     /// Overview of author `id` (`None` when unknown): counts, series, languages, genres,
-    /// date range and top co-authors.
+    /// date range and top co-authors. Works are grouped without cover hints; see
+    /// [`author_summary_with`](Self::author_summary_with).
     pub fn author_summary(&self, id: i64) -> Result<Option<AuthorSummary>> {
+        self.author_summary_with(id, &crate::rank::NoRatings)
+    }
+
+    /// [`author_summary`](Self::author_summary) with the best copy of each work picked with
+    /// `src` (known covers), like the grouped list.
+    pub fn author_summary_with(
+        &self,
+        id: i64,
+        src: &dyn crate::rank::RatingSource,
+    ) -> Result<Option<AuthorSummary>> {
         let Some(a) = self.author(id)? else {
             return Ok(None);
         };
         let ab = self.author_books(id)?;
+        let attrs = self.attrs()?;
+        let mut ids: Vec<i64> = ab.books.iter().map(|b| b.0).collect();
+        ids.sort_unstable();
+        let groups = crate::works::group_ids(&ids, &attrs, src);
+        let by_id: HashMap<i64, &BookRow> = ab.books.iter().map(|b| (b.0, b)).collect();
         let mut s = AuthorSummary {
             id: a.id,
             name: a.name,
-            count: ab.books.len() as i64,
+            count: groups.len() as i64,
+            files: ab.books.len() as i64,
             ..Default::default()
         };
-        let mut series: HashMap<i64, i64> = HashMap::new();
+        // (works, anthologies) per series
+        let mut series: HashMap<i64, (i64, i64)> = HashMap::new();
         let mut langs: HashMap<&str, i64> = HashMap::new();
-        for (_, sid, lang, date, n) in &ab.books {
+        let mut genre_works: HashMap<u16, i64> = HashMap::new();
+        for g in &groups {
+            let Some(&&(_, sid, ref lang, _, n)) = by_id.get(&g.best) else {
+                continue;
+            };
+            let anth = n >= ANTHOLOGY_MIN_AUTHORS;
             match sid {
-                Some(sid) => *series.entry(*sid).or_default() += 1,
-                None => s.without_series += 1,
+                Some(sid) => {
+                    let e = series.entry(sid).or_default();
+                    e.0 += 1;
+                    e.1 += i64::from(anth);
+                }
+                None => {
+                    s.without_series += 1;
+                    s.without_series_anthologies += i64::from(anth);
+                }
             }
-            *langs.entry(lang.as_str()).or_default() += 1;
-            if *n >= ANTHOLOGY_MIN_AUTHORS {
+            if anth {
                 s.anthologies += 1;
             }
+            *langs.entry(lang.as_str()).or_default() += 1;
+            let mut gs: Vec<u16> = g
+                .members
+                .iter()
+                .flat_map(|m| attrs.genres(*m).iter().copied())
+                .collect();
+            gs.sort_unstable();
+            gs.dedup();
+            for gid in gs {
+                *genre_works.entry(gid).or_default() += 1;
+            }
+        }
+        for (_, _, _, date, _) in &ab.books {
             if !date.is_empty() {
                 if s.first_date.is_empty() || *date < s.first_date {
                     s.first_date = date.clone();
@@ -186,6 +243,10 @@ impl Catalog {
             langs.into_iter().map(|(l, c)| (l.to_string(), c)).collect();
         lv.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         s.langs = lv;
+        let mut gv: Vec<(u16, i64)> = genre_works.into_iter().collect();
+        gv.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        gv.truncate(TOP_GENRES);
+        s.genres = gv;
 
         let conn = self.conn()?;
         if !series.is_empty() {
@@ -194,11 +255,13 @@ impl Catalog {
             let mut named: Vec<(SeriesCount, String)> = st
                 .query_map([id_array(series.keys().copied())], |r| {
                     let sid: i64 = r.get(0)?;
+                    let (count, anthologies) = series.get(&sid).copied().unwrap_or((0, 0));
                     Ok((
                         SeriesCount {
                             id: sid,
                             name: r.get(1)?,
-                            count: series.get(&sid).copied().unwrap_or(0),
+                            count,
+                            anthologies,
                         },
                         r.get::<_, String>(2)?,
                     ))
@@ -206,18 +269,6 @@ impl Catalog {
                 .collect::<rusqlite::Result<_>>()?;
             named.sort_by(|a, b| b.0.count.cmp(&a.0.count).then(a.1.cmp(&b.1)));
             s.series = named.into_iter().map(|x| x.0).collect();
-        }
-        if !ab.books.is_empty() {
-            let mut st = conn.prepare_cached(
-                "SELECT genre_id, count(*) FROM book_genre WHERE book_id IN rarray(?1) \
-                 GROUP BY genre_id ORDER BY count(*) DESC, genre_id LIMIT ?2",
-            )?;
-            s.genres = st
-                .query_map(
-                    rusqlite::params![id_array(ab.books.iter().map(|b| b.0)), TOP_GENRES as i64],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )?
-                .collect::<rusqlite::Result<_>>()?;
         }
         drop(conn);
         let all = self.coauthors_of(id, &ab)?;

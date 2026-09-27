@@ -10,7 +10,13 @@
 //!   cookie scoped to the callback, which must match the `state` the provider sends back.
 //! * ID tokens: signature (asymmetric algorithms only), `iss`, `aud`, `exp` (60 s leeway),
 //!   `iat` (not in the future, not older than 10 minutes), `nonce`, and `at_hash` when present.
-//! * Accounts are found by (issuer, subject) only, never by user name or e-mail.
+//! * Accounts are found by (issuer, subject). A first sign-in links to an existing account
+//!   only when the provider says the e-mail is verified and it equals the e-mail an
+//!   administrator stored for that account (which has no identity from this provider yet).
+//!   A first sign-in whose user name is taken never creates `name (2)` silently: the user is
+//!   asked to sign in with that account's password to link it (a pending link, 10 minutes,
+//!   HttpOnly cookie), or, when auto-creation is on, to create a separate account knowingly.
+//!   Never linked by name alone.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -36,6 +42,10 @@ use crate::state::AppState;
 pub const CALLBACK_PATH: &str = "/api/v1/auth/oidc/callback";
 /// Cookie holding the `state` of a sign-in in progress.
 pub const STATE_COOKIE: &str = "freelib_oidc";
+/// Cookie holding a pending link (a first sign-in whose user name is taken).
+pub const LINK_COOKIE: &str = "freelib_sso_link";
+/// Path of the pending-link cookie: `/login` and `/auth/oidc/pending*` both see it.
+pub const LINK_COOKIE_PATH: &str = "/api/v1";
 /// Path the state cookie is scoped to.
 pub const STATE_COOKIE_PATH: &str = "/api/v1/auth/oidc";
 /// Lifetime of a pending sign-in.
@@ -122,8 +132,25 @@ pub struct Profile {
     pub subject: String,
     pub preferred_username: Option<String>,
     pub email: Option<String>,
+    /// The provider's `email_verified` claim (false when absent).
+    pub email_verified: bool,
     pub name: Option<String>,
     pub groups: Vec<String>,
+}
+
+/// A first sign-in whose user name belongs to an existing account: waiting for the user to
+/// prove they own that account (password sign-in), or to choose a separate account.
+#[derive(Debug, Clone)]
+pub struct PendingLink {
+    pub profile: Profile,
+    /// The existing account with that name.
+    pub user_id: i64,
+    pub username: String,
+    /// False when that account already has an identity from this provider (only a separate
+    /// account is possible then).
+    pub can_link: bool,
+    pub return_to: String,
+    created: Instant,
 }
 
 /// A finished callback.
@@ -140,6 +167,7 @@ pub struct Provider {
     http: openidconnect::reqwest::Client,
     meta: tokio::sync::Mutex<Option<(CoreProviderMetadata, Instant)>>,
     pending: Mutex<HashMap<String, Pending>>,
+    links: Mutex<HashMap<String, PendingLink>>,
 }
 
 impl Provider {
@@ -173,6 +201,7 @@ impl Provider {
             http,
             meta: tokio::sync::Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
+            links: Mutex::new(HashMap::new()),
         })
     }
 
@@ -332,6 +361,60 @@ impl Provider {
         Ok(p)
     }
 
+    /// Stores a pending link; returns the token for the [`LINK_COOKIE`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_link(
+        &self,
+        profile: Profile,
+        user_id: i64,
+        username: String,
+        can_link: bool,
+        return_to: String,
+    ) -> Result<String, SsoError> {
+        let token = crate::util::random_token(32);
+        let mut g = self.links.lock().unwrap_or_else(|e| e.into_inner());
+        g.retain(|_, l| l.created.elapsed() < PENDING_TTL);
+        if g.len() >= MAX_PENDING {
+            return Err(SsoError::new(
+                "busy",
+                "too many sign-ins in progress, retry in a few minutes",
+            ));
+        }
+        g.insert(
+            token.clone(),
+            PendingLink {
+                profile,
+                user_id,
+                username,
+                can_link,
+                return_to,
+                created: Instant::now(),
+            },
+        );
+        Ok(token)
+    }
+
+    /// The pending link of a cookie value (still valid), without taking it.
+    pub fn peek_pending_link(&self, token: &str) -> Option<PendingLink> {
+        let g = self.links.lock().unwrap_or_else(|e| e.into_inner());
+        g.get(token)
+            .filter(|l| l.created.elapsed() < PENDING_TTL)
+            .cloned()
+    }
+
+    /// Takes the pending link of a cookie value when `accept` approves it (single use).
+    pub fn take_pending_link(
+        &self,
+        token: &str,
+        accept: impl FnOnce(&PendingLink) -> bool,
+    ) -> Option<PendingLink> {
+        let mut g = self.links.lock().unwrap_or_else(|e| e.into_inner());
+        let ok = g
+            .get(token)
+            .is_some_and(|l| l.created.elapsed() < PENDING_TTL && accept(l));
+        if ok { g.remove(token) } else { None }
+    }
+
     /// The link flow of a failed callback, to send the user back to the right page.
     pub fn peek_link(&self, state: Option<&str>) -> bool {
         state.is_some_and(|s| {
@@ -412,6 +495,7 @@ impl Provider {
             subject: claims.subject().as_str().to_string(),
             preferred_username: claims.preferred_username().map(|u| u.as_str().to_string()),
             email: claims.email().map(|e| e.as_str().to_string()),
+            email_verified: claims.email_verified().unwrap_or(false),
             name: claims
                 .name()
                 .and_then(|n| n.get(None))
@@ -536,6 +620,13 @@ fn merge_userinfo(p: &mut Profile, v: &serde_json::Value, groups: bool) -> Resul
     if p.email.is_none() {
         p.email = s("email");
     }
+    if !p.email_verified
+        && p.email.is_some()
+        && p.email == s("email")
+        && v.get("email_verified").and_then(|x| x.as_bool()) == Some(true)
+    {
+        p.email_verified = true;
+    }
     if p.name.is_none() {
         p.name = s("name");
     }
@@ -596,10 +687,20 @@ pub fn safe_return(p: Option<&str>) -> String {
 pub enum Outcome {
     SignedIn(User),
     Linked(User),
+    /// A first sign-in whose user name belongs to an existing account: the user must sign in
+    /// with that account's password to link it (or choose a separate account).
+    NeedsLink {
+        user: User,
+        can_link: bool,
+        profile: Box<Profile>,
+    },
 }
 
-/// Finds or creates the account of `v` (or links it to `v.link_user`), and applies the admin
-/// group. Blocking (app.db).
+/// Finds the account of `v` (or links it to `v.link_user`), and applies the admin group.
+/// A first sign-in links to the account whose stored e-mail equals the provider's *verified*
+/// e-mail (and that has no identity from this provider yet); when the user name is taken it
+/// asks for a link ([`Outcome::NeedsLink`]); otherwise it creates an account when
+/// auto-creation is on. Blocking (app.db).
 pub fn resolve_account(st: &AppState, cfg: &OidcConfig, v: &Verified) -> Result<Outcome, SsoError> {
     let p = &v.profile;
     let c = st.db.lock();
@@ -620,14 +721,29 @@ pub fn resolve_account(st: &AppState, cfg: &OidcConfig, v: &Verified) -> Result<
         return Ok(Outcome::Linked(user));
     }
     let existing = db::identity_user(&c, &p.issuer, &p.subject).map_err(dberr)?;
-    let in_admin_group = cfg
-        .admin_group
-        .as_ref()
-        .map(|g| p.groups.iter().any(|x| x == g));
     let mut user = match existing {
         Some(u) => u,
-        None => {
-            if !cfg.auto_create {
+        None => match first_sign_in(&c, cfg, p).map_err(dberr)? {
+            First::Linked(u) => {
+                tracing::info!(
+                    user = %u.username,
+                    "single sign-on identity linked by verified e-mail"
+                );
+                u
+            }
+            First::Taken(u, can_link) => {
+                tracing::info!(
+                    user = %u.username,
+                    "single sign-on: the user name is taken, asking to link with the password"
+                );
+                return Ok(Outcome::NeedsLink {
+                    user: u,
+                    can_link,
+                    profile: Box::new(p.clone()),
+                });
+            }
+            First::Create => create_account(&c, cfg, p, None).map_err(dberr)?,
+            First::Refused => {
                 return Err(SsoError::new(
                     "not_linked",
                     format!(
@@ -636,37 +752,9 @@ pub fn resolve_account(st: &AppState, cfg: &OidcConfig, v: &Verified) -> Result<
                     ),
                 ));
             }
-            let name = unique_username(&c, p).map_err(dberr)?;
-            let role = if in_admin_group == Some(true) {
-                "admin"
-            } else {
-                "reader"
-            };
-            // no password: `verify_password` never accepts an empty hash
-            let u = db::insert_user(&c, &name, "", role).map_err(dberr)?;
-            db::link_identity(&c, u.id, &p.issuer, &p.subject, p.email.as_deref())
-                .map_err(dberr)?;
-            tracing::info!(user = %u.username, role, "account created by single sign-on");
-            u
-        }
+        },
     };
-    let mut role_changed = false;
-    if let Some(admin) = in_admin_group {
-        // the FREELIB_ADMIN_USER account stays an administrator: the way back in
-        let bootstrap = st.cfg.admin_password.is_some()
-            && user.username.eq_ignore_ascii_case(&st.cfg.admin_user);
-        let role = if admin || bootstrap {
-            "admin"
-        } else {
-            "reader"
-        };
-        if user.role != role {
-            db::update_user(&c, user.id, None, Some(role)).map_err(dberr)?;
-            tracing::info!(user = %user.username, role, "role set from the admin group");
-            user.role = role.into();
-            role_changed = true;
-        }
-    }
+    let role_changed = apply_admin_group(st, &c, cfg, p, &mut user).map_err(dberr)?;
     db::touch_identity(&c, &p.issuer, &p.subject, p.email.as_deref()).map_err(dberr)?;
     drop(c);
     if role_changed {
@@ -676,11 +764,94 @@ pub fn resolve_account(st: &AppState, cfg: &OidcConfig, v: &Verified) -> Result<
     Ok(Outcome::SignedIn(user))
 }
 
-/// A free user name from `preferred_username`, `email` or `name` (`alice`, `alice (2)`, …).
-fn unique_username(
+enum First {
+    /// Linked to the account with this verified e-mail.
+    Linked(User),
+    /// The user name belongs to this account (`true`: it can be linked).
+    Taken(User, bool),
+    Create,
+    Refused,
+}
+
+/// What a first sign-in of (issuer, subject) does (see [`resolve_account`]).
+fn first_sign_in(
     c: &rusqlite::Connection,
+    cfg: &OidcConfig,
     p: &Profile,
-) -> Result<String, crate::error::ApiError> {
+) -> Result<First, crate::error::ApiError> {
+    if p.email_verified
+        && let Some(email) = p.email.as_deref().filter(|e| e.contains('@'))
+        && let Some(u) = db::user_by_email(c, email)?
+        && db::user_identity(c, u.id, &p.issuer)?.is_none()
+    {
+        db::link_identity(c, u.id, &p.issuer, &p.subject, Some(email))?;
+        return Ok(First::Linked(u));
+    }
+    if let Some((u, _)) = db::user_with_hash(c, &base_username(p))? {
+        let can_link = db::user_identity(c, u.id, &p.issuer)?.is_none();
+        return Ok(First::Taken(u, can_link));
+    }
+    Ok(if cfg.auto_create {
+        First::Create
+    } else {
+        First::Refused
+    })
+}
+
+/// Creates an account for `p` (the first free name: `alice`, else `alice (2)`, …) and links
+/// the identity; `why` is logged.
+pub fn create_account(
+    c: &rusqlite::Connection,
+    cfg: &OidcConfig,
+    p: &Profile,
+    why: Option<&str>,
+) -> Result<User, crate::error::ApiError> {
+    let name = unique_username(c, p)?;
+    let in_admin_group = cfg
+        .admin_group
+        .as_ref()
+        .is_some_and(|g| p.groups.iter().any(|x| x == g));
+    let role = if in_admin_group { "admin" } else { "reader" };
+    // no password: `verify_password` never accepts an empty hash
+    let u = db::insert_user(c, &name, "", role)?;
+    db::link_identity(c, u.id, &p.issuer, &p.subject, p.email.as_deref())?;
+    db::touch_identity(c, &p.issuer, &p.subject, p.email.as_deref())?;
+    tracing::info!(user = %u.username, role, reason = why.unwrap_or("new"), "account created by single sign-on");
+    Ok(u)
+}
+
+/// Sets the role of `user` from the admin group (when one is configured); whether it changed.
+fn apply_admin_group(
+    st: &AppState,
+    c: &rusqlite::Connection,
+    cfg: &OidcConfig,
+    p: &Profile,
+    user: &mut User,
+) -> Result<bool, crate::error::ApiError> {
+    let Some(group) = &cfg.admin_group else {
+        return Ok(false);
+    };
+    let admin = p.groups.iter().any(|x| x == group);
+    // the FREELIB_ADMIN_USER account stays an administrator: the way back in
+    let bootstrap =
+        st.cfg.admin_password.is_some() && user.username.eq_ignore_ascii_case(&st.cfg.admin_user);
+    let role = if admin || bootstrap {
+        "admin"
+    } else {
+        "reader"
+    };
+    if user.role == role {
+        return Ok(false);
+    }
+    db::update_user(c, user.id, None, Some(role))?;
+    tracing::info!(user = %user.username, role, "role set from the admin group");
+    user.role = role.into();
+    Ok(true)
+}
+
+/// The user name a first sign-in asks for: `preferred_username`, else the e-mail, else the
+/// name (cleaned), else `user-<hash of the subject>`.
+fn base_username(p: &Profile) -> String {
     let clean = |s: &str| -> String {
         let s: String = s
             .chars()
@@ -691,7 +862,7 @@ fn unique_username(
             .join(" ");
         s.chars().take(56).collect::<String>().trim().to_string()
     };
-    let base = [&p.preferred_username, &p.email, &p.name]
+    [&p.preferred_username, &p.email, &p.name]
         .into_iter()
         .flatten()
         .map(|s| clean(s))
@@ -701,7 +872,15 @@ fn unique_username(
                 "user-{}",
                 &crate::util::sha256_hex(p.subject.as_bytes())[..8]
             )
-        });
+        })
+}
+
+/// A free user name from [`base_username`] (`alice`, `alice (2)`, …).
+fn unique_username(
+    c: &rusqlite::Connection,
+    p: &Profile,
+) -> Result<String, crate::error::ApiError> {
+    let base = base_username(p);
     for i in 1..1000 {
         let name = if i == 1 {
             base.clone()

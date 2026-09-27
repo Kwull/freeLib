@@ -30,6 +30,11 @@ pub fn router() -> Router<AppState> {
         .route("/auth/oidc/login", get(oidc::login))
         .route("/auth/oidc/callback", get(oidc::callback))
         .route("/auth/oidc/link", post(oidc::link))
+        .route(
+            "/auth/oidc/pending",
+            get(oidc::pending).delete(oidc::pending_cancel),
+        )
+        .route("/auth/oidc/pending/create", post(oidc::pending_create))
         .route("/me/account", get(oidc::account))
         .route("/me/password", put(oidc::set_password))
         .route("/me/oidc", axum::routing::delete(oidc::unlink))
@@ -92,6 +97,7 @@ pub fn router() -> Router<AppState> {
             "/users/{id}",
             axum::routing::patch(settings::update_user).delete(settings::delete_user),
         )
+        .route("/users/{id}/merge", post(settings::merge_user))
         .route("/me/tokens", get(tokens::list).post(tokens::create))
         .route("/me/tokens/audit", get(tokens::audit))
         .route("/me/tokens/{id}", axum::routing::delete(tokens::revoke))

@@ -884,7 +884,7 @@ async fn get_author(st: &AppState, auth: &TokenAuth, a: AuthorArg) -> ToolResult
         let top = with_marks(&st2, uid, lib, p.books)?;
         Ok(json!({
             "library": lib,
-            "id": s.id, "name": s.name, "books": s.count, "anthologies": s.anthologies,
+            "id": s.id, "name": s.name, "books": s.count, "files": s.files, "anthologies": s.anthologies,
             "series": s.series.iter().take(30).map(|x| json!({"id": x.id, "name": x.name, "books": x.count})).collect::<Vec<_>>(),
             "booksWithoutSeries": s.without_series,
             "languages": s.langs,

@@ -751,6 +751,16 @@ impl JobManager {
     }
 
     /// Cancels and forgets every job of a deleted user; returns directories to delete.
+    /// Gives the jobs of user `from` to user `to` (accounts merged; `db::merge_user` updates
+    /// the stored rows).
+    pub fn reassign_user(&self, from: i64, to: i64) {
+        for e in self.lock().iter_mut() {
+            if e.owner == from {
+                e.owner = to;
+            }
+        }
+    }
+
     pub fn purge_user(&self, owner: i64) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         let mut ids = Vec::new();

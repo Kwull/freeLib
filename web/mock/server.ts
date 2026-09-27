@@ -1,5 +1,6 @@
 import type { Connect } from 'vite';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { nameRank } from '../src/lib/utils/phonetic';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -13,7 +14,7 @@ import type { Book, BookDetail, AuthorRef, SeriesRef, Isbn } from '../src/lib/ap
 import { ANTHOLOGY_MIN_AUTHORS, type MockBook, type MockLibrary } from './gen';
 import {
   correct, dismissed, editionNote, editionsOf, followsOf, groupBooks, highlightWords, homeOf, matchTier,
-  queryTokens, recordHistory, type Grouped,
+  queryTokens, recordHistory, workKey, type Grouped,
 } from './find';
 
 // A small, real two-chapter Russian EPUB (see fixtures/build-epub.mjs) served
@@ -405,6 +406,10 @@ export function installMockApi(server: Connect.Server) {
 
         if (url.searchParams.get('group') === '1') {
           const groups = groupBooks(items);
+          if (author || series) {
+            const pos = new Map(items.map((b, i) => [b.id, i]));
+            groups.sort((x, y) => (pos.get(x.best.id) ?? 0) - (pos.get(y.best.id) ?? 0));
+          }
           // with a rating sort a work is placed by its best copy's rating (what the row shows)
           const s = url.searchParams.get('sort');
           if (s === 'my' || s === 'lib' || s === 'ext') {
@@ -489,25 +494,34 @@ export function installMockApi(server: Connect.Server) {
         if (m[3] === 'coauthors') {
           return send(res, 200, { columns: ['id', 'name', 'books', 'direct'], rows: coauthors.map((c) => [c.id, c.name, c.books, c.direct]) });
         }
-        const seriesCount = new Map<number, number>();
+        // counted in works (rows of the grouped list, placed by the copy shown), like the server
+        const seriesCount = new Map<number, [number, number]>();
         const langs = new Map<string, number>();
         const genresCount = new Map<number, number>();
-        let withoutSeries = 0, anthologies = 0, firstDate = '', lastDate = '';
-        for (const b of live) {
-          if (b.seriesId) seriesCount.set(b.seriesId, (seriesCount.get(b.seriesId) ?? 0) + 1); else withoutSeries++;
+        let withoutSeries = 0, withoutSeriesAnthologies = 0, anthologies = 0, firstDate = '', lastDate = '';
+        const works = groupBooks(live);
+        for (const g of works) {
+          const b = g.best;
+          const anth = b.authorIds.length >= ANTHOLOGY_MIN_AUTHORS ? 1 : 0;
+          if (b.seriesId) {
+            const c = seriesCount.get(b.seriesId) ?? [0, 0];
+            seriesCount.set(b.seriesId, [c[0] + 1, c[1] + anth]);
+          } else { withoutSeries++; withoutSeriesAnthologies += anth; }
           langs.set(b.lang, (langs.get(b.lang) ?? 0) + 1);
-          for (const g of b.genreIds) genresCount.set(g, (genresCount.get(g) ?? 0) + 1);
-          if (b.authorIds.length >= ANTHOLOGY_MIN_AUTHORS) anthologies++;
+          for (const gid of new Set(g.members.flatMap((m) => m.genreIds))) genresCount.set(gid, (genresCount.get(gid) ?? 0) + 1);
+          anthologies += anth;
+        }
+        for (const b of live) {
           if (!firstDate || b.date < firstDate) firstDate = b.date;
           if (b.date > lastDate) lastDate = b.date;
         }
         return send(res, 200, {
-          id: aid, name: author.name, count: live.length, anthologies,
+          id: aid, name: author.name, count: works.length, files: live.length, anthologies,
           series: [...seriesCount.entries()]
-            .map(([id, count]) => ({ id, name: lib.series[id - 1].name, count, key: lib.series[id - 1].sortKey }))
+            .map(([id, [count, anth]]) => ({ id, name: lib.series[id - 1].name, count, anthologies: anth, key: lib.series[id - 1].sortKey }))
             .sort((x, y) => y.count - x.count || (x.key < y.key ? -1 : 1))
-            .map(({ id, name, count }) => ({ id, name, count })),
-          withoutSeries,
+            .map(({ id, name, count, anthologies: a }) => ({ id, name, count, anthologies: a })),
+          withoutSeries, withoutSeriesAnthologies,
           langs: [...langs.entries()].sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1)),
           genres: [...genresCount.entries()].sort((x, y) => y[1] - x[1] || x[0] - y[0]).slice(0, 8),
           firstDate, lastDate,
@@ -571,8 +585,15 @@ export function installMockApi(server: Connect.Server) {
             .filter((r) => r.tier > 0)
             .sort((a, b) => b.tier - a.tier || key(b.x) - key(a.x) || a.i - b.i)
             .map((r) => r.x);
-          const authors = kind === 'all' || kind === 'authors' ? ranked(lib.authors, (a) => a.name, (a) => a.bookCount).slice(0, 20) : [];
-          const series = kind === 'all' || kind === 'series' ? ranked(lib.series, (s) => s.name, (s) => s.bookCount).slice(0, 20) : [];
+          // names: last name is / starts with a query word first, then other words; more books first
+          const byName = <T extends { name: string; bookCount: number }>(items: T[]) => items
+            .filter((x) => x.bookCount > 0 && matchTier(tokens, x.name) > 0)
+            .map((x, i) => ({ x, i, r: nameRank(normalize(x.name), tokens) }))
+            .sort((a, b) => a.r - b.r || b.x.bookCount - a.x.bookCount || a.i - b.i)
+            .map((r) => r.x)
+            .slice(0, 20);
+          const authors = kind === 'all' || kind === 'authors' ? byName(lib.authors) : [];
+          const series = kind === 'all' || kind === 'series' ? byName(lib.series) : [];
           const books = kind === 'all' || kind === 'books'
             ? ranked(lib.books, (b) => `${b.title} ${b.authorIds.map((a) => lib.authors[a - 1].name).join(' ')} ${b.seriesId ? lib.series[b.seriesId - 1].name : ''} ${b.keywords ?? ''}`, () => 0)
             : [];
@@ -605,10 +626,20 @@ export function installMockApi(server: Connect.Server) {
         const from = url.searchParams.get('from');
         const to = url.searchParams.get('to');
         const facetGenre = new Map<number, number>(), facetLang = new Map<string, number>(), facetExt = new Map<string, number>();
+        // with editions grouped a facet counts works (the rows choosing it leaves), like the server
+        const grouped = url.searchParams.get('group') === '1';
+        const seenFacet = new Set<string>();
+        const first = (k: string, b: MockBook) => {
+          if (!grouped) return true;
+          const key = `${k}\u0000${workKey(b)}`;
+          if (seenFacet.has(key)) return false;
+          seenFacet.add(key);
+          return true;
+        };
         for (const b of books) {
-          for (const g of b.genreIds) facetGenre.set(g, (facetGenre.get(g) ?? 0) + 1);
-          facetLang.set(b.lang, (facetLang.get(b.lang) ?? 0) + 1);
-          facetExt.set(b.ext, (facetExt.get(b.ext) ?? 0) + 1);
+          for (const g of b.genreIds) if (first(`g${g}`, b)) facetGenre.set(g, (facetGenre.get(g) ?? 0) + 1);
+          if (first(`l${b.lang}`, b)) facetLang.set(b.lang, (facetLang.get(b.lang) ?? 0) + 1);
+          if (first(`e${b.ext}`, b)) facetExt.set(b.ext, (facetExt.get(b.ext) ?? 0) + 1);
         }
         if (genre) { const ids = genre.split(',').map(Number); books = books.filter((b) => b.genreIds.some((g) => ids.includes(g))); }
         if (langF) { const ls = langF.split(','); books = books.filter((b) => ls.includes(b.lang)); }
@@ -926,7 +957,7 @@ export function installMockApi(server: Connect.Server) {
       }
       if (path === '/api/v1/settings/smtp/test' && method === 'POST') return send(res, 204);
       if (path === '/api/v1/users' && method === 'GET') {
-        return send(res, 200, store.users.map((u) => ({ ...u, hasPassword: true, sso: null })));
+        return send(res, 200, store.users.map((u) => ({ email: null, ...u, hasPassword: true, sso: null })));
       }
       if (path === '/api/v1/users' && method === 'POST') {
         const body = await readBody(req);
@@ -940,8 +971,21 @@ export function installMockApi(server: Connect.Server) {
         if (!user) return fail(res, 404, 'not_found', 'User not found');
         const body = await readBody(req);
         if (body.role) user.role = body.role;
+        if (typeof body.email === 'string') (user as { email?: string | null }).email = body.email.trim() || null;
         return send(res, 200, user);
       }
+      m = matchLib(req, /^\/api\/v1\/users\/(\d+)\/merge$/);
+      if (m && method === 'POST') {
+        // like the server: everything of :id moves to `into`, then :id is deleted
+        const id = Number(m[1]);
+        const body = await readBody(req);
+        const into = store.users.find((u) => u.id === Number(body.into));
+        if (!into || id === into.id) return fail(res, 400, 'bad_request', 'an account cannot be merged into itself');
+        if (!store.users.some((u) => u.id === id)) return fail(res, 404, 'not_found', 'User not found');
+        store.users = store.users.filter((u) => u.id !== id);
+        return send(res, 200, { user: into, moved: { identities: 0, shelves: 0, ratings: 0, history: 0, devices: 0, follows: 0, jobs: 0, tokens: 0, apps: 0, promoted: false } });
+      }
+      if (path === '/api/v1/auth/oidc/pending') return fail(res, 404, 'not_found', 'single sign-on is not configured');
       if (m && method === 'DELETE') {
         store.users = store.users.filter((u) => u.id !== Number(m![1]));
         return send(res, 204);

@@ -436,6 +436,128 @@ pub fn touch_identity(
     Ok(())
 }
 
+/// The e-mail address an administrator stored for `user_id`.
+pub fn user_email(c: &Connection, user_id: i64) -> ApiResult<Option<String>> {
+    Ok(
+        c.query_row("SELECT email FROM user WHERE id=?1", [user_id], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .optional()?
+        .flatten(),
+    )
+}
+
+/// Sets (or with `None` / blank clears) the stored e-mail address of `user_id`.
+pub fn set_user_email(c: &Connection, user_id: i64, email: Option<&str>) -> ApiResult<()> {
+    let email = email.map(str::trim).filter(|e| !e.is_empty());
+    c.execute(
+        "UPDATE user SET email=?2 WHERE id=?1",
+        params![user_id, email],
+    )?;
+    Ok(())
+}
+
+/// The only user whose stored e-mail equals `email` (case-insensitive); `None` when there is
+/// none or more than one.
+pub fn user_by_email(c: &Connection, email: &str) -> ApiResult<Option<User>> {
+    let mut st = c.prepare(
+        "SELECT id, username, role FROM user WHERE email=?1 COLLATE NOCASE AND email<>'' LIMIT 2",
+    )?;
+    let users: Vec<User> = st
+        .query_map([email.trim()], |r| {
+            Ok(User {
+                id: r.get(0)?,
+                username: r.get(1)?,
+                role: r.get(2)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(if users.len() == 1 {
+        users.into_iter().next()
+    } else {
+        None
+    })
+}
+
+/// What [`merge_user`] moved.
+#[derive(Debug, Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeReport {
+    pub identities: usize,
+    pub shelves: usize,
+    pub ratings: usize,
+    pub history: usize,
+    pub devices: usize,
+    pub follows: usize,
+    pub jobs: usize,
+    pub tokens: usize,
+    pub apps: usize,
+    /// The target became an administrator (the merged account was one).
+    pub promoted: bool,
+}
+
+/// Moves everything of user `from` to user `to` and deletes `from`: single sign-on
+/// identities, shelves, ratings (`to`'s own win), history, devices and device order, follows,
+/// dismissed series, jobs, hand-off links, API tokens and their audit, authorized apps (OAuth
+/// grants), mail counters. `from`'s sessions end. `to` becomes an administrator when `from`
+/// was one. One transaction; 409 when both have an identity from the same provider.
+pub fn merge_user(c: &Connection, from: i64, to: i64) -> ApiResult<MergeReport> {
+    if from == to {
+        return Err(ApiError::bad_request(
+            "an account cannot be merged into itself",
+        ));
+    }
+    let src = get_user(c, from)?.ok_or_else(|| ApiError::not_found("user not found"))?;
+    let dst = get_user(c, to)?.ok_or_else(|| ApiError::not_found("target user not found"))?;
+    let clash: i64 = c.query_row(
+        "SELECT count(*) FROM user_identity a JOIN user_identity b ON a.issuer=b.issuer          WHERE a.user_id=?1 AND b.user_id=?2",
+        params![from, to],
+        |r| r.get(0),
+    )?;
+    if clash > 0 {
+        return Err(ApiError::conflict(
+            "both accounts have a single sign-on identity from the same provider; unlink one first",
+        ));
+    }
+    let tx = c.unchecked_transaction()?;
+    let mut r = MergeReport::default();
+    let upd = |sql: &str| -> ApiResult<usize> { Ok(tx.execute(sql, params![from, to])?) };
+    r.identities = upd("UPDATE user_identity SET user_id=?2 WHERE user_id=?1")?;
+    r.shelves = upd("UPDATE shelf SET user_id=?2 WHERE user_id=?1")?;
+    r.ratings = upd("UPDATE OR IGNORE rating SET user_id=?2 WHERE user_id=?1")?;
+    upd("DELETE FROM rating WHERE user_id=?1 AND ?2 IS NOT NULL")?;
+    r.history = upd("UPDATE book_history SET user_id=?2 WHERE user_id=?1")?;
+    r.devices = upd("UPDATE device SET user_id=?2 WHERE user_id=?1")?;
+    // `from`'s ordered devices go after `to`'s own
+    upd(
+        "INSERT OR IGNORE INTO device_order(user_id, device_id, pos)          SELECT ?2, device_id, pos + 1000000 FROM device_order WHERE user_id=?1",
+    )?;
+    upd("DELETE FROM device_order WHERE user_id=?1 AND ?2 IS NOT NULL")?;
+    r.follows = upd("UPDATE OR IGNORE follow SET user_id=?2 WHERE user_id=?1")?;
+    upd("DELETE FROM follow WHERE user_id=?1 AND ?2 IS NOT NULL")?;
+    upd("UPDATE OR IGNORE series_dismiss SET user_id=?2 WHERE user_id=?1")?;
+    upd("DELETE FROM series_dismiss WHERE user_id=?1 AND ?2 IS NOT NULL")?;
+    r.jobs = upd("UPDATE job SET owner=?2 WHERE owner=?1")?;
+    upd("UPDATE handoff SET user_id=?2 WHERE user_id=?1")?;
+    r.tokens = upd("UPDATE api_token SET user_id=?2 WHERE user_id=?1")?;
+    upd("UPDATE api_audit SET user_id=?2 WHERE user_id=?1")?;
+    r.apps = upd("UPDATE oauth_grant SET user_id=?2 WHERE user_id=?1")?;
+    upd(
+        "INSERT INTO mail_count(user_id, day, count) SELECT ?2, day, count FROM mail_count WHERE user_id=?1          ON CONFLICT(user_id, day) DO UPDATE SET count = count + excluded.count",
+    )?;
+    if src.is_admin() && !dst.is_admin() {
+        tx.execute("UPDATE user SET role='admin' WHERE id=?1", [to])?;
+        r.promoted = true;
+    }
+    // the merged account keeps the older e-mail when it has none
+    upd(
+        "UPDATE user SET email=(SELECT email FROM user WHERE id=?1) WHERE id=?2 AND coalesce(email,'')=''",
+    )?;
+    delete_user(&tx, from)?;
+    tx.commit()?;
+    Ok(r)
+}
+
 /// Removes the identities of `user_id`; whether there was one.
 pub fn unlink_identity(c: &Connection, user_id: i64) -> ApiResult<bool> {
     Ok(c.execute("DELETE FROM user_identity WHERE user_id=?1", [user_id])? > 0)
@@ -1483,6 +1605,114 @@ impl Default for OpdsConfig {
             enabled: true,
             require_auth: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    fn count(c: &Connection, sql: &str, uid: i64) -> i64 {
+        c.query_row(sql, [uid], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn merge_moves_everything_and_keeps_the_targets_own() {
+        let c = freelib_catalog::open_app_db(std::path::Path::new(":memory:")).unwrap();
+        let admin = insert_user(&c, "kwull", "h", "reader").unwrap();
+        let dup = insert_user(&c, "kwull (2)", "", "admin").unwrap();
+        let (a, d) = (admin.id, dup.id);
+        link_identity(&c, d, "https://idp", "sub-k", Some("k@example.org")).unwrap();
+        c.execute_batch(&format!(
+            "INSERT INTO shelf(user_id, name, color) VALUES ({d}, 'S', '#000000');
+             INSERT INTO rating VALUES ({a}, 1, 'lib:1', 2), ({d}, 1, 'lib:1', 5), ({d}, 1, 'lib:2', 4);
+             INSERT INTO book_history(user_id, library_id, book_key, action, at) VALUES ({d}, 1, 'lib:2', 'send', 't');
+             INSERT INTO device(user_id, name, kind, format, file_name, options) VALUES ({d}, 'Kindle', 'email', 'epub', 'x', '{{}}');
+             INSERT INTO device_order VALUES ({a}, 1, 0), ({d}, 1, 0), ({d}, 2, 1);
+             INSERT INTO follow VALUES ({a}, 1, 'author', 'азимов айзек', 'Азимов Айзек', 't'), ({d}, 1, 'author', 'азимов айзек', 'Азимов Айзек', 't'), ({d}, 1, 'series', 'основание', 'Основание', 't');
+             INSERT INTO series_dismiss VALUES ({d}, 1, 'x', 'X', 't');
+             INSERT INTO job(id, owner, kind, title, state, created_at) VALUES ('j1', {d}, 'send', 'T', 'done', 't');
+             INSERT INTO handoff(token_hash, user_id, library_id, book_id, book_key, format, options, file_name, created_at, expires_at, max_uses) VALUES ('h', {d}, 1, 1, 'lib:1', 'epub', '{{}}', 'f', 0, 1, 1);
+             INSERT INTO api_token(user_id, name, token_hash, prefix, scopes, created_at) VALUES ({d}, 't', 'th', 'p', 'read', 't');
+             INSERT INTO oauth_grant(user_id, client_id, client_name, client_kind, redirect_uri, scopes, resource, created_at) VALUES ({d}, 'c', 'C', 'dcr', 'r', 'read', 'x', 't');
+             INSERT INTO mail_count VALUES ({a}, '2026-09-01', 2), ({d}, '2026-09-01', 3);"
+        ))
+        .unwrap();
+        create_session(&c, d, "dup-session").unwrap();
+        // no merging into itself or a missing user
+        assert!(merge_user(&c, d, d).is_err());
+        assert!(merge_user(&c, d, 999).is_err());
+        let r = merge_user(&c, d, a).unwrap();
+        assert_eq!(
+            (r.identities, r.shelves, r.history, r.devices),
+            (1, 1, 1, 1)
+        );
+        assert!(r.promoted, "the duplicate was an administrator");
+        assert!(get_user(&c, d).unwrap().is_none());
+        assert!(get_user(&c, a).unwrap().unwrap().is_admin());
+        assert_eq!(
+            identity_user(&c, "https://idp", "sub-k")
+                .unwrap()
+                .unwrap()
+                .id,
+            a
+        );
+        assert!(session_user(&c, "dup-session").unwrap().is_none());
+        // the target's own rating wins, the other one moves
+        let ratings: Vec<(String, i64)> = user_ratings(&c, a, 1).unwrap();
+        assert!(ratings.contains(&("lib:1".into(), 2)) && ratings.contains(&("lib:2".into(), 4)));
+        assert_eq!(
+            count(&c, "SELECT count(*) FROM follow WHERE user_id=?1", a),
+            2
+        );
+        assert_eq!(
+            count(&c, "SELECT count(*) FROM device_order WHERE user_id=?1", a),
+            2
+        );
+        assert_eq!(
+            count(
+                &c,
+                "SELECT count(*) FROM series_dismiss WHERE user_id=?1",
+                a
+            ),
+            1
+        );
+        assert_eq!(count(&c, "SELECT count(*) FROM job WHERE owner=?1", a), 1);
+        assert_eq!(
+            count(&c, "SELECT count(*) FROM handoff WHERE user_id=?1", a),
+            1
+        );
+        assert_eq!(
+            count(&c, "SELECT count(*) FROM api_token WHERE user_id=?1", a),
+            1
+        );
+        assert_eq!(
+            count(&c, "SELECT count(*) FROM oauth_grant WHERE user_id=?1", a),
+            1
+        );
+        assert_eq!(
+            count(&c, "SELECT sum(count) FROM mail_count WHERE user_id=?1", a),
+            5
+        );
+        for t in [
+            "rating",
+            "follow",
+            "device_order",
+            "series_dismiss",
+            "mail_count",
+            "user_identity",
+        ] {
+            assert_eq!(
+                count(&c, &format!("SELECT count(*) FROM {t} WHERE user_id=?1"), d),
+                0,
+                "{t}"
+            );
+        }
+        // both with an identity from one provider: refused, nothing changes
+        let e = insert_user(&c, "eve", "h", "reader").unwrap();
+        link_identity(&c, e.id, "https://idp", "sub-e", None).unwrap();
+        assert_eq!(merge_user(&c, e.id, a).unwrap_err().code, "conflict");
+        assert!(get_user(&c, e.id).unwrap().is_some());
     }
 }
 

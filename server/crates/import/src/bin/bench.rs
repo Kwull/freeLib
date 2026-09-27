@@ -423,10 +423,68 @@ fn main() {
             let d = Instant::now();
             s.time(|| cat.search(&sq).unwrap());
             all.samples.push(ms(d.elapsed()));
+            if std::env::var_os("BENCH_SLOW").is_some() && ms(d.elapsed()) > 40.0 {
+                eprintln!("  slow: {q} {:.1} ms", ms(d.elapsed()));
+            }
         }
     }
     s.report();
     all.report();
+
+    // Latin spellings (phonetic keys), author + title ranking, the typeahead (5 books,
+    // grouped) and the author summary of the most prolific author
+    let phonetic = [
+        "asimov",
+        "azimoff",
+        "asimow",
+        "asimov osnovanie",
+        "азимоф роботы",
+        "strugatzki",
+        "dostojewski",
+        "tolstoj",
+    ];
+    let mut s = Series::new("search: Latin spellings / author+title (8 queries × 3)");
+    let mut ta = Series::new("typeahead (kind=all, 5 books, grouped; 8 queries × 3)");
+    let mut au = Series::new("search kind=authors (8 queries × 3)");
+    for q in phonetic {
+        for _ in 0..3 {
+            s.time(|| {
+                cat.search(&SearchQuery {
+                    q: q.into(),
+                    limit: 200,
+                    group: true,
+                    ..Default::default()
+                })
+                .unwrap()
+            });
+            ta.time(|| {
+                cat.search(&SearchQuery {
+                    q: q.into(),
+                    limit: 5,
+                    group: true,
+                    ..Default::default()
+                })
+                .unwrap()
+            });
+            au.time(|| {
+                cat.search(&SearchQuery {
+                    q: q.into(),
+                    kind: SearchKind::Authors,
+                    limit: 5,
+                    ..Default::default()
+                })
+                .unwrap()
+            });
+        }
+    }
+    s.report();
+    ta.report();
+    au.report();
+    let mut s = Series::new(&format!("author summary (top: {} works)", by_count[0].2));
+    for _ in 0..3 {
+        s.time(|| cat.author_summary(by_count[0].0).unwrap());
+    }
+    s.report();
 
     // grouped lists (editions of one work as one row)
     let nr = freelib_catalog::NoRatings;

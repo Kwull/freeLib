@@ -412,6 +412,7 @@ fn build(
 
     let merged = join_series_works(&tx_conn, &mut agg)?;
     stats.series_works_joined = merged as u64;
+    count_works(&tx_conn)?;
     mark(&mut stats, "series works");
 
     progress(parts + 2, total, "Optimizing full-text index");
@@ -657,6 +658,43 @@ fn join_series_works(conn: &Connection, agg: &mut Agg) -> rusqlite::Result<usize
         st.execute(params![old, new])?;
     }
     Ok(merges.len())
+}
+
+/// Counts live *works* (distinct `work_id`, i.e. editions of one work once), the unit of the
+/// grouped lists: `author.book_count`, `series.book_count` and `genre_count` (a top-level
+/// genre counts a work once, however many of its sub-genres the editions have). Runs after the
+/// work ids are final.
+fn count_works(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "UPDATE author SET book_count = (SELECT count(DISTINCT b.work_id) FROM book_author ba \
+           JOIN book b ON b.id=ba.book_id WHERE ba.author_id=author.id AND b.deleted=0); \
+         UPDATE series SET book_count = (SELECT count(DISTINCT b.work_id) FROM book b \
+           WHERE b.series_id=series.id AND b.deleted=0);",
+    )?;
+    let g = genres();
+    let mut sets: HashMap<u16, HashSet<i64>> = HashMap::new();
+    {
+        let mut st = conn.prepare(
+            "SELECT bg.genre_id, b.work_id FROM book_genre bg JOIN book b ON b.id=bg.book_id \
+             WHERE b.deleted=0",
+        )?;
+        let mut q = st.query([])?;
+        while let Some(r) = q.next()? {
+            let gid: u16 = r.get(0)?;
+            let work: i64 = r.get(1)?;
+            sets.entry(gid).or_default().insert(work);
+            let top = g.top(gid);
+            if top != gid {
+                sets.entry(top).or_default().insert(work);
+            }
+        }
+    }
+    conn.execute("DELETE FROM genre_count", [])?;
+    let mut st = conn.prepare("INSERT INTO genre_count(genre_id, count) VALUES (?1, ?2)")?;
+    for (gid, works) in &sets {
+        st.execute(params![gid, works.len() as i64])?;
+    }
+    Ok(())
 }
 
 /// Counts the words of normalized `text` (at least 3 characters with a letter) for the typo

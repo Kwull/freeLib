@@ -1,6 +1,6 @@
 import { mulberry32, pick, int } from './rng';
 import { normalize, letterOf } from './normalize';
-import { indexWorks } from './find';
+import { indexWorks, workKey } from './find';
 import {
   SURNAMES, FIRST_NAMES_M, FIRST_NAMES_F, PATRONYMIC_M, PATRONYMIC_F,
   SERIES_WORDS_A, SERIES_WORDS_B, TITLE_WORDS_A, TITLE_WORDS_B, GENRES, LANGS, EXTS,
@@ -365,18 +365,20 @@ export function generateLibrary(id: number, seed: number): MockLibrary {
     nextId++;
   }
 
-  for (const b of books) {
-    if (b.deleted) continue;
-    for (const aid of b.authorIds) authors[aid - 1].bookCount++;
-    if (b.seriesId) series[b.seriesId - 1].bookCount++;
-  }
-  const al = nameList(authors.slice().sort(byKey));
-  const sl = nameList(series.slice().sort(byKey));
-
   const lib: MockLibrary = {
     id, authors, series, genres, books, booksByAuthor, booksBySeries, bookById,
-    authorRows: al.rows, seriesRows: sl.rows, authorLetters: al.letters, seriesLetters: sl.letters,
+    authorRows: [], seriesRows: [], authorLetters: [], seriesLetters: [],
   };
   indexWorks(lib);
+  // like the server: author / series / genre counts are live works (editions of one work once)
+  const worksOf = (ids: MockBook[]) => new Set(ids.filter((b) => !b.deleted).map((b) => workKey(b))).size;
+  for (const a of authors) a.bookCount = worksOf((booksByAuthor.get(a.id) ?? []).map((i) => bookById.get(i)!));
+  for (const s of series) s.bookCount = worksOf((booksBySeries.get(s.id) ?? []).map((i) => bookById.get(i)!));
+  const byGenre = new Map<number, MockBook[]>();
+  for (const b of books) for (const g of b.genreIds) { const l = byGenre.get(g) ?? []; l.push(b); byGenre.set(g, l); }
+  for (const g of genres) g.count = worksOf(byGenre.get(g.id) ?? []);
+  const al = nameList(authors.slice().sort(byKey));
+  const sl = nameList(series.slice().sort(byKey));
+  Object.assign(lib, { authorRows: al.rows, seriesRows: sl.rows, authorLetters: al.letters, seriesLetters: sl.letters });
   return lib;
 }

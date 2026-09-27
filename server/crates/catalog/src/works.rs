@@ -183,6 +183,12 @@ impl Catalog {
         let mut ids = self.selection_ids(sel, filter, &attrs)?;
         rq.apply(&mut ids, &attrs, src);
         let mut groups = group_ids(&ids, &attrs, src);
+        if matches!(sel, BookSelector::Author(_) | BookSelector::Series(_)) {
+            // a work sits where its best copy (the row shown) sorts: under that copy's series
+            // and number, so works shown outside any series come last like other such books
+            let pos: HashMap<i64, usize> = ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+            groups.sort_by_key(|g| pos.get(&g.best).copied().unwrap_or(usize::MAX));
+        }
         sort_groups(&mut groups, rq, &attrs, src);
         let total = groups.len();
         let end = (offset + limit).min(total);

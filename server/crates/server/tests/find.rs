@@ -81,6 +81,26 @@ async fn start_page_follow_and_dismiss() {
     assert!(new.iter().all(|b| b["id"] != first));
     assert!(new.iter().any(|b| b["reason"]["kind"] == "author"));
     assert_eq!(h["newFromAuthors"]["days"], 3650);
+    // "Well-rated new arrivals" stays after the first book (it used to disappear), without
+    // the book sent and without books the sections above already show
+    let picks = h["picks"].as_array().unwrap();
+    assert!(!picks.is_empty(), "picks after one download");
+    let shown: std::collections::HashSet<i64> = cont
+        .iter()
+        .flat_map(|s| s["next"].as_array().unwrap().iter())
+        .chain(new.iter())
+        .filter_map(|b| b["id"].as_i64())
+        .collect();
+    assert!(picks.iter().all(|b| b["id"] != first));
+    assert!(
+        picks
+            .iter()
+            .all(|b| !shown.contains(&b["id"].as_i64().unwrap())),
+        "picks do not repeat the sections above"
+    );
+    // and with the default window (since the previous visit) too
+    let h2 = app.get(&home).await.json();
+    assert!(!h2["picks"].as_array().unwrap().is_empty());
 
     // dismiss / restore
     let r = app

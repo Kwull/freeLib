@@ -289,7 +289,7 @@ All environment variables from [ARCHITECTURE.md](./ARCHITECTURE.md#runtime-confi
 | `FREELIB_OIDC_SCOPES` | `openid profile email` | Requested scopes; add `groups` when using `FREELIB_OIDC_ADMIN_GROUP` with Pocket ID or Authentik |
 | `FREELIB_OIDC_BUTTON` | `Sign in with SSO` | Text of the sign-in button, e.g. `Sign in with Pocket ID` |
 | `FREELIB_OIDC_ADMIN_GROUP` | unset | Group whose members are administrators (everyone else: reader), re-checked at every sign-in |
-| `FREELIB_OIDC_AUTO_CREATE` | `true` | Create a reader account at a first sign-in; `false`: only accounts whose owner linked SSO in Settings → Account |
+| `FREELIB_OIDC_AUTO_CREATE` | `true` | Create a reader account at a first sign-in (when the name is taken, only if the user chooses a separate account); `false`: only accounts linked in Settings → Account, by a verified e-mail stored for the account, or with the account's password at the first sign-in |
 | `FREELIB_OIDC_DISABLE_PASSWORD` | `false` | Password sign-in off in the web app, except for `FREELIB_ADMIN_USER` while `FREELIB_ADMIN_PASSWORD` is set |
 | `FREELIB_CACHE_MAX_MB` | `2048` | Size limit of the conversion / cover cache in `/cache`; least recently used files are evicted (`0` = no limit) |
 | `FREELIB_WORKERS` | CPU core count | Conversion worker count |
@@ -311,6 +311,15 @@ authors and series you browse, then the rest of the library — and caches the a
 naming freeLib (and `FREELIB_CONTACT_EMAIL`, if set). Nothing about users. An administrator can switch it
 off in **Settings → Server → External ratings**; then nothing is sent (cached ratings are still shown).
 Progress is shown there and on the Libraries page.
+
+**Connectivity.** The container needs outbound HTTPS to openlibrary.org. Behind a proxy, set `HTTPS_PROXY`
+(and `NO_PROXY` for local hosts) in the container environment; the server logs the proxy it uses at start.
+Set `FREELIB_CONTACT_EMAIL` — Open Library asks for a contact in the User-Agent and may throttle anonymous
+clients. The last error in Settings → Server names its kind: `DNS error` (no name resolution in the
+container), `connection error` (firewall / no route), `TLS error` (a proxy with its own certificate: mount its CA
+and set `SSL_CERT_FILE`), `proxy error`, `timeout error`, `HTTP 429` (rate limited, the server's `Retry-After`
+is honoured) or `HTTP 5xx`. Requests then pause, doubling per consecutive failure (429: 60 s → 1 h, 5xx: 30 s →
+30 min, timeouts: 15 s → 15 min, network: 30 s → 1 h) and resume normally after a success.
 
 The "suitable for age" badge and filter (0+, 6+, 12+, 16+, 18+) is a **heuristic** from genres and keywords,
 not a verified age rating.
@@ -455,6 +464,22 @@ HTTPS to it).
 
 Existing local users link their provider account in **Settings → Account → Link single sign-on** (and can
 unlink it there once they have a password). Administrators see which users are linked in Settings → Users.
+
+**First sign-in of an existing user.** freeLib never links an account by its name alone (anyone could register
+that name at the provider). When the provider's user name is already taken, the login page says *"An account
+'kwull' already exists. Sign in with its password to link single sign-on"*: signing in with that account's
+password links it, and from then on the button signs in to it. With `FREELIB_OIDC_AUTO_CREATE` on, the user can
+instead choose *Create a separate account* (it is called `kwull (2)`). To link without the password step, an
+administrator can store the user's e-mail in **Settings → Users**: a first sign-in whose e-mail the provider
+reports as **verified** and that equals it (case-insensitive) is linked to that account automatically.
+
+**Repairing a duplicate account.** Versions before this one silently created `name (2)` at a first sign-in when
+`name` existed (Settings → Users shows `kwull` and `kwull (2) · SSO`). To fix it, sign in as an administrator
+(with a password if the duplicate is the account you are signed in with), open **Settings → Users**, and on the
+duplicate's row choose **Merge into… → kwull** and confirm. Its single sign-on identity and everything it has —
+shelves, ratings, history, devices, follows, dismissed series, jobs, hand-off links, API tokens, authorized apps —
+move to `kwull`, and `kwull (2)` is deleted (and signed out). Sign in with single sign-on again: you are `kwull`.
+The merge is logged (`accounts merged: kwull (2) into kwull`).
 
 ### Other providers
 

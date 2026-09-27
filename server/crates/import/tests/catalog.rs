@@ -16,6 +16,23 @@ use zip::write::SimpleFileOptions;
 
 fn no_progress(_: u64, _: u64, _: &str) {}
 
+/// Rows of the grouped list (`group=1`) of a selection: works.
+fn works_total(cat: &Catalog, sel: &BookSelector) -> i64 {
+    cat.books_page(
+        sel,
+        &BookFilter::default(),
+        &freelib_catalog::RatingQuery::default(),
+        &freelib_catalog::NoRatings,
+        &Page {
+            cursor: None,
+            limit: 1,
+        },
+        true,
+    )
+    .unwrap()
+    .total
+}
+
 fn import(inpx: &Path, db: &Path, lib: Option<&Path>) -> freelib_import::ImportStats {
     let opts = ImportOptions {
         inpx: inpx.to_path_buf(),
@@ -175,7 +192,9 @@ fn generated_catalog_end_to_end() {
         &BookFilter::default(),
         7,
     );
-    assert_eq!(all.len() as i64, top.2);
+    // the name list counts works: the rows of the grouped list
+    assert_eq!(works_total(&cat, &BookSelector::Author(top.0)), top.2);
+    assert!(all.len() as i64 >= top.2);
     let first = cat
         .books(
             &BookSelector::Author(top.0),
@@ -186,7 +205,7 @@ fn generated_catalog_end_to_end() {
             },
         )
         .unwrap();
-    assert_eq!(first.total, top.2);
+    assert_eq!(first.total, all.len() as i64, "ungrouped: files");
     assert_eq!(
         all.iter().map(|b| b.id).collect::<HashSet<_>>().len(),
         all.len(),
@@ -254,7 +273,11 @@ fn generated_catalog_end_to_end() {
             &Page::default(),
         )
         .unwrap();
-    assert_eq!(sb.total, big_series.2);
+    assert_eq!(
+        works_total(&cat, &BookSelector::Series(big_series.0)),
+        big_series.2
+    );
+    assert!(sb.total >= big_series.2);
     let sernos: Vec<i64> = sb
         .books
         .iter()
@@ -276,7 +299,8 @@ fn generated_catalog_end_to_end() {
         &BookFilter::default(),
         50,
     );
-    assert_eq!(lb.len() as i64, leaf.count);
+    assert_eq!(works_total(&cat, &BookSelector::Genre(leaf.id)), leaf.count);
+    assert!(lb.len() as i64 >= leaf.count);
     assert!(lb.iter().all(|b| b.genres.contains(&leaf.id)));
     assert!(lb.windows(2).all(|w| w[0].date >= w[1].date));
     let group = g
@@ -294,7 +318,11 @@ fn generated_catalog_end_to_end() {
             },
         )
         .unwrap();
-    assert_eq!(small.total, group.count);
+    assert_eq!(
+        works_total(&cat, &BookSelector::Genre(group.id)),
+        group.count
+    );
+    assert!(small.total >= group.count);
     let mut cat2 = Catalog::open(&db).unwrap();
     cat2.set_big_genre_threshold(1);
     let big = cat2
@@ -1005,13 +1033,17 @@ fn name_lists_fold_diacritics_and_put_non_letters_last() {
     // author summary and co-authors
     let abr = a.rows.iter().find(|r| r.1 == "Абрамов Фёдор").unwrap().0;
     let sum = cat.author_summary(abr).unwrap().unwrap();
-    assert_eq!((sum.count, sum.anthologies, sum.without_series), (4, 1, 2));
+    // «Дом» and «Вдвоём-2» are #1 of «12 стульев» by compatible authors: one work
+    assert_eq!(
+        (sum.count, sum.files, sum.anthologies, sum.without_series),
+        (3, 4, 1, 2)
+    );
     assert_eq!(sum.series.len(), 1);
     assert_eq!(
         (sum.series[0].name.as_str(), sum.series[0].count),
-        ("12 стульев", 2)
+        ("12 стульев", 1)
     );
-    assert_eq!(sum.langs, vec![("ru".to_string(), 4)]);
+    assert_eq!(sum.langs, vec![("ru".to_string(), 3)]);
     assert_eq!(
         (sum.first_date.as_str(), sum.last_date.as_str()),
         ("2020-01-05", "2020-01-11")
@@ -1151,5 +1183,235 @@ fn showcase_editions_are_grouped() {
             })
             .unwrap();
         assert_eq!(n, 1, "{t}");
+    }
+}
+
+/// The search / count showcase of gen-inpx (lib ids 200..): Latin spellings reach «Азимов»,
+/// names are ranked by the last name, author + title words beat a title that mentions both,
+/// and every count (name list, summary, grouped list, genre tree, facets) counts works.
+#[test]
+fn showcase_search_and_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let inpx = dir.path().join("lib.inpx");
+    generate(
+        &inpx,
+        &GenOptions {
+            showcase: true,
+            books: 3000,
+            per_archive: 1000,
+            seed: 5,
+            files_dir: None,
+            structure_info: true,
+        },
+    )
+    .unwrap();
+    let db = dir.path().join("lib_1.db");
+    import(&inpx, &db, None);
+    let cat = Catalog::open(&db).unwrap();
+    let search = |q: &str, group: bool| {
+        cat.search(&SearchQuery {
+            q: q.into(),
+            limit: 50,
+            group,
+            ..Default::default()
+        })
+        .unwrap()
+    };
+    let author_of = |b: &freelib_catalog::Book| b.authors[0].name.clone();
+
+    // --- Latin spellings of «Азимов»
+    for q in ["asimov", "azimov", "asimow", "azimoff", "Asimov", "азимоф"] {
+        let r = search(q, true);
+        assert_eq!(
+            r.authors.first().map(|a| a.name.as_str()),
+            Some("Азимов Айзек"),
+            "{q}: {:?}",
+            r.authors.iter().map(|a| &a.name).collect::<Vec<_>>()
+        );
+    }
+    let r = search("asimov", true);
+    let names: Vec<&str> = r.authors.iter().map(|a| a.name.as_str()).collect();
+    assert!(names.contains(&"Асимова Мария"), "{names:?}");
+    for q in ["asimov osnovanie", "azimov osnovanie", "asimow osnovanie"] {
+        let r = search(q, true);
+        assert!(
+            r.books
+                .iter()
+                .any(|b| b.title.starts_with("Основание") && author_of(b) == "Азимов Айзек"),
+            "{q}: {:?}",
+            r.books.iter().map(|b| &b.title).collect::<Vec<_>>()
+        );
+    }
+
+    // a typo is corrected to a word of its own script first («Asimov» has the same key)
+    assert_eq!(cat.correct("азимв").unwrap().as_deref(), Some("азимов"));
+
+    // --- names: the last name first (the typeahead and the author filter order)
+    let r = search("азимов", true);
+    assert_eq!(r.authors[0].name, "Азимов Айзек");
+    assert!(
+        !r.authors.iter().any(|a| a.name == "Агаев Рамин Назимович"),
+        "no infix matches in search"
+    );
+    let rank = |name: &str, q: &str| {
+        freelib_catalog::search::name_rank(
+            &normalize(name),
+            &normalize(q)
+                .split(' ')
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        )
+    };
+    assert!(rank("Азимов Айзек", "азимов") < rank("Асимова Мария", "азимов"));
+    assert!(rank("Азимов Айзек", "азимов") < rank("Агаев Рамин Назимович", "азимов"));
+
+    // --- author + title words: Азимов's robot novels above the essay about both
+    for q in ["азимоф роботы", "азимов роботы", "asimov роботы"] {
+        let r = search(q, true);
+        let first = &r.books[0];
+        assert_eq!(author_of(first), "Азимов Айзек", "{q}: {}", first.title);
+        let essay = r
+            .books
+            .iter()
+            .position(|b| b.title == "Азимов, роботы и мы")
+            .unwrap_or(usize::MAX);
+        let robots = r
+            .books
+            .iter()
+            .position(|b| b.title == "Роботы зари")
+            .expect("Роботы зари found");
+        assert!(robots < essay, "{q}: robots {robots}, essay {essay}");
+    }
+
+    // --- counts: one model (works) everywhere
+    let authors = cat.authors().unwrap();
+    let asimov = authors
+        .rows
+        .iter()
+        .find(|r| r.1 == "Азимов Айзек")
+        .unwrap()
+        .clone();
+    let sum = cat.author_summary(asimov.0).unwrap().unwrap();
+    let list = cat
+        .books_page(
+            &BookSelector::Author(asimov.0),
+            &BookFilter::default(),
+            &freelib_catalog::RatingQuery::default(),
+            &freelib_catalog::NoRatings,
+            &Page {
+                cursor: None,
+                limit: 5000,
+            },
+            true,
+        )
+        .unwrap();
+    assert_eq!(sum.count, list.total, "header = list");
+    assert_eq!(sum.count, asimov.2, "header = name list");
+    assert!(sum.files > sum.count, "editions are counted once");
+    let anth =
+        |b: &freelib_catalog::Book| b.authors.len() >= freelib_catalog::ANTHOLOGY_MIN_AUTHORS;
+    let rows = &list.books;
+    assert_eq!(rows.len() as i64, list.total);
+    let outside = rows.iter().filter(|b| b.series.is_none()).count() as i64;
+    assert_eq!(
+        sum.without_series, outside,
+        "sidebar «Outside series» = group"
+    );
+    let outside_no_anth = rows
+        .iter()
+        .filter(|b| b.series.is_none() && !anth(b))
+        .count() as i64;
+    assert_eq!(
+        sum.without_series - sum.without_series_anthologies,
+        outside_no_anth,
+        "without anthologies"
+    );
+    assert_eq!(
+        sum.count - sum.anthologies,
+        rows.iter().filter(|b| !anth(b)).count() as i64
+    );
+    for s in &sum.series {
+        let n = rows
+            .iter()
+            .filter(|b| b.series.as_ref().is_some_and(|x| x.id == s.id))
+            .count() as i64;
+        assert_eq!(s.count, n, "series {}", s.name);
+        let na = rows
+            .iter()
+            .filter(|b| b.series.as_ref().is_some_and(|x| x.id == s.id) && !anth(b))
+            .count() as i64;
+        assert_eq!(
+            s.count - s.anthologies,
+            na,
+            "series {} without anthologies",
+            s.name
+        );
+    }
+    // "Outside series" comes last: every row without a series after the ones with one
+    let first_outside = rows.iter().position(|b| b.series.is_none()).unwrap();
+    assert!(
+        rows[first_outside..].iter().all(|b| b.series.is_none()),
+        "outside-series rows are last: {:?}",
+        rows.iter()
+            .map(|b| b.series.as_ref().map(|s| s.name.as_str()).unwrap_or("-"))
+            .collect::<Vec<_>>()
+    );
+    // «Сами боги»: two editions, the best copy outside the series
+    let sami: Vec<_> = rows.iter().filter(|b| b.title == "Сами боги").collect();
+    assert_eq!(sami.len(), 1);
+    assert!(sami[0].series.is_none());
+    assert_eq!(sami[0].editions.as_ref().map(|e| e.count), Some(2));
+
+    // series and genres: tree / list count = grouped list total
+    let series = cat.series_list().unwrap();
+    for name in [
+        "FANTASTIKAS PASAULĖ",
+        "Fondation",
+        "Академия [Азимов]",
+        "Роботы",
+    ] {
+        let row = series.rows.iter().find(|r| r.1 == name).unwrap();
+        assert_eq!(
+            works_total(&cat, &BookSelector::Series(row.0)),
+            row.2,
+            "{name}"
+        );
+    }
+    for g in cat.genres("en").unwrap().iter().filter(|g| g.count > 0) {
+        assert_eq!(
+            works_total(&cat, &BookSelector::Genre(g.id)),
+            g.count,
+            "genre {}",
+            g.name
+        );
+    }
+
+    // search facets count what the results count
+    for group in [true, false] {
+        let r = search("азимов", group);
+        for (ext, n) in &r.facets.ext {
+            let f = cat
+                .search(&SearchQuery {
+                    q: "азимов".into(),
+                    limit: 1,
+                    group,
+                    ext: Some(ext.clone()),
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(f.total, *n, "ext {ext}, group {group}");
+        }
+        for (lang, n) in &r.facets.lang {
+            let f = cat
+                .search(&SearchQuery {
+                    q: "азимов".into(),
+                    limit: 1,
+                    group,
+                    langs: vec![lang.clone()],
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(f.total, *n, "lang {lang}, group {group}");
+        }
     }
 }

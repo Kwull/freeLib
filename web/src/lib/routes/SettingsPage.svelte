@@ -223,6 +223,30 @@
     }
   }
 
+  async function saveEmail(u: UserRow, email: string) {
+    if ((u.email ?? '') === email.trim()) return;
+    try {
+      await api.updateUser(u.id, { email: email.trim() });
+      u.email = email.trim() || null;
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    }
+  }
+
+  /** Repairs a duplicate account (e.g. `name (2)` created by an older single sign-on). */
+  async function mergeUser(u: UserRow, intoId: number) {
+    const into = users.find((x) => x.id === intoId);
+    if (!into) return;
+    if (!confirm(t('settings.users.mergeConfirm', { name: u.username, into: into.username }))) return;
+    try {
+      await api.mergeUser(u.id, into.id);
+      showToast(t('settings.users.merged', { name: u.username, into: into.username }));
+      users = await api.users();
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    }
+  }
+
   async function deleteUser(u: UserRow) {
     if (!confirm(t('settings.users.deleteConfirm', { name: u.username }))) return;
     try {
@@ -443,6 +467,15 @@
             {#if u.sso}<span class="badge" title={u.sso.email ?? ''}>{t('settings.users.sso')}{u.sso.email ? ` · ${u.sso.email}` : ''}</span>{/if}
             {#if !u.hasPassword}<span class="badge muted-badge" title={t('settings.users.noPasswordHint')}>{t('settings.users.noPassword')}</span>{/if}
             <span class="grow"></span>
+            <input class="email" type="email" value={u.email ?? ''} placeholder={t('settings.users.email')} aria-label={t('settings.users.emailFor', { name: u.username })}
+              title={t('settings.users.emailHint')} onchange={(e) => saveEmail(u, (e.currentTarget as HTMLInputElement).value)} />
+            {#if users.length > 1}
+              <select class="merge" aria-label={t('settings.users.mergeInto', { name: u.username })} data-testid="merge-into" value=""
+                onchange={(e) => { const v = Number((e.currentTarget as HTMLSelectElement).value); (e.currentTarget as HTMLSelectElement).value = ''; if (v) mergeUser(u, v); }}>
+                <option value="">{t('settings.users.merge')}</option>
+                {#each users.filter((x) => x.id !== u.id) as o (o.id)}<option value={o.id}>{o.username}</option>{/each}
+              </select>
+            {/if}
             <select bind:value={u.role} onchange={() => api.updateUser(u.id, { role: u.role })}>
               <option value="admin">{t('settings.users.role.admin')}</option>
               <option value="reader">{t('settings.users.role.reader')}</option>
@@ -533,6 +566,8 @@
   .device-list { display: flex; flex-direction: column; gap: 4px; }
   .device-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
   .device-row { padding: 10px 12px; }
+  .device-row input.email { width: 180px; min-width: 0; }
+  .device-row select.merge { max-width: 150px; }
   .device-row.dragging { opacity: .5; }
   .device-row.drop-before { box-shadow: 0 -2px 0 var(--accent); }
   .handle { cursor: grab; color: var(--muted); display: flex; align-items: center; padding: 4px 2px; }
