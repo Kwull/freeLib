@@ -21,9 +21,20 @@ export function scriptOf(letter: string): Script {
 export type StripLetter = { letter: string; count: number; index: number | null };
 
 /**
- * The letters shown for `script`: the whole alphabet (letters without names have
- * `index: null` and are shown dimmed), then letters of that script present in the list but
- * not in the basic alphabet (Є, І, Ї, Ґ…).
+ * The order of the name lists: the server sorts by the lower-cased sort key in code point
+ * order (catalog `normalize`), which is the Russian alphabet (… Щ Ъ Ы Ь Э Ю Я, Ё folded into
+ * Е) followed by the Ukrainian / Belarusian letters (Є І Ї Ў … Ґ), and A–Z for Latin.
+ */
+export function listOrder(a: string, b: string): number {
+  const x = a.toLowerCase(), y = b.toLowerCase();
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/**
+ * The letters shown for `script`: the whole basic alphabet (letters without names have
+ * `index: null` and are shown dimmed) and the other letters of that script present in the
+ * list (Ы, Є, І, Ї, Ґ…), all in the order of the list itself, so the strip reads like the
+ * rows it jumps to.
  */
 export function stripLetters(script: Script, letters: [string, number, number][]): StripLetter[] {
   const present = new Map(letters.map((l) => [l[0], l]));
@@ -40,6 +51,8 @@ export function stripLetters(script: Script, letters: [string, number, number][]
   if (script === 'other') {
     // `#` last, like its rows
     out.sort((a, b) => (a.letter === '#' ? 1 : 0) - (b.letter === '#' ? 1 : 0));
+  } else {
+    out.sort((a, b) => listOrder(a.letter, b.letter));
   }
   return out;
 }

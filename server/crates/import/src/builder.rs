@@ -58,13 +58,29 @@ pub struct ImportOptions {
 }
 
 /// Summary of an import.
+///
+/// One definition of the library counts everywhere (the Libraries card, the import log, the
+/// name lists): `live_books` are the books not marked deleted, `works` their works (editions of
+/// one work once), `authors` / `series` those with at least one live book.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportStats {
     pub parts: u64,
+    /// Records read from the INPX (deleted and duplicate ones included).
+    pub records: u64,
+    /// Records marked deleted (`DEL`): stored hidden, or not stored with `skip_deleted`.
+    pub deleted: u64,
+    /// Whether deleted records were left out (`skip_deleted`).
+    pub skip_deleted: bool,
+    /// Books stored (deleted ones included unless `skip_deleted`).
     pub books: u64,
+    /// Books not marked deleted.
     pub live_books: u64,
+    /// Works of the live books (editions of one work counted once).
+    pub works: u64,
+    /// Authors with at least one live book.
     pub authors: u64,
+    /// Series with at least one live book.
     pub series: u64,
     /// Records whose LIBID was already used: stored under their `file:` key instead.
     pub duplicate_lib_ids: u64,
@@ -80,6 +96,40 @@ pub struct ImportStats {
     pub elapsed_ms: u64,
     /// `(phase, milliseconds)`.
     pub timings: Vec<(String, u64)>,
+}
+
+/// `1234567` → `1,234,567`.
+pub fn thousands(n: u64) -> String {
+    let d = n.to_string();
+    let mut out = String::with_capacity(d.len() + d.len() / 3);
+    for (i, c) in d.chars().enumerate() {
+        if i > 0 && (d.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+impl ImportStats {
+    /// One line for the import log, e.g. `705,588 records · 113,285 deleted (hidden) ·
+    /// 592,303 books (563,846 works) · 170,303 authors · 70,732 series`.
+    pub fn summary(&self) -> String {
+        format!(
+            "{} records · {} deleted ({}) · {} books ({} works) · {} authors · {} series",
+            thousands(self.records),
+            thousands(self.deleted),
+            if self.skip_deleted {
+                "skipped"
+            } else {
+                "hidden"
+            },
+            thousands(self.live_books),
+            thousands(self.works),
+            thousands(self.authors),
+            thousands(self.series),
+        )
+    }
 }
 
 /// `lib_3.db` → `lib_3.new.db`.
@@ -98,6 +148,10 @@ struct PartOut {
     /// Search text of each book, computed by the parser threads.
     prep: Vec<Prep>,
     missing: Vec<String>,
+    /// Records parsed, deleted ones included.
+    records: u64,
+    /// Records marked deleted (left out of `books` with `skip_deleted`).
+    deleted: u64,
 }
 
 /// Normalized search text of one book (FTS columns) and its work title key.
@@ -141,10 +195,16 @@ fn process_part(
     name: &str,
     info: &InpxInfo,
     popts: ParseOptions,
+    skip_deleted: bool,
     lib_dir: Option<&Path>,
 ) -> Result<PartOut, ImportError> {
     let data = inpx::read_part(za, name)?;
     let mut books = inpx::parse_inp(&data, name, &info.structure, popts);
+    let records = books.len() as u64;
+    let deleted = books.iter().filter(|b| b.deleted).count() as u64;
+    if skip_deleted {
+        books.retain(|b| !b.deleted);
+    }
     let mut missing = Vec::new();
     if let Some(dir) = lib_dir {
         let mut dirs: HashMap<String, Option<EntryIndex>> = HashMap::new();
@@ -170,6 +230,8 @@ fn process_part(
         books,
         prep,
         missing,
+        records,
+        deleted,
     })
 }
 
@@ -200,8 +262,10 @@ struct Agg {
     keys: HashSet<String>,
     /// work key (language, title key, author ids) → first book id
     works: HashMap<String, i64>,
-    /// numbered books in series, for the series-number rule (joined after the bulk load)
+    /// numbered live books in series, for the series-number rule (joined after the bulk load)
     series_books: Vec<SeriesBook>,
+    /// the same for deleted books: they join works, never shape them
+    series_deleted: Vec<SeriesBook>,
     /// title words → live books
     vocab: HashMap<String, i64>,
     next_book_id: i64,
@@ -304,10 +368,13 @@ fn build(
     )?;
     create_catalog_tables(&conn)?;
 
+    // deleted records are parsed (and counted) either way; `skip_deleted` drops them after
     let popts = ParseOptions {
-        skip_deleted: opts.skip_deleted,
+        skip_deleted: false,
         first_author_only: opts.first_author_only,
     };
+    stats.skip_deleted = opts.skip_deleted;
+    let skip_deleted = opts.skip_deleted;
     let lib_dir = if opts.resolve_offsets {
         opts.library_dir.as_deref()
     } else {
@@ -350,7 +417,9 @@ fn build(
                             return;
                         }
                         let r = match za {
-                            Ok(za) => process_part(za, idx, name, info_ref, popts, lib_dir),
+                            Ok(za) => {
+                                process_part(za, idx, name, info_ref, popts, skip_deleted, lib_dir)
+                            }
                             Err(e) => Err(ImportError::Other(format!("cannot open INPX: {e}"))),
                         };
                         let _ = tx.send(r);
@@ -375,12 +444,20 @@ fn build(
                     w.add(&mut agg, b, p, &mut stats)?;
                 }
                 stats.missing_archives.extend(part.missing);
+                stats.records += part.records;
+                stats.deleted += part.deleted;
                 next += 1;
                 done += 1;
                 progress(
                     done,
                     total,
-                    &format!("{} ({} books)", part.name, stats.books),
+                    &format!(
+                        "{} · {} records · {} deleted ({})",
+                        part.name,
+                        thousands(stats.records),
+                        thousands(stats.deleted),
+                        if skip_deleted { "skipped" } else { "hidden" },
+                    ),
                 );
             }
         }
@@ -400,8 +477,8 @@ fn build(
     let parts = info.parts.len() as u64;
     progress(parts, total, "Writing authors, series and counts");
     write_aggregates(&tx_conn, &mut agg)?;
-    stats.authors = agg.author_rows.len() as u64;
-    stats.series = agg.series_rows.len() as u64;
+    stats.authors = agg.author_rows.iter().filter(|a| a.live > 0).count() as u64;
+    stats.series = agg.series_rows.iter().filter(|s| s.live > 0).count() as u64;
     mark(&mut stats, "authors/series/counts");
     check_cancel(cancel)?;
 
@@ -412,7 +489,7 @@ fn build(
 
     let merged = join_series_works(&tx_conn, &mut agg)?;
     stats.series_works_joined = merged as u64;
-    count_works(&tx_conn)?;
+    stats.works = count_works(&tx_conn)?;
     mark(&mut stats, "series works");
 
     progress(parts + 2, total, "Optimizing full-text index");
@@ -444,8 +521,11 @@ fn build(
             (opts.first_author_only as i32).to_string(),
         ),
         ("skip_deleted", (opts.skip_deleted as i32).to_string()),
+        ("record_count", stats.records.to_string()),
+        ("deleted_record_count", stats.deleted.to_string()),
         ("book_count", stats.books.to_string()),
         ("live_book_count", stats.live_books.to_string()),
+        ("work_count", stats.works.to_string()),
         ("author_count", stats.authors.to_string()),
         ("series_count", stats.series.to_string()),
     ];
@@ -470,7 +550,7 @@ fn build(
     }
     mark(&mut stats, "finish");
     stats.elapsed_ms = started.elapsed().as_millis() as u64;
-    progress(total, total, &format!("Imported {} books", stats.books));
+    progress(total, total, &format!("Imported: {}", stats.summary()));
     Ok(stats)
 }
 
@@ -553,7 +633,7 @@ impl<'c> Writer<'c> {
         if let (Some(t), false, Some(sid), Some(n)) = (&p.work_title, unknown, series_id, b.serno)
             && n > 0
         {
-            agg.series_books.push(SeriesBook {
+            let sb = SeriesBook {
                 work: work_id,
                 lang,
                 series: sid,
@@ -561,7 +641,12 @@ impl<'c> Writer<'c> {
                 authors: author_ids.clone(),
                 title_key: t.clone(),
                 volume: p.volume,
-            });
+            };
+            if b.deleted {
+                agg.series_deleted.push(sb);
+            } else {
+                agg.series_books.push(sb);
+            }
         }
 
         self.book.execute(params![
@@ -650,21 +735,64 @@ impl<'c> Writer<'c> {
 
 /// The series-number rule of `freelib_catalog::works` over the numbered books: rewrites the
 /// `work_id` of joined works. Returns the number of works joined into another.
+///
+/// The live books alone decide which works exist, so the live works (and every count) are the
+/// same whether deleted records are stored or not (`skip_deleted`). A work of deleted books
+/// only then joins the work the rule puts it with, so a deleted copy still leads to the
+/// current editions.
 fn join_series_works(conn: &Connection, agg: &mut Agg) -> rusqlite::Result<usize> {
-    let books = std::mem::take(&mut agg.series_books);
-    let merges = series_number_merges(&books);
+    let mut live = std::mem::take(&mut agg.series_books);
+    let deleted = std::mem::take(&mut agg.series_deleted);
+    let merges = series_number_merges(&live);
     let mut st = conn.prepare("UPDATE book SET work_id=?2 WHERE work_id=?1")?;
     for (old, new) in &merges {
         st.execute(params![old, new])?;
     }
-    Ok(merges.len())
+    let mut joined = merges.len();
+    if !deleted.is_empty() {
+        for b in live.iter_mut() {
+            if let Some(&w) = merges.get(&b.work) {
+                b.work = w;
+            }
+        }
+        // works with only deleted books (a deleted edition joined to a live one by the title rule
+        // already has its work, and that one must not move)
+        let mut has_live =
+            conn.prepare("SELECT EXISTS(SELECT 1 FROM book WHERE work_id=?1 AND deleted=0)")?;
+        let mut live_works: HashSet<i64> = live.iter().map(|b| b.work).collect();
+        for b in &deleted {
+            let w = merges.get(&b.work).copied().unwrap_or(b.work);
+            if !live_works.contains(&w) && has_live.query_row([w], |r| r.get::<_, bool>(0))? {
+                live_works.insert(w);
+            }
+        }
+        let mut dead: Vec<SeriesBook> = deleted
+            .into_iter()
+            .map(|mut b| {
+                if let Some(&w) = merges.get(&b.work) {
+                    b.work = w;
+                }
+                b
+            })
+            .collect();
+        dead.retain(|b| !live_works.contains(&b.work));
+        let dead_works: HashSet<i64> = dead.iter().map(|b| b.work).collect();
+        live.extend(dead);
+        for (old, new) in series_number_merges(&live) {
+            if dead_works.contains(&old) {
+                st.execute(params![old, new])?;
+                joined += 1;
+            }
+        }
+    }
+    Ok(joined)
 }
 
 /// Counts live *works* (distinct `work_id`, i.e. editions of one work once), the unit of the
 /// grouped lists: `author.book_count`, `series.book_count` and `genre_count` (a top-level
 /// genre counts a work once, however many of its sub-genres the editions have). Runs after the
-/// work ids are final.
-fn count_works(conn: &Connection) -> rusqlite::Result<()> {
+/// work ids are final. Returns the number of live works.
+fn count_works(conn: &Connection) -> rusqlite::Result<u64> {
     conn.execute_batch(
         "UPDATE author SET book_count = (SELECT count(DISTINCT b.work_id) FROM book_author ba \
            JOIN book b ON b.id=ba.book_id WHERE ba.author_id=author.id AND b.deleted=0); \
@@ -694,7 +822,11 @@ fn count_works(conn: &Connection) -> rusqlite::Result<()> {
     for (gid, works) in &sets {
         st.execute(params![gid, works.len() as i64])?;
     }
-    Ok(())
+    conn.query_row(
+        "SELECT count(DISTINCT work_id) FROM book WHERE deleted=0",
+        [],
+        |r| r.get::<_, i64>(0).map(|n| n as u64),
+    )
 }
 
 /// Counts the words of normalized `text` (at least 3 characters with a letter) for the typo
@@ -804,6 +936,7 @@ fn write_aggregates(conn: &Connection, agg: &mut Agg) -> rusqlite::Result<()> {
         .author_rows
         .iter()
         .enumerate()
+        .filter(|(_, a)| a.live > 0)
         .map(|(i, a)| (a.sort_key.clone(), i as i64 + 1))
         .collect();
     write_letter_index(conn, "author", &mut keys)?;
@@ -811,6 +944,7 @@ fn write_aggregates(conn: &Connection, agg: &mut Agg) -> rusqlite::Result<()> {
         .series_rows
         .iter()
         .enumerate()
+        .filter(|(_, s)| s.live > 0)
         .map(|(i, s)| (s.sort_key.clone(), i as i64 + 1))
         .collect();
     write_letter_index(conn, "series", &mut keys)?;

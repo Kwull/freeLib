@@ -76,6 +76,10 @@ pub struct BookAttrs {
     pub(crate) size: Vec<u32>,
     /// Work id (`book.work_id`: the first book of the work), 0 = none.
     pub(crate) work: Vec<u32>,
+    /// Standing of the book for search ranking, in hundredths ([`popularity`]).
+    pub(crate) pop: Vec<u8>,
+    /// Number of words of the title (capped at 255), for exact title matches.
+    pub(crate) title_words: Vec<u8>,
     pub(crate) genre_off: Vec<u32>,
     pub(crate) genre_ids: Vec<u16>,
     pub(crate) langs: Vec<String>,
@@ -105,6 +109,8 @@ impl BookAttrs {
             age: vec![crate::kids::AGE_UNKNOWN; n],
             size: vec![0; n],
             work: vec![0; n],
+            pop: vec![0; n],
+            title_words: vec![0; n],
             genre_off: vec![0; n + 1],
             genre_ids: Vec::new(),
             langs: Vec::new(),
@@ -114,8 +120,25 @@ impl BookAttrs {
         let mut ext_idx: HashMap<String, u16> = HashMap::new();
         // keywords only feed the age estimate; most books have none
         let mut keywords: Vec<(u32, String)> = Vec::new();
+        // live works per author, 0 for "Автор неизвестен" (no standing to lend)
+        let author_works: Vec<u32> = {
+            let max_a: i64 =
+                conn.query_row("SELECT coalesce(max(id), 0) FROM author", [], |r| r.get(0))?;
+            let mut v = vec![0u32; max_a as usize + 1];
+            let mut st = conn.prepare("SELECT id, book_count, last FROM author")?;
+            let mut q = st.query([])?;
+            while let Some(r) = q.next()? {
+                let id = r.get::<_, i64>(0)? as usize;
+                if id < v.len() && r.get_ref(2)?.as_str().unwrap_or("") != UNKNOWN_AUTHOR {
+                    v[id] = r.get::<_, i64>(1)?.clamp(0, u32::MAX as i64) as u32;
+                }
+            }
+            v
+        };
+        let mut first_author = vec![0u32; n];
         let mut st = conn.prepare(
-            "SELECT id, lang, ext, date, deleted, stars, keywords, size, work_id, title FROM book",
+            "SELECT id, lang, ext, date, deleted, stars, keywords, size, work_id, title, \
+             first_author_id FROM book",
         )?;
         let mut q = st.query([])?;
         while let Some(r) = q.next()? {
@@ -151,6 +174,19 @@ impl BookAttrs {
                 keywords.push((id as u32, kw.to_string()));
             }
             let title = r.get_ref(9)?.as_str().unwrap_or("");
+            // words = runs of letters / digits (bytes: any non-ASCII byte counts as a letter,
+            // which is right for Cyrillic and cheap for 600k titles)
+            let mut words = 0usize;
+            let mut in_word = false;
+            for b in title.bytes() {
+                let w = b >= 0x80 || b.is_ascii_alphanumeric();
+                if w && !in_word {
+                    words += 1;
+                }
+                in_word = w;
+            }
+            a.title_words[id] = words.min(255) as u8;
+            first_author[id] = r.get::<_, i64>(10)?.clamp(0, u32::MAX as i64) as u32;
             let volume = title.bytes().any(|b| b.is_ascii_digit())
                 && crate::text::volume_number(title).is_some();
             a.flags[id] = FLAG_EXISTS
@@ -211,6 +247,28 @@ impl BookAttrs {
             if !g.is_empty() || kw.is_some() {
                 a.age[i] = crate::kids::age_code(g, kw.as_deref().unwrap_or(""));
             }
+        }
+        // live editions per work, then each book's standing
+        let mut editions = vec![0u16; n];
+        for i in 0..n {
+            if a.flags[i] & FLAG_EXISTS != 0 && a.flags[i] & FLAG_DELETED == 0 {
+                let w = match a.work[i] as usize {
+                    0 => i,
+                    w => w.min(n - 1),
+                };
+                editions[w] = editions[w].saturating_add(1);
+            }
+        }
+        for (i, fa) in first_author.iter().enumerate() {
+            if a.flags[i] & FLAG_EXISTS == 0 {
+                continue;
+            }
+            let w = match a.work[i] as usize {
+                0 => i,
+                w => w.min(n - 1),
+            };
+            let works = author_works.get(*fa as usize).copied().unwrap_or(0);
+            a.pop[i] = popularity(works, editions[w], a.stars[i], a.age[i] == 18);
         }
         Ok(a)
     }
@@ -359,8 +417,28 @@ impl BookAttrs {
 
     /// Approximate heap size in bytes.
     pub fn memory_bytes(&self) -> usize {
-        self.flags.len() * (1 + 2 + 2 + 4 + 1 + 1 + 4 + 4 + 4) + self.genre_ids.len() * 2
+        self.flags.len() * (1 + 2 + 2 + 4 + 1 + 1 + 4 + 4 + 4 + 1 + 1) + self.genre_ids.len() * 2
     }
+}
+
+/// The name the importer gives books without a (known) author.
+const UNKNOWN_AUTHOR: &str = "Автор неизвестен";
+
+/// A book's standing for search ranking, in hundredths of the best bm25 score of the query (see
+/// [`Catalog::search_rated`]): a known author (0.5) plus popularity — the live editions of its
+/// work, the live works of its first author and its library rating (up to 1.5). 18+ books get
+/// no popularity (they are not boosted, nor hidden).
+pub(crate) fn popularity(author_works: u32, editions: u16, stars: u8, adult: bool) -> u8 {
+    let known = if author_works > 0 { 50.0 } else { 0.0 };
+    let pop = if adult {
+        0.0
+    } else {
+        (35.0 * (1.0 + editions as f64).ln()
+            + 15.0 * (1.0 + author_works as f64).ln()
+            + 8.0 * stars as f64)
+            .min(150.0)
+    };
+    (known + pop).round() as u8
 }
 
 /// Words of `q` used for matching: one-letter words are dropped when longer ones exist
@@ -489,8 +567,17 @@ fn author_word_books(
 /// роботы»): above a title phrase match.
 const AUTHOR_TITLE_BOOST: f64 = 1.5;
 
-/// Relevance tiers are added to bm25 (lower = better) in steps of this size.
+/// Relevance tiers are added to the relative bm25 score (−1 = the query's best, lower =
+/// better) in steps of this size.
 const TIER: f64 = 1000.0;
+
+/// Within a tier: the title is exactly the query (strong, but a famous work whose title starts
+/// with the query still passes an exact generic title by an unknown author).
+const EXACT_TITLE_BOOST: f64 = 0.6;
+
+/// Within a tier: several query words start the title (`пикник на` → «Пикник на обочине»
+/// before «Большой пикник на …»).
+const TITLE_START_BOOST: f64 = 0.3;
 
 /// Fewer matches than this (books + authors + series) try a typo correction.
 const FEW_RESULTS: i64 = 3;
@@ -504,7 +591,11 @@ pub(crate) struct Plan {
     pub(crate) strict: String,
     pub(crate) broad: Option<String>,
     pub(crate) phrase: String,
+    /// Several words: the query as a phrase at the start of the title.
+    pub(crate) phrase_start: Option<String>,
     pub(crate) phrase_key: String,
+    /// Number of query words (with one-letter ones), for exact title matches.
+    pub(crate) words: usize,
 }
 
 pub(crate) fn plan(q: &str) -> Option<Plan> {
@@ -540,7 +631,9 @@ pub(crate) fn plan(q: &str) -> Option<Plan> {
         strict,
         broad: expanded.then(|| parts.join(" AND ")),
         phrase,
+        phrase_start: (all.len() >= 2).then(|| format!("title : ^ \"{}\"*", all.join(" "))),
         phrase_key: all.join(" "),
+        words: all.len(),
         tokens,
     })
 }
@@ -817,6 +910,18 @@ impl Catalog {
                 None => None,
             };
             let phrase = Self::fts_ids(conn, "book_fts", &p.phrase)?;
+            let phrase_start = match &p.phrase_start {
+                Some(q) => Some(Self::fts_ids(conn, "book_fts", q)?),
+                None => None,
+            };
+            // bm25 relative to the best match (−1), so that the boosts below weigh the same
+            // for every query
+            let best = hits
+                .iter()
+                .map(|h| h.1)
+                .fold(0.0f64, f64::min)
+                .abs()
+                .max(1e-9);
             // several words: books whose author matches one word and whose title another
             let by_author: Vec<Option<std::collections::HashSet<i64>>> = if p.tokens.len() >= 2 {
                 p.tokens
@@ -827,13 +932,25 @@ impl Catalog {
                 Vec::new()
             };
             for (id, score) in hits.iter_mut() {
-                let mut tier = if phrase.contains(id) {
+                let in_phrase = phrase.contains(id);
+                let mut tier = if in_phrase {
                     3.0
                 } else if strict.as_ref().is_none_or(|s| s.contains(id)) {
                     2.0
                 } else {
                     1.0
                 };
+                // within the tier: exact title, title start, then the book's standing (known
+                // author, editions, author's works, library rating)
+                let i = *id as usize;
+                let mut boost = attrs.pop.get(i).copied().unwrap_or(0) as f64 / 100.0;
+                if in_phrase && attrs.title_words.get(i).copied().unwrap_or(0) as usize == p.words {
+                    boost += EXACT_TITLE_BOOST;
+                }
+                if phrase_start.as_ref().is_some_and(|s| s.contains(id)) {
+                    boost += TITLE_START_BOOST;
+                }
+                *score = *score / best - boost;
                 if !by_author.is_empty() {
                     let author_words = by_author
                         .iter()

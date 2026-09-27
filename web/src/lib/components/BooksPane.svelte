@@ -100,25 +100,24 @@
 
   // ---- view options (persisted per user) -------------------------------------------
   const colsPrefKey = $derived(scope.kind === 'author' ? 'cols.author' : scope.kind === 'series' ? 'cols.series' : 'cols.other');
-  // entries are column keys, or `!size` / `!added` for a default column the user hid
+  // Entries are column keys, `!size` / `!added` for a default column the user hid, and
+  // `+key` for a column the user asked for while it had no room (it then stays, and the table
+  // scrolls sideways). Every other column gives way when the books pane is too narrow, so a
+  // list saved by an older version (plain keys only) fits the pane too.
   const extraColumns = $derived(
     new Set<string>(getPref<string[]>(colsPrefKey, scope.kind === 'author' ? [] : ['author'])),
   );
-  const hasRatingCol = $derived(RATING_COLS.some((k) => extraColumns.has(k)));
-  /** the user's own column choice for this kind of list (null: never changed, defaults) */
-  const storedColumns = $derived(getPref<string[] | null>(colsPrefKey, null));
-  /** a column the user turned on in the Columns menu (not one of the defaults) */
-  const chosen = (c: OptCol) => (c === 'size' || c === 'added' ? extraColumns.has(c) : !!storedColumns?.includes(c));
   /** Size and Added are on by default, except when rating columns are on (the table then
    *  fits beside the details pane); an explicit choice in the Columns menu wins. */
-  function colShown(c: OptCol): boolean {
+  function shownIn(set: Set<string>, c: OptCol): boolean {
     if (c === 'size' || c === 'added') {
-      if (extraColumns.has(c)) return true;
-      if (extraColumns.has(`!${c}`)) return false;
-      return !hasRatingCol;
+      if (set.has(c)) return true;
+      if (set.has(`!${c}`)) return false;
+      return !RATING_COLS.some((k) => set.has(k));
     }
-    return extraColumns.has(c);
+    return set.has(c);
   }
+  const colShown = (c: OptCol) => shownIn(extraColumns, c);
   const view = $derived(getPref<'table' | 'grid'>('booksView', 'table'));
   // author / series lists are sorted here; genre, new arrivals and shelves by the server
   const sortPrefKey = $derived(`sort.${scope.kind === 'author' ? 'author' : scope.kind === 'series' ? 'series' : 'paged'}`);
@@ -163,7 +162,10 @@
   let columnBtn = $state<HTMLButtonElement | undefined>();
   let coauthorsBtn = $state<HTMLButtonElement | undefined>();
   let coauthorsOpen = $state(false);
-  let collapsed = $state<Set<string>>(new Set());
+  // Folded series groups: a default for every group (also ones that appear later, as more
+  // books load) and the groups the user flipped away from it.
+  let foldByDefault = $state(false);
+  let flipped = $state<Set<string>>(new Set());
   let collapseInitFor = '';
   let lastClickedIndex = -1;
   let listRef = $state<{ reveal: (i: number) => void; resetX: () => void; scrollLeft: () => number } | undefined>();
@@ -354,18 +356,25 @@
     if (loading || !books.length) return;
     if (collapseInitFor === scopeKey) return;
     collapseInitFor = scopeKey;
-    collapsed = n > COLLAPSE_ABOVE ? new Set(groups.map((g) => g.key)) : new Set();
+    foldByDefault = n > COLLAPSE_ABOVE;
+    flipped = new Set();
   });
+  const collapsed = $derived(new Set(groups.filter((g) => foldByDefault !== flipped.has(g.key)).map((g) => g.key)));
   const effectiveCollapsed = $derived(q ? new Set<string>() : collapsed);
-  const allCollapsed = $derived(showGroupHeads && groups.every((g) => effectiveCollapsed.has(g.key)));
+  /** "Collapse all" only when every group is open; otherwise "Expand all" */
+  const allExpanded = $derived(groups.every((g) => !effectiveCollapsed.has(g.key)));
 
+  function setCollapsed(key: string, on: boolean) {
+    const s = new Set(flipped);
+    if (on !== foldByDefault) s.add(key); else s.delete(key);
+    flipped = s;
+  }
   function toggleCollapse(key: string) {
-    const s = new Set(collapsed);
-    if (s.has(key)) s.delete(key); else s.add(key);
-    collapsed = s;
+    setCollapsed(key, !collapsed.has(key));
   }
   function setAllCollapsed(on: boolean) {
-    collapsed = on ? new Set(groups.map((g) => g.key)) : new Set();
+    foldByDefault = on;
+    flipped = new Set();
   }
 
   // A book selected from outside (search, deep link): open its group and scroll to it.
@@ -378,7 +387,7 @@
       const g = groups.find((gr) => gr.rows.some((r) => r.book.id === id));
       if (!g) return;
       revealedFor = id;
-      if (collapsed.has(g.key)) { const s = new Set(collapsed); s.delete(g.key); collapsed = s; }
+      if (collapsed.has(g.key)) setCollapsed(g.key, false);
       tick().then(() => {
         const i = flatRows.findIndex((fr) => fr.kind === 'row' && fr.row.book.id === id);
         if (i >= 0) listRef?.reveal(Math.max(0, i));
@@ -552,7 +561,7 @@
           toggleEditions(id);
         } else if (showGroupHeads) {
           // up to the series header, folded
-          const s2 = new Set(collapsed); s2.add(fr.groupKey); collapsed = s2;
+          setCollapsed(fr.groupKey, true);
           activeKey = `g:${fr.groupKey}`;
           revealActive();
         }
@@ -585,32 +594,36 @@
   );
   /** columns asked for (the Columns menu, defaults, the sorted-by rating — that one right
    *  after the title, so a rating sort always shows its column without scrolling sideways) */
-  const wantedCols = $derived.by(() => {
-    const cols = OPT_COLUMNS.filter((k) => (colShown(k) || k === sortCol) && k !== sortCol);
+  function wantedIn(set: Set<string>): OptCol[] {
+    const cols = OPT_COLUMNS.filter((k) => shownIn(set, k) && k !== sortCol);
     return sortCol ? [sortCol, ...cols] : cols;
-  });
+  }
+  const wantedCols = $derived(wantedIn(extraColumns));
   /** below this width the table scrolls sideways instead of squeezing the title */
   const w = (k: ColKey) => liveCols[k] ?? colWidth(k);
   const TITLE_MIN = 220;
   const widthOf = (cols: Col[]) =>
     32 + TITLE_MIN + cols.filter((c) => c !== 'title').reduce((n, c) => n + w(c as ColKey), 0) + 8 * cols.length + 28;
-  /** A narrow pane drops the default columns it has no room for (least useful first) so the
-   *  title keeps its minimum width. Columns the user chose in the Columns menu stay (a wide
-   *  table scrolls sideways, checkbox and title fixed), and so does the sorted-by column. */
+  /** The books pane (its live width: the details pane opening or closing, the window, the
+   *  splitters) drops the columns it has no room for, least useful first, so the title keeps
+   *  its minimum width. The sorted-by column stays, and so does a column the user asked for
+   *  while it had no room (`+key`: a wide table scrolls sideways, checkbox and title fixed). */
   const DROP_ORDER: OptCol[] = ['language', 'format', 'genre', 'size', 'added', 'extRating', 'libRating', 'rating', 'series', 'author'];
-  const autoHidden = $derived.by(() => {
+  function hiddenIn(set: Set<string>, width: number): Set<OptCol> {
     const hidden = new Set<OptCol>();
-    if (!tableWidth) return hidden;
-    const room = tableWidth - 16; // the rows' scrollbar gutter
+    if (!width) return hidden;
+    const room = width - 16; // the rows' scrollbar gutter
+    const wanted = wantedIn(set);
     const base: Col[] = showNum ? ['num', 'title'] : ['title'];
-    const shown = () => [...base, ...wantedCols.filter((c) => !hidden.has(c))];
+    const shown = () => [...base, ...wanted.filter((c) => !hidden.has(c))];
     for (const c of DROP_ORDER) {
       if (widthOf(shown()) <= room) break;
-      if (c === sortCol || chosen(c) || !wantedCols.includes(c)) continue;
+      if (c === sortCol || set.has(`+${c}`) || !wanted.includes(c)) continue;
       hidden.add(c);
     }
     return hidden;
-  });
+  }
+  const autoHidden = $derived(hiddenIn(extraColumns, tableWidth));
   const columns = $derived.by<Col[]>(() => {
     const c: Col[] = [];
     if (showNum) c.push('num');
@@ -635,11 +648,21 @@
 
   function toggleColumn(c: OptCol) {
     const s = new Set(extraColumns);
-    // a default column dropped for lack of room: ticking it asks for it (it then stays)
     const on = colShown(c) && !autoHidden.has(c);
-    s.delete(c); s.delete(`!${c}`);
-    if (c === 'size' || c === 'added') s.add(on ? `!${c}` : c);
-    else if (!on) s.add(c);
+    const noRoom = autoHidden.has(c);
+    s.delete(c); s.delete(`!${c}`); s.delete(`+${c}`);
+    if (on) {
+      if (c === 'size' || c === 'added') s.add(`!${c}`);
+    } else {
+      s.add(c);
+      // Asked for while there is no room for it (or only by dropping a column on screen now):
+      // it and the columns on screen stay, and the table scrolls sideways.
+      const onScreen = wantedCols.filter((k) => !autoHidden.has(k) && k !== sortCol);
+      const hid = hiddenIn(s, tableWidth);
+      if (noRoom || hid.has(c) || onScreen.some((k) => hid.has(k))) {
+        for (const k of [...onScreen, c]) { s.delete(`!${k}`); s.add(k); s.add(`+${k}`); }
+      }
+    }
     setPref(colsPrefKey, [...s]);
   }
 
@@ -882,8 +905,8 @@
       </select>
     </label>
     {#if groups.length > 3 && !q}
-      <button type="button" class="tbtn" onclick={() => setAllCollapsed(!allCollapsed)}>
-        {allCollapsed ? t('books.expandAll') : t('books.collapseAll')}
+      <button type="button" class="tbtn" data-testid="expand-all" onclick={() => setAllCollapsed(allExpanded)}>
+        {allExpanded ? t('books.collapseAll') : t('books.expandAll')}
       </button>
     {/if}
     {#if scope.kind === 'author' && (anthCount > 0 || hideAnth)}
@@ -916,6 +939,7 @@
                 {#if autoHidden.has(c)}<span class="col-note">{t('books.colNoRoomShort')}</span>{:else if c === sortCol}<span class="col-note">{t('books.colSortedShort')}</span>{/if}
               </label>
             {/each}
+            {#if autoHidden.size}<p class="col-hidden-note" data-testid="columns-hidden">{tn('books.colsHidden', autoHidden.size)}</p>{/if}
           </div>
         {/if}
       </div>
@@ -1213,6 +1237,7 @@
   .col-menu label { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 6px; border-radius: 4px; }
   .col-menu label:hover { background: var(--surface-hover); }
   .col-menu label.dim { color: var(--muted); }
+  .col-hidden-note { margin: 4px 0 0; padding: 6px 8px 2px; border-top: 1px solid var(--line-soft); font-size: 12px; color: var(--muted); max-width: 220px; }
   .col-note { margin-left: auto; padding-left: 10px; font-size: 11px; color: var(--muted); white-space: nowrap; }
   /* the keyboard cursor (ARIA grid): a ring on the current row while the list has focus */
   .scroll:focus-within .cursor, .mobile-list:focus-within .cursor { box-shadow: inset 0 0 0 2px var(--focus); }

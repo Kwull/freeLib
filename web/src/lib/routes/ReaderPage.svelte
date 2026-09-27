@@ -11,6 +11,7 @@
   import StateCard from '../components/StateCard.svelte';
   import { navigate } from '../router.svelte';
   import { t } from '../i18n';
+  import { themeState } from '../stores/theme.svelte';
 
   let { lib, id }: { lib: number; id: number } = $props();
   let detail = $state<BookDetail | null>(null);
@@ -55,19 +56,39 @@
   const POS_KEY = () => `freelib.reader.pos.${lib}.${id}`;
   const PREFS_KEY = 'freelib.reader.prefs';
 
-  function loadPrefs(): { fontSize: number; theme: Theme } {
+  /** The reader's theme follows the app (light / dark, or the system's when the app does)
+   *  until the user picks one here; a picked theme is kept (`themeChosen`). Older versions
+   *  saved `light` on every visit without a choice: a stored `light` without `themeChosen`
+   *  counts as no choice, `sepia` / `dark` always as one. */
+  function loadPrefs(): { fontSize: number; theme: Theme | null } {
     try {
       const raw = localStorage.getItem(PREFS_KEY);
-      if (raw) return { fontSize: 100, theme: 'light', ...JSON.parse(raw) };
+      if (raw) {
+        const v = JSON.parse(raw) as { fontSize?: unknown; theme?: unknown; themeChosen?: unknown };
+        const size = typeof v.fontSize === 'number' && Number.isFinite(v.fontSize) ? v.fontSize : 100;
+        const th = v.theme === 'light' || v.theme === 'sepia' || v.theme === 'dark' ? v.theme : null;
+        return { fontSize: size, theme: th && (v.themeChosen === true || th !== 'light') ? th : null };
+      }
     } catch { /* ignore */ }
-    return { fontSize: 100, theme: 'light' };
+    return { fontSize: 100, theme: null };
   }
   const prefs0 = loadPrefs();
   let fontSize = $state(prefs0.fontSize);
-  let theme = $state<Theme>(prefs0.theme);
+  /** the theme picked here; null: follow the app */
+  let chosenTheme = $state<Theme | null>(prefs0.theme);
+  let systemDark = $state(typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches);
+  $effect(() => {
+    const mq = matchMedia('(prefers-color-scheme: dark)');
+    const onChange = () => (systemDark = mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  });
+  const appDark = $derived(themeState.value === 'dark' || (themeState.value === 'system' && systemDark));
+  const theme = $derived<Theme>(chosenTheme ?? (appDark ? 'dark' : 'light'));
 
   function savePrefs() {
-    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ fontSize, theme })); } catch { /* ignore */ }
+    const v = chosenTheme ? { fontSize, theme: chosenTheme, themeChosen: true } : { fontSize };
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify(v)); } catch { /* ignore */ }
   }
 
   function css(): string {
@@ -83,7 +104,7 @@
     view?.renderer.setStyles?.(css());
   }
 
-  $effect(() => { fontSize; theme; applyStyles(); savePrefs(); });
+  $effect(() => { fontSize; theme; chosenTheme; applyStyles(); savePrefs(); });
 
   $effect(() => {
     const [l, b] = [lib, id];
@@ -252,7 +273,7 @@
     </div>
     <div class="theme-ctl" role="group" aria-label={t('reader.theme')}>
       {#each ['light', 'sepia', 'dark'] as th (th)}
-        <button type="button" class:on={theme === th} aria-pressed={theme === th} onclick={() => (theme = th as Theme)}>
+        <button type="button" class:on={theme === th} aria-pressed={theme === th} onclick={() => (chosenTheme = th as Theme)}>
           {t(`reader.theme.${th}`)}
         </button>
       {/each}

@@ -462,25 +462,30 @@
       <h2>{t('settings.users')}</h2>
       <div class="device-list">
         {#each users as u (u.id)}
-          <div class="device-row">
-            <span class="name">{u.username}</span>
-            {#if u.sso}<span class="badge" title={u.sso.email ?? ''}>{t('settings.users.sso')}{u.sso.email ? ` · ${u.sso.email}` : ''}</span>{/if}
-            {#if !u.hasPassword}<span class="badge muted-badge" title={t('settings.users.noPasswordHint')}>{t('settings.users.noPassword')}</span>{/if}
-            <span class="grow"></span>
-            <input class="email" type="email" value={u.email ?? ''} placeholder={t('settings.users.email')} aria-label={t('settings.users.emailFor', { name: u.username })}
-              title={t('settings.users.emailHint')} onchange={(e) => saveEmail(u, (e.currentTarget as HTMLInputElement).value)} />
-            {#if users.length > 1}
-              <select class="merge" aria-label={t('settings.users.mergeInto', { name: u.username })} data-testid="merge-into" value=""
-                onchange={(e) => { const v = Number((e.currentTarget as HTMLSelectElement).value); (e.currentTarget as HTMLSelectElement).value = ''; if (v) mergeUser(u, v); }}>
-                <option value="">{t('settings.users.merge')}</option>
-                {#each users.filter((x) => x.id !== u.id) as o (o.id)}<option value={o.id}>{o.username}</option>{/each}
+          <!-- two lines: who (name and badges wrap, never squeeze the controls), then the
+               controls (the e-mail field takes the room left, the rest wraps under it) -->
+          <div class="user-row" data-testid="user-row">
+            <div class="user-head">
+              <span class="uname" title={u.username}>{u.username}</span>
+              {#if u.sso}<span class="badge" title={u.sso.email ?? ''}>{t('settings.users.sso')}{u.sso.email ? ` · ${u.sso.email}` : ''}</span>{/if}
+              {#if !u.hasPassword}<span class="badge muted-badge" title={t('settings.users.noPasswordHint')}>{t('settings.users.noPassword')}</span>{/if}
+            </div>
+            <div class="user-ctl">
+              <input class="email" type="email" value={u.email ?? ''} placeholder={t('settings.users.email')} aria-label={t('settings.users.emailFor', { name: u.username })}
+                title={t('settings.users.emailHint')} onchange={(e) => saveEmail(u, (e.currentTarget as HTMLInputElement).value)} />
+              {#if users.length > 1}
+                <select class="merge" aria-label={t('settings.users.mergeInto', { name: u.username })} data-testid="merge-into" value=""
+                  onchange={(e) => { const v = Number((e.currentTarget as HTMLSelectElement).value); (e.currentTarget as HTMLSelectElement).value = ''; if (v) mergeUser(u, v); }}>
+                  <option value="">{t('settings.users.merge')}</option>
+                  {#each users.filter((x) => x.id !== u.id) as o (o.id)}<option value={o.id}>{o.username}</option>{/each}
+                </select>
+              {/if}
+              <select class="role" bind:value={u.role} aria-label={t('settings.users.role')} onchange={() => api.updateUser(u.id, { role: u.role })}>
+                <option value="admin">{t('settings.users.role.admin')}</option>
+                <option value="reader">{t('settings.users.role.reader')}</option>
               </select>
-            {/if}
-            <select bind:value={u.role} onchange={() => api.updateUser(u.id, { role: u.role })}>
-              <option value="admin">{t('settings.users.role.admin')}</option>
-              <option value="reader">{t('settings.users.role.reader')}</option>
-            </select>
-            <button type="button" class="danger" onclick={() => deleteUser(u)}>{t('common.delete')}</button>
+              <button type="button" class="danger" onclick={() => deleteUser(u)}>{t('common.delete')}</button>
+            </div>
           </div>
         {/each}
       </div>
@@ -536,14 +541,6 @@
 
 <style>
   .settings-page { flex-grow: 1; overflow-y: auto; background: var(--surface); display: flex; }
-  @media (max-width: 900px) {
-    .settings-page { flex-direction: column; }
-    .tabs { width: auto; flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--line); padding: 8px 12px; }
-    .tabs button { white-space: nowrap; flex-shrink: 0; }
-    .panel { padding: 16px; }
-    .fields-grid { grid-template-columns: 1fr; }
-    .field.full { grid-column: auto; }
-  }
   .tabs { width: 200px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; padding: 20px 12px; border-right: 1px solid var(--line); }
   .tabs button { text-align: left; height: 38px; padding: 0 12px; border: none; border-radius: 8px; background: transparent; font-size: 14px; color: var(--muted-2); }
   .tabs button:hover { background: var(--surface-hover); }
@@ -559,15 +556,22 @@
   .field .hint { font-size: 12px; }
   .link { border: 0; background: none; padding: 0 0 0 4px; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
   .fields-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px 16px; }
-  select, input[type='text'], input[type='number'], input[type='password'] { height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font: inherit; font-size: 14px; color: var(--ink); }
+  select, input[type='text'], input[type='number'], input[type='password'], input[type='email'] { height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font: inherit; font-size: 14px; color: var(--ink); }
   .seg { display: flex; gap: 6px; }
   .seg button { height: 34px; padding: 0 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 13px; }
   .seg button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-soft-ink); }
   .device-list { display: flex; flex-direction: column; gap: 4px; }
   .device-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
   .device-row { padding: 10px 12px; }
-  .device-row input.email { width: 180px; min-width: 0; }
-  .device-row select.merge { max-width: 150px; }
+  .user-row { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; min-width: 0; }
+  .user-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+  .uname { font-weight: 500; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+  .user-head .badge { flex-shrink: 1; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .user-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+  .user-ctl input.email { flex: 1 1 240px; min-width: 0; }
+  .user-ctl select { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+  .user-ctl select.merge { flex: 1 1 120px; max-width: 200px; }
+  .user-ctl button.danger { flex-shrink: 0; margin-left: auto; }
   .device-row.dragging { opacity: .5; }
   .device-row.drop-before { box-shadow: 0 -2px 0 var(--accent); }
   .handle { cursor: grab; color: var(--muted); display: flex; align-items: center; padding: 4px 2px; }
@@ -588,8 +592,8 @@
   button.primary { align-self: flex-start; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; }
   button.danger { color: var(--danger); border: 1px solid var(--border); background: var(--surface); height: 30px; padding: 0 10px; border-radius: 6px; }
   .row { display: flex; align-items: center; gap: 10px; }
-  .test-row { display: flex; gap: 8px; }
-  .test-row input { flex-grow: 1; }
+  .test-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .test-row input { flex: 1 1 140px; min-width: 0; }
   .checkbox { display: flex; align-items: center; gap: 8px; font-size: 14px; }
   .checkbox input { width: 16px; height: 16px; accent-color: var(--accent); }
   .form { padding: 4px 24px 24px; display: flex; flex-direction: column; gap: 16px; }
@@ -597,7 +601,6 @@
   .footer button { height: 38px; padding: 0 16px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); font-size: 14px; }
   .footer .primary { border: none; background: var(--accent); color: #fff; }
   .muted { color: var(--muted); }
-  .grow { flex-grow: 1; }
   .muted-badge { background: var(--surface-hover); color: var(--muted-2); }
   .acc-block { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
   .acc-block h3 { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; }
@@ -607,4 +610,13 @@
   .hint, .small { font-size: 12px; margin: 0; }
   .progress { height: 8px; border-radius: 4px; background: var(--surface-hover); overflow: hidden; }
   .progress .bar { height: 100%; background: var(--accent); }
+  /* after the base rules, so that it wins over them */
+  @media (max-width: 900px) {
+    .settings-page { flex-direction: column; }
+    .tabs { width: auto; flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--line); padding: 8px 12px; }
+    .tabs button { white-space: nowrap; flex-shrink: 0; }
+    .panel { padding: 16px; }
+    .fields-grid { grid-template-columns: 1fr; }
+    .field.full { grid-column: auto; }
+  }
 </style>

@@ -121,3 +121,31 @@ test('start page: "Well-rated new arrivals" stays after a download', async ({ pa
   await page.goto(`/l/${LIB}`);
   await expect(page.getByTestId('home-picks')).toBeVisible({ timeout: 15000 });
 });
+
+// gen-inpx's ranking showcase (lib ids 300..) and one definition of the library counts
+test('«пикник» ranks the Strugatskys first, nonsense finds nothing, library counts agree', async ({ page, request }) => {
+  const r = await (await request.get(`/api/v1/libraries/${LIB}/search?q=${encodeURIComponent('пикник')}&group=1`)).json();
+  const rows = (r.books as Row[]).map((b) => [b.title, b.authors[0].name]);
+  const roadside = rows.findIndex(([t, a]) => t.startsWith('Пикник на обочине') && a.startsWith('Стругацкий'));
+  expect(roadside, JSON.stringify(rows.slice(0, 5))).toBeGreaterThanOrEqual(0);
+  expect(roadside).toBeLessThan(3);
+  expect(rows.filter(([t, a]) => t === 'Пикник' && a === 'Автор неизвестен').length).toBe(2);
+
+  const z = await (await request.get(`/api/v1/libraries/${LIB}/search?q=zzzqxw`)).json();
+  expect(z.corrected ?? null).toBeNull();
+  expect(z.didYouMean ?? null).toBeNull();
+  expect(z.total).toBe(0);
+  await page.goto(`/l/${LIB}/search?q=zzzqxw`);
+  await expect(page.getByText('Nothing found')).toBeVisible();
+
+  const lib = (await (await request.get('/api/v1/libraries')).json()).find((l: { id: number }) => l.id === LIB);
+  const rowsOf = async (kind: string) => ((await (await request.get(`/api/v1/libraries/${LIB}/${kind}`)).json()).rows as unknown[]).length;
+  expect(lib.authorCount).toBe(await rowsOf('authors'));
+  expect(lib.seriesCount).toBe(await rowsOf('series'));
+  const all = await (await request.get(`/api/v1/libraries/${LIB}/books?since=1900-01-01&group=1&limit=1`)).json();
+  expect(all.total).toBe(lib.workCount);
+  const jobs = (await (await request.get('/api/v1/jobs')).json()) as { kind: string; message: string }[];
+  const f = (n: number) => n.toLocaleString('en-US');
+  const imp = jobs.find((j) => j.kind === 'import');
+  if (imp) expect(imp.message).toContain(`${f(lib.bookCount)} books (${f(lib.workCount)} works) · ${f(lib.authorCount)} authors · ${f(lib.seriesCount)} series`);
+});

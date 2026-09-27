@@ -18,7 +18,7 @@ let idp: FakeOidc;
 
 /** A row of Settings → Users by its user name (other rows' "Merge into…" menus list every name). */
 const userRow = (page: import('@playwright/test').Page, name: string) =>
-  page.locator('.device-row').filter({ has: page.locator('.name', { hasText: new RegExp(`^${name.replace(/[()]/g, '\\$&')}$`) }) });
+  page.getByTestId('user-row').filter({ has: page.locator('.uname', { hasText: new RegExp(`^${name.replace(/[()]/g, '\\$&')}$`) }) });
 let server: ChildProcess;
 let dir: string;
 

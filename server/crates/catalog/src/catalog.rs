@@ -195,11 +195,32 @@ impl Catalog {
             });
         }
         let opt = |k: &str| meta.get(k).filter(|v| !v.is_empty()).cloned();
+        // catalogs imported before `work_count` was stored counted every author and series,
+        // also those with only deleted books: count what the lists show instead
+        let (works, authors, series) = if meta.contains_key("work_count") {
+            (int("work_count"), int("author_count"), int("series_count"))
+        } else {
+            let one = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0));
+            (
+                one("SELECT count(DISTINCT work_id) FROM book WHERE deleted=0")?,
+                one("SELECT count(*) FROM author WHERE book_count > 0")?,
+                one("SELECT count(*) FROM series WHERE book_count > 0")?,
+            )
+        };
         let stats = LibraryStats {
             book_count: int("book_count"),
             live_book_count: int("live_book_count"),
-            author_count: int("author_count"),
-            series_count: int("series_count"),
+            work_count: works,
+            author_count: authors,
+            series_count: series,
+            record_count: match int("record_count") {
+                0 => int("book_count"),
+                n => n,
+            },
+            deleted_count: match meta.get("deleted_record_count") {
+                Some(_) => int("deleted_record_count"),
+                None => int("book_count") - int("live_book_count"),
+            },
             imported_at: opt("imported_at"),
             catalog_version: int("catalog_version"),
             inpx_version: opt("inpx_version"),

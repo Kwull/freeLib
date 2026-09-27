@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import VirtualList from './VirtualList.svelte';
   import Icon from './Icon.svelte';
   import { normalize } from '../utils/normalize';
   import { latinKey, nameRank, wordsOf } from '../utils/phonetic';
   import { t } from '../i18n';
+  import { nameFilterState, getNameFilter, setNameFilter } from '../stores/nameFilter.svelte';
   import {
     SCRIPT_LABEL, letterAt, scriptOf, scriptsByCount, stripLetters, type Script,
   } from '../utils/scripts';
@@ -20,6 +21,7 @@
     loading = false,
     progressText = null,
     progress = null,
+    filterKey = null,
   }: {
     title: string;
     filterLabel: string;
@@ -32,10 +34,33 @@
     loading?: boolean;
     progressText?: string | null;
     progress?: number | null;
+    /** keeps the filter text (nameFilter store): across visits, and typed while loading */
+    filterKey?: string | null;
   } = $props();
 
   const ROW = 36;
-  let query = $state('');
+  // the filter text is never reset by a load: it starts from the store and is written back
+  let query = $state(untrack(() => (filterKey ? getNameFilter(filterKey) : '')));
+  // (Authors ↔ Series reuse this component: each list has its own filter)
+  let queryKey = untrack(() => filterKey);
+  $effect.pre(() => {
+    const k = filterKey;
+    untrack(() => {
+      if (k === queryKey) return;
+      queryKey = k;
+      query = k ? getNameFilter(k) : '';
+    });
+  });
+  $effect(() => { const q = query; if (queryKey) setNameFilter(queryKey, q); });
+  let filterInput = $state<HTMLInputElement | undefined>();
+  // typed into the placeholder box while the page loaded: the focus moves on to this box
+  $effect(() => {
+    const el = filterInput;
+    if (!el || !filterKey || nameFilterState.focusKey !== filterKey) return;
+    nameFilterState.focusKey = null;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  });
   let scrollToIndex = $state<number | null>(null);
   let activeIndex = $state(-1);
   let listRef = $state<{ reveal: (i: number) => void } | undefined>();
@@ -166,6 +191,9 @@
     const firstTime = positionedFor !== rows;
     positionedFor = rows;
     positionedId = selectedId;
+    // a filtered list (a filter kept from the last visit, or typed while loading) stays at
+    // its best matches: row indexes of the whole list mean nothing there
+    if (untrack(() => query)) return;
     if (selectedIndex >= 0) {
       const visible = selectedIndex >= topIndex && selectedIndex < topIndex + 12;
       if (firstTime || !visible) scrollToIndex = Math.max(0, selectedIndex - 4);
@@ -294,6 +322,7 @@
       <Icon name="search" size={16} class="muted-icon" />
       <input
         type="text"
+        bind:this={filterInput}
         aria-label={filterLabel}
         placeholder={filterLabel}
         bind:value={query}

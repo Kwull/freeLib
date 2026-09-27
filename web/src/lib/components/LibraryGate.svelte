@@ -18,7 +18,12 @@
   import { navigate } from '../router.svelte';
   import type { Library } from '../api/types';
 
-  let { lib, children }: { lib: number | null; children: Snippet } = $props();
+  let { lib, children, filter = null }: {
+    lib: number | null;
+    children: Snippet;
+    /** the authors / series filter box to show (and keep what is typed) while loading */
+    filter?: { key: string; label: string } | null;
+  } = $props();
 
   const isAdmin = $derived(sessionState.openMode || sessionState.user?.role === 'admin');
   const L = $derived<Library | null>(
@@ -86,7 +91,7 @@
       {/snippet}
     </StateCard>
   {:else}
-    <BrowseSkeleton label={t('libstate.loading')} />
+    <BrowseSkeleton label={t('libstate.loading')} {filter} />
   {/if}
 {:else if librariesState.items.length === 0}
   {#if isAdmin}
@@ -146,7 +151,7 @@
     </StateCard>
   {/if}
 {:else if !L}
-  <BrowseSkeleton label={t('libstate.loading')} />
+  <BrowseSkeleton label={t('libstate.loading')} {filter} />
 {:else}
   {@render children()}
 {/if}
